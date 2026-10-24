@@ -742,6 +742,8 @@ _LEARN_EXPLAIN_ES = re.compile(
     r"me\s+explica|muestrame|mostrarme|me\s+(?:puedes|podrias)\s+mostrar|me\s+muestras)"
     r"(?:\s+(?:sobre|acerca\s+de))?\s+(?P<rest>[^,]+)"
 )
+# "¿qué es una fracción?" asks for the idea; "¿qué es tres más cinco?" names no topic and stays help.
+_LEARN_WHAT_ES = re.compile(r"\bque\s+(?:es|son|significa|quiere\s+decir)\s+(?P<rest>[^,]+)")
 _HOWTO_ES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "infinitive",
@@ -948,7 +950,7 @@ def detect_learn_request_es(text: str) -> str | None:
         for found in pattern.finditer(plain):
             if not _negated(plain, found.start()):
                 return _topic_es(*_words(plain, accented, found, "rest"), guarded=False)
-    found = _LEARN_EXPLAIN_ES.search(plain)
+    found = _LEARN_EXPLAIN_ES.search(plain) or _LEARN_WHAT_ES.search(plain)
     if found:
         return _topic_es(*_words(plain, accented, found, "rest"), guarded=True)
     return _howto(plain, accented, guarded=True)

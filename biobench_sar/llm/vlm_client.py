@@ -236,17 +236,20 @@ Quiz stage: check. Problem 1 of 5: x + 4 = 10. Board: x + 4 = 10, then x = 6
 
 MATH_LEARN = f"""TASK: the student wants to learn a topic. The board may be empty. The message gives the topic \
 and the stage. Use plain words for a middle or high school student.
-- Stage offer: one or two plain sentences that introduce the idea of the topic, then ask exactly: \
-"{OFFER_QUESTION}" Do not solve anything yet.
+- Stage offer: explain the idea with a worked example. One plain sentence on what the idea is, then make up ONE \
+easy example and solve it out loud step by step: two to four short sentences, each one step saying what you do, then \
+the result. Then ask exactly: "{OFFER_QUESTION}" This is your own example, so solving it is fine.
 - Stage example: dictate ONE easy starter problem on the topic in words, then invite the student to write it on the \
 board and try the first step. Do not solve it.
 - Stage own: ask the student to write their exercise on the board and then ask you for help.
 - Always "idle", target = screen center.
 
 Examples (JSON only, 1920x1080 screen):
-Learn stage: offer. Topic: equations. Query: "Teach me equations."
-{{"spoken_text": "An equation is like a balance: both sides are equal. We solve it by doing the same thing to both \
-sides until the letter is alone. {OFFER_QUESTION}", "animation_state": "idle", "target_x": 960, "target_y": 540}}
+Learn stage: offer. Topic: a fraction. Query: "What is a fraction?"
+{{"spoken_text": "A fraction is a part of a whole. For example, cut a pizza into four equal slices and eat one: you \
+ate one fourth. Eat one more slice and you add one fourth plus one fourth. The bottom stays four and the tops add \
+up to two. So you ate two fourths, which is one half. {OFFER_QUESTION}", "animation_state": "idle", "target_x": 960, \
+"target_y": 540}}
 Learn stage: example. Topic: adding fractions. Query: "Make one up."
 {{"spoken_text": "Let's start easy. One fourth plus two fourths. Write it on the board and try the first step.", \
 "animation_state": "idle", "target_x": 960, "target_y": 540}}
@@ -328,18 +331,21 @@ Etapa del quiz: revisar. Problema 1 de 5: x + 4 = 10. Pizarrón: x + 4 = 10, lue
 
 MATH_LEARN_ES = f"""TAREA: el estudiante quiere aprender un tema. El pizarrón puede estar vacío. El mensaje da el tema y la \
 etapa. Usa palabras sencillas para un estudiante de secundaria o preparatoria.
-- Etapa ofrecer: una o dos oraciones sencillas que presenten la idea del tema y luego pregunta exactamente: \
-"{OFFER_QUESTION_ES}" Todavía no resuelvas nada.
+- Etapa ofrecer: explica la idea con un ejemplo resuelto. Una oración sencilla sobre qué es la idea, luego inventa \
+UN ejemplo fácil y resuélvelo en voz alta paso a paso: de dos a cuatro oraciones cortas, cada una un paso que dice qué \
+haces, y luego el resultado. Después pregunta exactamente: "{OFFER_QUESTION_ES}" Es tu propio ejemplo, así que \
+resolverlo está bien.
 - Etapa ejemplo: dicta con palabras UN problema fácil para empezar sobre el tema e invita al estudiante a escribirlo \
 en el pizarrón e intentar el primer paso. No lo resuelvas.
 - Etapa propio: pídele al estudiante que escriba su ejercicio en el pizarrón y que luego te pida ayuda.
 - Siempre "idle", target = centro de la pantalla.
 
 Ejemplos (solo JSON, pantalla de 1280x800):
-Etapa de aprender: ofrecer. Tema: ecuaciones. Mensaje: "Enséñame ecuaciones."
-{{"spoken_text": "Una ecuación es como una balanza: los dos lados valen lo mismo. La resolvemos haciendo lo mismo en \
-ambos lados hasta que la letra quede sola. {OFFER_QUESTION_ES}", "animation_state": "idle", "target_x": 640, \
-"target_y": 400}}
+Etapa de aprender: ofrecer. Tema: una fracción. Mensaje: "¿Qué es una fracción?"
+{{"spoken_text": "Una fracción es una parte de un entero. Por ejemplo, partes una pizza en cuatro rebanadas iguales y \
+te comes una: comiste un cuarto. Te comes otra y sumas un cuarto más un cuarto. Abajo se queda el cuatro y arriba se \
+suman: dos. Entonces comiste dos cuartos, que es un medio. {OFFER_QUESTION_ES}", "animation_state": "idle", \
+"target_x": 640, "target_y": 400}}
 Etapa de aprender: ejemplo. Tema: suma de fracciones. Mensaje: "Invéntame uno."
 {{"spoken_text": "Empecemos con uno fácil. Un cuarto más dos cuartos. Escríbelo en el pizarrón e intenta el primer \
 paso.", "animation_state": "idle", "target_x": 640, "target_y": 400}}
@@ -619,7 +625,9 @@ def learn_task_text(task: Mapping[str, Any] | None, language: str = "en") -> str
     if normalize_reply_language(language) == "es":
         topic = _clean((task or {}).get("topic")) or "este tema de matemáticas"
         todo = {
-            "offer": f'Presenta la idea de {topic} en una o dos oraciones sencillas y luego pregunta: "{OFFER_QUESTION_ES}"',
+            "offer": f"Explica {topic} con un ejemplo resuelto: una oración sencilla sobre la idea, luego inventa UN "
+            "ejemplo fácil y resuélvelo en voz alta paso a paso, di el resultado y luego pregunta: "
+            f'"{OFFER_QUESTION_ES}"',
             "example": f"El estudiante quiere que inventes uno: dicta con palabras UN problema fácil para empezar sobre "
             f"{topic} e invítalo a escribirlo e intentar el primer paso. No lo resuelvas.",
             "own": "El estudiante tiene su propio ejercicio: pídele que lo escriba en el pizarrón y que luego te pida "
@@ -628,7 +636,8 @@ def learn_task_text(task: Mapping[str, Any] | None, language: str = "en") -> str
         return f"Etapa de aprender: {LEARN_STAGE_NAMES_ES[stage]}. Tema: {topic}\n{todo}"
     topic = _clean((task or {}).get("topic")) or "this math topic"
     todo = {
-        "offer": f'Introduce the idea of {topic} in one or two plain sentences, then ask: "{OFFER_QUESTION}"',
+        "offer": f"Explain {topic} with a worked example: one plain sentence on the idea, then make up ONE easy "
+        f'example and solve it out loud step by step, say the result, then ask: "{OFFER_QUESTION}"',
         "example": f"The student wants you to make one up: dictate ONE easy starter problem on {topic} in words "
         "and invite them to write it and try the first step. Do not solve it.",
         "own": "The student has their own exercise: ask them to write it on the board and then ask you for help.",
@@ -1246,7 +1255,9 @@ def _salvage(
     language: str = "en",
 ) -> AvatarAction:
     """Keep the sentences that are fine (not an echo, a copy, the answer or the wrong language); otherwise use the
-    task's fallback. Works on the text before mathspeak, so what is kept keeps its notation on screen."""
+    task's fallback. Works on the text before mathspeak, so what is kept keeps its notation on screen.
+
+    A lesson offer's result is the tutor's own worked example, not the student's answer, so it is kept."""
     text = getattr(action, "display_text", None) or action.spoken_text
     spoken = action.spoken_text
     if kind == "practice" and board:
@@ -1265,11 +1276,12 @@ def _salvage(
             if e
         )
 
+    worked_example = kind == "learn" and learn_stage(task) == "offer"
     kept = [
         s
         for s in _raw_sentences(text)
         if not _is_echo(s, query, language)
-        and not reveals_value(s, language)
+        and (worked_example or not reveals_value(s, language))
         and not copied(s)
         and in_language(s, language)
     ]

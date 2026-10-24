@@ -405,6 +405,38 @@ def test_build_prompt_learn_stages(stage: str, expected: str) -> None:
     assert "Ink regions detected on the whiteboard: none." in prompt
 
 
+@pytest.mark.parametrize(
+    ("language", "worked", "question"),
+    [("en", "worked example", OFFER_QUESTION), ("es", "ejemplo resuelto", vc.OFFER_QUESTION_ES)],
+)
+def test_learn_offer_explains_with_a_worked_example(language: str, worked: str, question: str) -> None:
+    # "What is a fraction?": the idea, then one easy example solved step by step out loud, then the offer.
+    learn = system_prompt("math", "learn", language)
+    assert worked in learn
+    offer = next(e for e in _few_shot(learn) if question in e["spoken_text"])
+    before_question = offer["spoken_text"].split(question)[0]
+    assert len(re.findall(r"[.!?]", before_question)) >= 4, before_question  # idea + example + steps + result
+    task = vc.learn_task_text({"kind": "learn", "topic": "fractions", "stage": "offer"}, language)
+    assert worked in task and question in task
+
+
+def test_salvaged_lesson_offer_keeps_its_worked_example() -> None:
+    # A repeated sentence gets the reply asked again; when the retry repeats it too, salvage drops only the copy.
+    # The worked example's result is the tutor's own example, not the student's answer: it stays.
+    turns = [{"q": "teach me equations", "a": "An equation is like a balance."}]
+    reply = {
+        "spoken_text": "An equation is like a balance. For example, x plus three equals seven. Take three from both "
+        f"sides. So x is four. {OFFER_QUESTION}",
+        "animation_state": "idle",
+        "target_x": 1,
+        "target_y": 2,
+    }
+    task = {"kind": "learn", "topic": "an equation", "stage": "offer"}
+    action, _ = _ask(_math_client(), reply, query="What is an equation?", task=task, recent_turns=turns)
+    assert "balance" not in action.spoken_text
+    assert "x is four" in action.spoken_text and action.spoken_text.endswith(OFFER_QUESTION)
+
+
 def test_learn_prompt_without_topic() -> None:
     assert "Topic: this math topic" in vc.learn_task_text({"kind": "learn", "topic": "  ", "stage": "offer"})
 
