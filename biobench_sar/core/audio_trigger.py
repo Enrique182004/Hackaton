@@ -68,11 +68,11 @@ class AudioTrigger:
     """Push-to-talk / wake-word speech input, transcribed by Whisper in English or Spanish.
 
     language="auto" (the default) runs one Whisper language-ID pass, limited to en/es, before each decode.
-    That costs what Whisper's own detection costs, but it is slower than a forced language (about 3.5 s vs
-    2.2 s per clip for `base` on an M-series Mac, and wake mode is deaf meanwhile): English-only rooms
+    That is the encoder pass Whisper's own detection would run, so it costs no more than language=None, but
+    every clip is slower than with a forced language and wake mode is deaf meanwhile: English-only rooms
     should force "en". Whisper `base` garbles one-word and Spanglish utterances ("ayuda", "sí",
-    "¿cómo hago this one?") in every mode, so ask students for full sentences, or use whisper_model="small"
-    in Spanish-heavy classrooms.
+    "¿cómo hago this one?") and noisy clips in every mode, so ask students for full sentences, or use
+    whisper_model="small" in Spanish-heavy classrooms.
 
     last_language is the language of the query being delivered (read it inside on_query) and, afterwards,
     of the last query delivered. Transcripts that never become a query (wake chunks without the wake word,
