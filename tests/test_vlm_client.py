@@ -933,6 +933,31 @@ def test_quiz_check_of_a_substitution_check_on_the_bottom_line_is_never_wrong(
         assert vc.check_quiz_answer(PRAISE, other, f"{answer} ; {check}", language=language).verdict == "wrong"  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize(
+    ("problem", "read", "verdict"),
+    [
+        ("7 - 2x = 1", "3 = x", "correct"),
+        ("7 - 2x = 1", "6 = 2x\n3 = x", "correct"),
+        ("7 - 2x = 1", "6 = 2x ; 3 = x", "correct"),
+        ("7 - 2x = 1", "4 = x", "wrong"),
+        ("2(3x - 4) = 4x + 6", "7 = x", "correct"),
+    ],
+)
+def test_quiz_check_of_an_answer_with_the_letter_on_the_right_is_graded(problem: str, read: str, verdict: str) -> None:
+    task = {**QUIZ_CHECK, "problem": problem, "answer": None}
+    for language in ("en", "es"):
+        action = vc.check_quiz_answer(PRAISE, task, read, language=language)
+        assert action.verdict == verdict, (read, language)  # type: ignore[attr-defined]
+        assert action.spoken_text != vc.TEXTS[language]["unfinished"]
+
+
+def test_quiz_check_of_a_step_with_the_letter_on_the_right_is_no_answer_yet() -> None:
+    task = {**QUIZ_CHECK, "problem": "7 - 2x = 1", "answer": "x = 3"}
+    for language in ("en", "es"):
+        action = vc.check_quiz_answer(PRAISE, task, "6 = 2x", language=language)
+        assert action.verdict is None and action.spoken_text == vc.TEXTS[language]["no_answer"]  # type: ignore[attr-defined]
+
+
 def test_evaluate_of_a_substitution_check_records_no_miss() -> None:
     reply = {"board_answer": "3(5) + 5 = 20", **CHEER.to_dict()}
     action, _ = _ask(_math_client(), reply, query="Check my answer.", mode="quiz", task=QUIZ_CHECK)

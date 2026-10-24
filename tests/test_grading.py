@@ -493,6 +493,36 @@ def test_a_substitution_check_on_the_bottom_line_is_never_the_answer(problem: st
     assert parse_answers(f"{answer}\n{check}", problem) == parse_answers(answer)
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("3 = x", {("x", 3)}),
+        ("3=x", {("x", 3)}),
+        ("6 = 2x\n3 = x", {("x", 3)}),  # 7 - 2x = 1 worked out
+        ("6 = 2x ; 3 = x", {("x", 3)}),
+        ("7 = x", {("x", 7)}),
+        ("-3 = x", {("x", -3)}),
+        ("15/3 = x", {("x", 5)}),
+        ("3 = y", {("y", 3)}),
+        ("x = 7 ; 3 = y", {("x", 7), ("y", 3)}),
+        ("tres es igual a x", {("x", 3)}),
+    ],
+)
+def test_a_finished_answer_with_the_letter_on_the_right_grades_like_x_equals(
+    text: str, expected: set[tuple[str, object]]
+) -> None:
+    assert _plain(parse_answers(text)) == {(letter, Fraction(str(value))) for letter, value in expected}
+    assert not grading.unfinished(text), "a finished answer is never 'not worked out yet'"
+
+
+def test_a_step_with_the_letter_on_the_right_is_still_no_answer() -> None:
+    for step in ("6 = 2x", "2 = 2x", "x + 3 = x", "20 = 3x + 5"):
+        assert parse_answers(step) == frozenset(), step
+        assert not grading.unfinished(step), f"{step}: a step, not unfinished arithmetic"
+    assert grade("3 = x", "x = 3") is True and grade("4 = x", "x = 3") is False
+    assert grade("6 = 2x\n3 = x", "x = 3") is True
+
+
 def test_the_arithmetic_problem_worked_out_is_still_its_answer() -> None:
     for read in ("1/2 + 1/3 = 5/6", "3/6 + 2/6 = 5/6", "1/2 + 1/3 = 3/6 + 2/6 = 5/6"):
         assert _plain(parse_answers(read, "1/2 + 1/3")) == {("", Fraction(5, 6))}, read

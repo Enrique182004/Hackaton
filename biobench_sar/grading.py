@@ -540,9 +540,10 @@ def _values(text: str) -> list[Value] | None:
 # ---- answers ---------------------------------------------------------------------------------------------------
 
 _PAIR = re.compile(r"\(\s*([^(),;]+?)\s*[,;]\s*([^(),;]+?)\s*\)")
-# "and" / "or" / "o" / "y" / "," between answers; a "y" followed by "=" is the letter y ("x = 5, y = 2").
+# "and" / "or" / "o" / "y" / "," between answers; a "y" next to "=" is the letter y ("x = 5, y = 2", "3 = y").
 _CLAUSES = re.compile(
-    r"\s*(?:,(?!\d)|;|\n|&|\bor\b|\band\b|\bthen\b|\bso\b|\bo\b|\bluego\b|\bentonces\b|\by\b(?!\s*=)|\.\s)\s*"
+    r"\s*(?:,(?!\d)|;|\n|&|\bor\b|\band\b|\bthen\b|\bso\b|\bo\b|\bluego\b|\bentonces\b|(?<!=)(?<!= )\by\b(?!\s*=)"
+    r"|\.\s)\s*"
 )
 _LABEL = re.compile(
     r"^\s*(?:(?:the|my|your|our|final|correct|la|mi|tu|el)\s+)*"
@@ -552,6 +553,8 @@ _LABEL = re.compile(
 )
 # A letter set to something: the letter is not a term of an expression ("3x = 15", "x + 4 = 10" are no answers).
 _ASSIGNED = re.compile(r"(?<![\w.])([a-z])\s*=\s*")
+# The letter alone on the right of the only "=": "3 = x" (from "7 - 2x = 1": "6 = 2x", then "3 = x").
+_ASSIGNED_RIGHT = re.compile(r"=\s*([a-z])\s*$")
 _TERM_END = re.compile(r"[\d)^*/÷+\-]\s*$")
 # A single letter right after a value makes it an expression ("x = 2y + 1", "x = 5x"); "y luego" is a word.
 _VARIABLE_NEXT = re.compile(r"\s*[a-z]\s*(?:[=+\-*/^(]|\d|$)")
@@ -618,6 +621,16 @@ def _assignment(clause: str) -> tuple[str, list[Value]] | None:
     return None
 
 
+def _right_assignment(clause: str) -> tuple[str, list[Value]] | None:
+    """("x", [3]) for "3 = x" / "i got 3 = x": a value, then its letter alone on the right; None otherwise."""
+    found = _ASSIGNED_RIGHT.search(clause)
+    if found is None or clause.count("=") != 1:
+        return None
+    run, after = _value_run(_LEADING_WORDS.sub("", clause[: found.start()]).strip())
+    values = _values(run) if run.strip() and not after.strip() else None
+    return (found.group(1), values) if values else None
+
+
 def _rational(value: Value) -> bool:
     sp = _sympy()
     if sp is not None and isinstance(value, sp.Basic):
@@ -653,7 +666,9 @@ def _worked_value(clause: str) -> list[Value] | None:
     if not steps or any(_expression(s.strip()) is None for s in steps):
         return None
     run, after = _value_run(last.strip())
-    if not run.strip() or _VARIABLE_NEXT.match(after) or _unworked(run):
+    if _VARIABLE_NEXT.match(after):
+        return None  # the letter on the right: "6 = 2x" is a step, "3 = x" an answer (_right_assignment)
+    if not run.strip() or _unworked(run):
         return []
     return _values(run) or []
 
@@ -719,7 +734,7 @@ def parse_answers(text: Any, problem: Any = None) -> Answers:
         clause = _LABEL.sub("", raw.strip(" .:!?")).strip()
         if not clause:
             continue
-        assigned = _assignment(clause)
+        assigned = _assignment(clause) or _right_assignment(clause)
         if assigned is not None:
             letter = assigned[0]
             answers |= {(letter, v) for v in assigned[1]}
