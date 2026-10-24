@@ -29,15 +29,67 @@ ANSWER_COLUMNS = ("answer", "solution")
 TOPIC_COLUMNS = ("topic", "subject", "unit")
 LEVEL_COLUMNS = ("level", "difficulty")
 
+# ---- answer labels ---------------------------------------------------------------------------------------------
+_VALUE = r"[-−]?\s*(?:\d+\s+\d+\s*/\s*\d+|\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?|\.\d+)"
+_SOLVED = rf"(?:[a-z]\s*(?:<=|>=|=|<|>|≤|≥)\s*{_VALUE}|\(\s*{_VALUE}\s*,\s*{_VALUE}\s*\)|{_VALUE})"
+# "x = 6", "x = 5 or x = -3", "5/6", "(2, 3)", "x = 6 (subtract nine first)": a value, never a problem to solve.
+_ANSWER_SHAPE = re.compile(
+    rf"^{_SOLVED}(?:\s*(?:,|;|\bor\b|\band\b|\bo\b|\by\b)\s*{_SOLVED})*"
+    r"(?:\s+[(\[]\s*[a-záéíóúñ]{2,}.*|\s+[-–—]\s+[a-záéíóúñ]{2,}.*|\s*:\s+[a-záéíóúñ]{2,}.*)?\.?$",
+    re.I,
+)
+# The words a worksheet labels an answer with: "Answer", "Final answer", "Solution", "Result", "Respuesta (correcta /
+# final)", "Solución", "Resultado", and the short "Ans", "Sol", "Resp".
+_LABEL_FULL = r"(?:answers?|soluci[oó]n(?:es)?|solutions?|respuestas?|resultados?|results?)"
+_LABEL_SHORT = r"(?:ans|sol|resp)"
+_LABEL = rf"(?:(?:(?:the|la|el)\s+)?(?:(?:final|correct)\s+)?{_LABEL_FULL}(?:\s+(?:correcta|final))?|{_LABEL_SHORT})"
+# After the label: ":", "=", a full-width "：", a dash ("Answer - x = 6") or the "." of "Ans." / "Sol." / "Resp.".
+_LABEL_SEP = r"(?:\s*[:=：]|\s*[-–—]\s|\.(?=\s|$))"
+# Question and answer: "A:" / "R:" (respuesta), "A1." / "A1:" after "Q1.".
+_SHORT_LABEL = r"(?:[ar]\s*[:：]|a\d{1,3}\s*[.:：])"
+# Said as a sentence: "The answer is 8.", "La respuesta es 8.", "El resultado es 8."
+_SAID_LABEL = (
+    r"(?:(?:the\s+)?(?:(?:final|correct)\s+)?(?:answer|result|solution)\s+is|"
+    r"(?:la\s+)?(?:respuesta|soluci[oó]n)(?:\s+(?:correcta|final))?\s+es|(?:el\s+)?resultado\s+es)"
+)
+_BULLET = r"^\s*[-*•>]*\s*"
+# "Answer: x = 6", "Ans. 6", "Respuesta correcta: x = 6", "R: 7", "A1. x = 4", "Solución 3: x = 2".
+_LABELLED = re.compile(
+    rf"{_BULLET}(?:{_LABEL}\s*(?:#?\s*\d{{1,3}}\s*)?{_LABEL_SEP}|{_SHORT_LABEL})\s*(?P<text>\S.*)$", re.I
+)
+# "Answer x = 6" (no colon), "The answer is 8.": a label only when an answer follows.
+_LABELLED_BARE = re.compile(rf"{_BULLET}(?:{_SAID_LABEL}|{_LABEL})\s+(?P<text>\S.*)$", re.I)
+
+
+# A problem's own answer at the end of its line: "3x + 5 = 20 (answer: 5)", "2x = 16. The answer is 8.",
+# "Q1. 2x = 8  A1. x = 4". Not "result": "Find the result: 3 + 4" is the problem.
+_INLINE_ANSWER = re.compile(
+    rf"[(\[]?\s*\b(?:(?:answers?|ans|solutions?|soluci[oó]n|respuestas?)\s*[:=：]|{_LABEL_SHORT}\.\s*(?={_SOLVED})|"
+    rf"{_SAID_LABEL}\s+(?={_SOLVED})|(?<![\w.])[ar]\d{{0,3}}\s*[:：]\s*(?={_SOLVED})|"
+    rf"(?<![\w.])a\d{{1,3}}\.\s*(?={_SOLVED}))\s*(?P<text>.+?)\s*[)\]]?\s*\.?\s*$",
+    re.I,
+)
+
+
+def answer_label_text(line: str) -> str | None:
+    """The answer a labelled line gives ("Answer: x = 6", "Ans. 6", "R: 7", "A1. x = 4", "Answer x = 6", "The answer
+    is 8." -> the value), else None."""
+    found = _LABELLED.match(line)
+    if found:
+        return found.group("text").strip().rstrip(" .") or None
+    found = _LABELLED_BARE.match(line)
+    text = found.group("text").strip() if found else ""
+    return text.rstrip(" .") if text and _ANSWER_SHAPE.match(text) else None
+
+
 _NUMBERED = re.compile(
     r"^\s*(?:(?:problem|question|exercise|problema|pregunta|ejercicio|q)\s*#?\s*)?"
     r"(?P<n>\d{1,3})\s*(?:[.)]\s+|:\s*)(?P<text>\S.*)$",
     re.I,
 )
-_ANSWER_LINE = re.compile(r"^\s*[-*>]*\s*(?:answer|ans|solution|respuesta)\s*[:=]\s*(?P<text>\S.*)$", re.I)
-_INLINE_ANSWER = re.compile(r"[(\[]?\s*\b(?:answer|ans|respuesta)\b\s*[:=]\s*(?P<text>.+?)\s*[)\]]?\s*$", re.I)
+# "Answer: x = 6" as a worksheet line: is_worksheet looks for one (only the long words: a guide can say "Result:").
+_ANSWER_LINE = re.compile(r"^\s*[-*>]*\s*(?:answer|ans|solution|respuesta)\s*[:=：]\s*(?P<text>\S.*)$", re.I)
 _ANSWER_KEY = re.compile(r"^\W*(?:answer\s+key|answers|solutions|respuestas|soluciones)\W*$", re.I)
-_ANSWER_LABEL = re.compile(r"^\s*[-*>]*\s*(?:answer|ans|solution|respuesta)\s*[:=]\s*$", re.I)
 # A tutoring guide's numbered tips can contain math too; only files that present themselves as worksheets count.
 _WORKSHEET_HINT = re.compile(
     r"worksheet|quiz|exercise|homework|assignment|practice|problem\s*set|drill|\btest\b|ejercicio|tarea|examen|"
@@ -138,11 +190,11 @@ def parse_worksheet_text(text: str, source: str) -> list[QuizProblem]:
         if found:
             level, levelled = _level(found.group("n")), True
             continue
-        answer = _ANSWER_LINE.match(line)
-        if answer:
+        answer = answer_label_text(line)
+        if answer is not None:
             # Only under the problem it belongs to: a skipped instruction line can have its own answer.
             if last_kept and problems[-1]["answer"] is None:
-                problems[-1]["answer"] = answer.group("text").strip()
+                problems[-1]["answer"] = answer
             continue
         numbered = _NUMBERED.match(line)
         if not numbered:
@@ -242,11 +294,21 @@ def pick_progressive(problems: Sequence[QuizProblem], length: int) -> list[QuizP
 # (strip_document_answers), so the store never holds one; strip_chunk_answers is the safety net at prompt time.
 
 _ANSWER_WORD = r"(?:answers?|ans|solutions?|soluci[oó]n(?:es)?|respuestas?)"
-_ANSWER_TAIL = re.compile(rf"[(\[]?\s*\b{_ANSWER_WORD}\b\s*[:=].*$", re.I)
-# "Answer: x = 6", "Answers: 6, 8, 7", "Solución 3: x = 2", "**Respuesta:** x = 6".
-_ANSWER_ROW = re.compile(rf"^\s*[-*•>]*\s*{_ANSWER_WORD}\s*(?:#?\s*\d{{1,3}}\s*)?[:=]\s*\S", re.I)
-# "Answer:" or "Solución" on a line of its own: the answer, or a worked solution, is on the lines below it.
-_ANSWER_HEAD = re.compile(r"^\s*[-*•>]*\s*(?:answer|ans|solution|soluci[oó]n|respuesta)\s*[:=]?\s*$", re.I)
+# An answer at the end of a line: "(answer: 6)", "Respuesta: x = 6", "Answer - x = 6", "Ans. 6", "Sol. x = 6",
+# "The answer is 8.", "Answer x = 6", "Q: ... A: x = 5", "Q1. ... A1. x = 5". "Result" only labels a line of its
+# own: "Find the result: 3 + 4" is a problem.
+_ANSWER_TAIL = re.compile(
+    rf"[(\[]?\s*\b(?:{_ANSWER_WORD}\b\s*[:=：]|(?:the\s+|la\s+)?(?:(?:final|correct)\s+)?{_ANSWER_WORD}"
+    rf"(?:\s+(?:correcta|final))?\s*[:=：]|{_ANSWER_WORD}\s*[-–—]\s+(?={_SOLVED})|{_LABEL_SHORT}\.\s*(?={_SOLVED})|"
+    rf"{_SAID_LABEL}\s+(?={_SOLVED})|(?:answer|respuesta)\s+(?={_SOLVED}\s*[.)\]]?\s*$)|"
+    rf"(?<![\w.])[ar]\d{{0,3}}\s*[:：]\s*(?={_SOLVED})|(?<![\w.])a\d{{1,3}}\.\s*(?={_SOLVED})).*$",
+    re.I,
+)
+# "Answer: x = 6", "Answers: 6, 8, 7", "Solución 3: x = 2", "**Respuesta:** x = 6", "Resp. 6", "R: 7", "A1. x = 4",
+# "Answer x = 6", "The answer is 8.": an answer line, dropped whole.
+_ANSWER_ROW = _LABELLED
+# "Answer:", "Ans." or "Solución" on a line of its own: the answer, or a worked solution, is on the lines below it.
+_ANSWER_HEAD = re.compile(rf"{_BULLET}(?:{_LABEL}\s*[:=：.]?|(?:[ar]|a\d{{1,3}})\s*[:：.])\s*$", re.I)
 # A section of answers that runs to a heading over something else: "Answer key", "Answers:", "Respuestas".
 _KEY_LINE = re.compile(
     r"^\W*(?:(?:the\s+)?answer\s+key|answers|solutions|soluciones|respuestas|clave(?:\s+de\s+respuestas)?|"
@@ -257,21 +319,16 @@ _KEY_LINE = re.compile(
 _KEY_TITLE = re.compile(rf"^(?:the\s+)?(?:{_ANSWER_WORD}|answer\s+key|clave(?:\s+de\s+respuestas)?)\W*$", re.I)
 _KEY_TITLE_START = re.compile(rf"^(?:the\s+)?(?:{_ANSWER_WORD}|answer\s+key|clave\s+de\s+respuestas)\b", re.I)
 _LEVEL_LINE = re.compile(r"^\s*(?:level|nivel|difficulty|dificultad)\s*[:\-]?\s*\d+\b.{0,60}$", re.I)
-_ANSWER_COLUMN = re.compile(rf"\b{_ANSWER_WORD}\b", re.I)
+_ANSWER_COLUMN = re.compile(rf"\b(?:{_ANSWER_WORD}|{_LABEL_FULL}|{_LABEL_SHORT})\b", re.I)
 _TABLE_SEPARATOR = re.compile(r"^\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?$")
 # The ingestor writes a CSV row as "Row 3: problem is 3/4 - 1/2, answer is 1/4, topic is ..., level is 1."
 _CSV_ROW = re.compile(r"^\s*Row\s+\d+\s*:")
-_CSV_ANSWER = re.compile(rf"(?:,\s*)?\b(?:\w+[ _])?{_ANSWER_WORD}\s+is\s+.*?(?=,\s|\.\s|\.?\s*$)", re.I | re.M)
-
-
-_VALUE = r"[-−]?\s*(?:\d+\s+\d+\s*/\s*\d+|\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?|\.\d+)"
-_SOLVED = rf"(?:[a-z]\s*(?:<=|>=|=|<|>|≤|≥)\s*{_VALUE}|\(\s*{_VALUE}\s*,\s*{_VALUE}\s*\)|{_VALUE})"
-# "x = 6", "x = 5 or x = -3", "5/6", "(2, 3)", "x = 6 (subtract nine first)": a value, never a problem to solve.
-_ANSWER_SHAPE = re.compile(
-    rf"^{_SOLVED}(?:\s*(?:,|;|\bor\b|\band\b|\bo\b|\by\b)\s*{_SOLVED})*"
-    r"(?:\s+[(\[]\s*[a-záéíóúñ]{2,}.*|\s+[-–—]\s+[a-záéíóúñ]{2,}.*|\s*:\s+[a-záéíóúñ]{2,}.*)?\.?$",
-    re.I,
+_CSV_ANSWER = re.compile(
+    rf"(?:,\s*)?\b(?:\w+[ _])?(?:{_ANSWER_WORD}|{_LABEL_FULL}|{_LABEL_SHORT})\s+is\s+.*?(?=,\s|\.\s|\.?\s*$)",
+    re.I | re.M,
 )
+
+
 # "x = 6" or "6": never a problem. A bare fraction can be one ("12/16" under "Simplify each fraction").
 _LETTER_VALUE = re.compile(rf"^[a-z]\s*(?:<=|>=|=|<|>|≤|≥)\s*{_VALUE}", re.I)
 _PLAIN_NUMBER = re.compile(r"^[-−]?\s*\d+(?:[.,]\d+)?\.?$")
@@ -286,6 +343,11 @@ _LINE_PREFIX = re.compile(
 )
 # A lone letter set to a number somewhere in the line ("10 - 3x = 4, so x = 2"); "3x = 15" is a step, not this.
 _SOLVED_IN_LINE = re.compile(r"(?:^|[\s,;:(→>])[a-z]\s*=\s*[-−]?\s*\d", re.I)
+
+
+def _labelled_answer(cleaned: str) -> bool:
+    """A line that labels an answer: "Answer: x = 6", "R: 7", "A1. x = 4", "Answer x = 6", "The answer is 8."."""
+    return bool(_ANSWER_ROW.match(cleaned)) or answer_label_text(cleaned) is not None
 
 
 def is_answer_column(name: str) -> bool:
@@ -336,7 +398,7 @@ def _key_entry(line: str) -> bool:
     return bool(
         _is_answer_line(line)
         or _ANSWER_LIST.match(cleaned)
-        or _ANSWER_ROW.match(cleaned)
+        or _labelled_answer(cleaned)
         or _SOLVED_IN_LINE.search(_answer_body(line))
     )
 
@@ -410,7 +472,7 @@ def _strip_lines(lines: Sequence[str], *, in_key: bool = False) -> list[str | No
             in_key, label, drop = True, "", None
             out.append(None)
             continue
-        if _ANSWER_ROW.match(cleaned):
+        if _labelled_answer(cleaned):
             out.append(None)
             continue
         if _ANSWER_HEAD.match(cleaned):
