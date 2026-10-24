@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import sys
 import types
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import pytest
@@ -51,8 +52,9 @@ class VLM:
         self.on_call: Callable[[], None] | None = None
         self.seen: list[tuple[str, bytes | None, list[Any]]] = []
 
-    def evaluate(self, query: str, image: bytes | None, context: list[Any], ink: list[Any],
-                 size: tuple[int, int]) -> AvatarAction:
+    def evaluate(
+        self, query: str, image: bytes | None, context: list[Any], ink: list[Any], size: tuple[int, int]
+    ) -> AvatarAction:
         self.seen.append((query, image, ink))
         if self.on_call:
             self.on_call()

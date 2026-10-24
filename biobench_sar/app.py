@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 import threading
@@ -44,9 +45,7 @@ def build_services(settings: Settings, on_query: Any, on_state: Any, should_list
 
     calibration = Calibration.load(settings.calibration_file, expected_projector_size=settings.projector_size)
     if calibration is None:
-        calibration = Calibration.identity(
-            (settings.camera_width, settings.camera_height), settings.projector_size
-        )
+        calibration = Calibration.identity((settings.camera_width, settings.camera_height), settings.projector_size)
     vision = VisionLoop(
         camera_index=settings.camera_index,
         width=settings.camera_width,
@@ -211,9 +210,7 @@ def create_app(
         if not text:
             return jsonify({"results": []})
         results = svc.store.query(text, k)
-        return jsonify(
-            {"results": [{"text": c.text, "source": c.source, "score": round(c.score, 3)} for c in results]}
-        )
+        return jsonify({"results": [{"text": c.text, "source": c.source, "score": round(c.score, 3)} for c in results]})
 
     @app.get("/api/ink")
     def api_ink() -> Any:
@@ -381,7 +378,8 @@ def _request_camera_access(camera_index: int) -> None:
     if not ok:
         log.warning(
             "Camera %d not readable. Allow camera access for your terminal/app in "
-            "System Settings > Privacy & Security > Camera, then restart.", camera_index
+            "System Settings > Privacy & Security > Camera, then restart.",
+            camera_index,
         )
 
 
@@ -397,15 +395,19 @@ def main() -> None:
         svc.audio.start()
     except Exception:
         log.exception("audio failed to start; use typed queries")
-    log.info("Projector: http://%s:%d/   Dashboard: http://%s:%d/dashboard", settings.host, settings.port, settings.host, settings.port)
+    log.info(
+        "Projector: http://%s:%d/   Dashboard: http://%s:%d/dashboard",
+        settings.host,
+        settings.port,
+        settings.host,
+        settings.port,
+    )
     try:
         socketio.run(app, host=settings.host, port=settings.port, allow_unsafe_werkzeug=True)
     finally:
         svc.vision.stop()
-        try:
+        with contextlib.suppress(Exception):
             svc.audio.stop()
-        except Exception:
-            pass
 
 
 if __name__ == "__main__":

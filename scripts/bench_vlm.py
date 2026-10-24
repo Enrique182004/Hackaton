@@ -2,6 +2,7 @@
 
 Usage: python scripts/bench_vlm.py [-n 3] [--model qwen2.5vl:3b] [--url http://localhost:11434]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -17,19 +18,42 @@ from biobench_sar.schemas import InkRegion, RetrievedChunk
 SIZE = (1920, 1080)
 QUERIES = ["Is my flowchart correct?", "Check my procedure, please.", "Does this look right to you?"]
 SCENARIOS = {
-    "A": ("missing sterile step", ["Lake water sample", "Filter 0.45um", "NNA + E. coli", "Incubate 30C", "Microscopy"], "error"),
-    "B": ("complete procedure",
-          ["Autoclave media + tools", "Flame-sterilize loop", "Lake water sample", "Filter 0.45um",
-           "NNA + E. coli", "Incubate 30C", "Microscopy"], "celebrating"),
+    "A": (
+        "missing sterile step",
+        ["Lake water sample", "Filter 0.45um", "NNA + E. coli", "Incubate 30C", "Microscopy"],
+        "error",
+    ),
+    "B": (
+        "complete procedure",
+        [
+            "Autoclave media + tools",
+            "Flame-sterilize loop",
+            "Lake water sample",
+            "Filter 0.45um",
+            "NNA + E. coli",
+            "Incubate 30C",
+            "Microscopy",
+        ],
+        "celebrating",
+    ),
 }
 SCENARIO_QUERY = "Check my flowchart. Is the procedure correct and complete?"
 STEPS = ["Lake water sample", "Filter 0.45um", "NNA + E. coli", "Incubate 30C", "Microscopy"]
 
 CONTEXT = [
-    RetrievedChunk("Acanthamoeba is isolated by plating filtered water on non-nutrient agar (NNA) "
-                   "overlaid with a heat-killed E. coli lawn and incubating at 30C.", "protocol.pdf", 0.9, {}),
-    RetrievedChunk("Sterile technique: autoclave media and tools at 121C and flame-sterilize loops.",
-                   "sterile_technique.pdf", 0.8, {}),
+    RetrievedChunk(
+        "Acanthamoeba is isolated by plating filtered water on non-nutrient agar (NNA) "
+        "overlaid with a heat-killed E. coli lawn and incubating at 30C.",
+        "protocol.pdf",
+        0.9,
+        {},
+    ),
+    RetrievedChunk(
+        "Sterile technique: autoclave media and tools at 121C and flame-sterilize loops.",
+        "sterile_technique.pdf",
+        0.8,
+        {},
+    ),
 ]
 
 
@@ -47,7 +71,9 @@ def make_flowchart(steps: list[str]) -> tuple[bytes, list[InkRegion]]:
         for j, w in enumerate(words):
             cv2.putText(img, w, (x + 15, y + 50 + j * 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 2)
         if i < n - 1:
-            cv2.arrowedLine(img, (x + bw + 5, y + bh // 2), (x + bw + gap - 5, y + bh // 2), (0, 0, 0), 4, tipLength=0.3)
+            cv2.arrowedLine(
+                img, (x + bw + 5, y + bh // 2), (x + bw + gap - 5, y + bh // 2), (0, 0, 0), 4, tipLength=0.3
+            )
         regions.append({"x": x, "y": y, "w": bw, "h": bh, "cx": x + bw // 2, "cy": y + bh // 2})
     ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 90])
     assert ok

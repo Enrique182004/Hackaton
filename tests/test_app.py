@@ -56,8 +56,19 @@ def test_status_shape(built: Any) -> None:
     app, _ = built
     data = app.test_client().get("/api/status").get_json()
     assert {
-        "fps", "camera_running", "calibrated", "doc_chunks", "vlm_backend", "vlm_model",
-        "audio_available", "state", "busy", "tts_backend", "listen_mode", "last_latency_s", "uptime_s",
+        "fps",
+        "camera_running",
+        "calibrated",
+        "doc_chunks",
+        "vlm_backend",
+        "vlm_model",
+        "audio_available",
+        "state",
+        "busy",
+        "tts_backend",
+        "listen_mode",
+        "last_latency_s",
+        "uptime_s",
     } <= set(data)
     assert data["state"] == "idle" and data["audio_available"] is True
 
@@ -230,9 +241,20 @@ def test_config_keys_and_no_secret(built: Any, settings: Settings) -> None:
     assert r.status_code == 200
     data = r.get_json()
     assert {
-        "camera_index", "camera_size", "projector_size", "checkerboard", "vlm_backend", "vlm_model",
-        "vlm_base_url", "embed_model", "rag_top_k", "whisper_model", "listen_mode", "wake_word",
-        "tts_backend", "tts_voice",
+        "camera_index",
+        "camera_size",
+        "projector_size",
+        "checkerboard",
+        "vlm_backend",
+        "vlm_model",
+        "vlm_base_url",
+        "embed_model",
+        "rag_top_k",
+        "whisper_model",
+        "listen_mode",
+        "wake_word",
+        "tts_backend",
+        "tts_voice",
     } <= set(data)
     assert data["projector_size"] == [640, 360]
     assert "vlm_api_key" not in data and "api_key" not in r.get_data(as_text=True).lower()

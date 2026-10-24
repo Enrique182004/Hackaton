@@ -141,7 +141,9 @@ class Assistant:
             audio_name = svc.tts.speak(action.spoken_text)
             self._emit("speak", {"url": f"/tts/{audio_name}" if audio_name else None, "text": action.spoken_text})
             self._speaking_until = time.monotonic() + estimate_speech_seconds(action.spoken_text)
-            self._record(text, action, sources, ink, frame is not None, started, error=action.animation_state == "error")
+            self._record(
+                text, action, sources, ink, frame is not None, started, error=action.animation_state == "error"
+            )
         except Exception:
             log.exception("query pipeline failed")
             action = error_action("Sorry, something went wrong. Please try again.", self.settings.projector_size)

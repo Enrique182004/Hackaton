@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 import numpy as np
 
@@ -71,7 +71,7 @@ class AudioTrigger:
                 )
             finally:
                 pa.terminate()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.info("audio unavailable: %s", exc)
             return False
 
@@ -80,7 +80,7 @@ class AudioTrigger:
             return
         try:
             self.on_state(name)
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("on_state callback failed")
 
     def start(self) -> None:
@@ -176,7 +176,7 @@ class AudioTrigger:
             audio = self._record(self.record_seconds)
             self._state("transcribing")
             text = self._heard(audio)
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("push-to-talk failed")
         finally:
             self._state("idle")
@@ -189,14 +189,14 @@ class AudioTrigger:
             return
         try:
             self.on_query(text)
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("on_query callback failed")
 
     def extract_after_wake(self, text: str) -> str | None:
         m = re.search(rf"\b{re.escape(self.wake_word)}\b", text, re.IGNORECASE)
         if not m:
             return None
-        return text[m.end():].strip(" \t\n,.:;!?-")
+        return text[m.end() :].strip(" \t\n,.:;!?-")
 
     def _wake_loop(self) -> None:
         try:
@@ -222,7 +222,7 @@ class AudioTrigger:
                             self._state("listening")
                             rest = self._heard(self._record(self.record_seconds))
                         query = rest
-                except Exception:  # noqa: BLE001
+                except Exception:
                     log.exception("wake listener iteration failed")
                     self._stop.wait(1.0)
                 finally:

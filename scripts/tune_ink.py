@@ -3,6 +3,7 @@
 Usage: python scripts/tune_ink.py [--quick]
 The scene generators are reused by tests/test_vision_loop.py.
 """
+
 from __future__ import annotations
 
 import itertools
@@ -15,7 +16,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from biobench_sar.core.vision_loop import find_ink_regions  # noqa: E402
+from biobench_sar.core.vision_loop import find_ink_regions
 
 H, W = 1080, 1920
 BOX_W, BOX_H = 220, 120

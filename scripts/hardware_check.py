@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from biobench_sar.config import Settings  # noqa: E402
+from biobench_sar.config import Settings
 
 Result = tuple[str, str, str]  # (name, PASS|WARN|FAIL, detail)
 
@@ -63,7 +63,11 @@ def check_cameras(only: int | None, save_path: str | None) -> list[Result]:
         fps = count / elapsed if elapsed > 0 else 0.0
         h, w = frame.shape[:2]
         results.append(
-            (f"camera {index}", camera_status(fps), f"{w}x{h} @ {fps:.1f} fps (PASS >= {CAMERA_PASS_FPS:g}, FAIL < {CAMERA_FAIL_FPS:g})")
+            (
+                f"camera {index}",
+                camera_status(fps),
+                f"{w}x{h} @ {fps:.1f} fps (PASS >= {CAMERA_PASS_FPS:g}, FAIL < {CAMERA_FAIL_FPS:g})",
+            )
         )
         if save_path and not saved:
             cv2.imwrite(save_path, frame)

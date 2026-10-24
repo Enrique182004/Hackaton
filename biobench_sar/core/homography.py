@@ -28,8 +28,8 @@ def generate_checkerboard(width: int, height: int, cols: int = 9, rows: int = 6)
     for r in range(rows + 1):
         for c in range(cols + 1):
             if (r + c) % 2 == 0:
-                x0, y0 = int(round(ox + c * square)), int(round(oy + r * square))
-                x1, y1 = int(round(ox + (c + 1) * square)), int(round(oy + (r + 1) * square))
+                x0, y0 = round(ox + c * square), round(oy + r * square)
+                x1, y1 = round(ox + (c + 1) * square), round(oy + (r + 1) * square)
                 img[y0:y1, x0:x1] = 0
     return img
 
@@ -93,7 +93,7 @@ class Calibration:
             raise
 
     @classmethod
-    def load(cls, path: Path, expected_projector_size: tuple[int, int] | None = None) -> "Calibration | None":
+    def load(cls, path: Path, expected_projector_size: tuple[int, int] | None = None) -> Calibration | None:
         try:
             data = json.loads(Path(path).read_text())
             matrix = np.array(data["matrix"], dtype=np.float64)
@@ -113,7 +113,7 @@ class Calibration:
         return cls(matrix, (width, height))
 
     @classmethod
-    def identity(cls, camera_size: tuple[int, int], projector_size: tuple[int, int]) -> "Calibration":
+    def identity(cls, camera_size: tuple[int, int], projector_size: tuple[int, int]) -> Calibration:
         matrix = np.diag([projector_size[0] / camera_size[0], projector_size[1] / camera_size[1], 1.0])
         return cls(matrix, projector_size)
 

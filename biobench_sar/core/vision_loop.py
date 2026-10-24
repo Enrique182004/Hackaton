@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
-from typing import Any, Callable, Protocol
+from collections.abc import Callable
+from typing import Any, Protocol
 
 import cv2
 import numpy as np
@@ -158,10 +160,8 @@ class VisionLoop:
     def _release(cap: CaptureLike | None) -> None:
         if cap is None:
             return
-        try:
+        with contextlib.suppress(Exception):
             cap.release()
-        except Exception:
-            pass
 
 
 def encode_jpeg(frame: np.ndarray, quality: int = 80) -> bytes:
@@ -184,7 +184,7 @@ def _box_rects(mask: np.ndarray, min_area: int) -> list[tuple[int, int, int, int
     if hierarchy is None:
         return []
     rects: list[tuple[int, int, int, int]] = []
-    for contour, node in zip(contours, hierarchy[0]):
+    for contour, node in zip(contours, hierarchy[0], strict=False):
         if node[3] < 0:  # outer contour, not a hole
             continue
         area = cv2.contourArea(contour)
@@ -194,6 +194,7 @@ def _box_rects(mask: np.ndarray, min_area: int) -> list[tuple[int, int, int, int
         if len(cv2.approxPolyDP(contour, 0.04 * cv2.arcLength(contour, True), True)) > 8:
             continue
         rects.append((x, y, w, h))
+
     # An enclosing frame around other boxes is not a step; keep the innermost boxes.
     def contains(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
         return a != b and a[0] <= b[0] and a[1] <= b[1] and a[0] + a[2] >= b[0] + b[2] and a[1] + a[3] >= b[1] + b[3]

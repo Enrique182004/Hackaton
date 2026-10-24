@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import pytest
@@ -68,8 +69,14 @@ class FakeVLM:
         self.gate: Any = None  # threading.Event to hold the pipeline open
         self.calls: list[str] = []
 
-    def evaluate(self, query: str, image_jpeg: bytes | None, context: list[Any],
-                 ink_regions: list[Any], projector_size: tuple[int, int]) -> AvatarAction:
+    def evaluate(
+        self,
+        query: str,
+        image_jpeg: bytes | None,
+        context: list[Any],
+        ink_regions: list[Any],
+        projector_size: tuple[int, int],
+    ) -> AvatarAction:
         self.calls.append(query)
         if self.gate is not None:
             self.gate.wait(5)
@@ -125,9 +132,7 @@ def templates_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def fakes() -> app_module.Services:
-    return app_module.Services(
-        vision=FakeVision(), store=FakeStore(), vlm=FakeVLM(), audio=FakeAudio(), tts=FakeTTS()
-    )
+    return app_module.Services(vision=FakeVision(), store=FakeStore(), vlm=FakeVLM(), audio=FakeAudio(), tts=FakeTTS())
 
 
 @pytest.fixture

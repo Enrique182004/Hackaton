@@ -187,7 +187,7 @@ def test_wake_word_heard_while_avatar_speaks_is_ignored() -> None:
     assert queries == []
 
 
-def _until(cond, timeout: float = 3.0) -> bool:  # noqa: ANN001
+def _until(cond, timeout: float = 3.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if cond():
@@ -324,7 +324,9 @@ def test_silence_guard_skips_transcription() -> None:
 
     queries: list[str] = []
     seen_at_query: list[int] = []
-    t = AudioTrigger(lambda q: (queries.append(q), seen_at_query.append(len(transcribed))), mode="wake", recorder=rec, transcriber=tr)
+    t = AudioTrigger(
+        lambda q: (queries.append(q), seen_at_query.append(len(transcribed))), mode="wake", recorder=rec, transcriber=tr
+    )
     t.start()
     assert _until(lambda: bool(queries))
     t.stop()

@@ -39,8 +39,12 @@ def _client(backend: str, base_url: str = "http://x:11434") -> VLMClient:
 
 
 def _run(c: VLMClient, response: MagicMock | Exception, image: bytes | None = JPEG):
-    with patch.object(c.session, "post", side_effect=[response] if isinstance(response, Exception) else None,
-                      return_value=None if isinstance(response, Exception) else response) as post:
+    with patch.object(
+        c.session,
+        "post",
+        side_effect=[response] if isinstance(response, Exception) else None,
+        return_value=None if isinstance(response, Exception) else response,
+    ) as post:
         action = c.evaluate("check my flowchart", image, CHUNKS, REGIONS, SIZE)
     return action, post
 

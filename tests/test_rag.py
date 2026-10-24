@@ -115,8 +115,9 @@ def test_pdf(tmp_path: Path) -> None:
     assert chunks[1].metadata["page"] == 2
 
 
-@pytest.mark.skipif(shutil.which("tesseract") is None and not Path("/opt/homebrew/bin/tesseract").exists(),
-                    reason="tesseract missing")
+@pytest.mark.skipif(
+    shutil.which("tesseract") is None and not Path("/opt/homebrew/bin/tesseract").exists(), reason="tesseract missing"
+)
 def test_image_ocr(tmp_path: Path) -> None:
     import pytesseract
     from PIL import Image, ImageDraw, ImageFont
@@ -168,7 +169,7 @@ def test_thread_safety(store: VectorStore) -> None:
         try:
             for _ in range(10):
                 assert store.query("amoeba", k=3)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             errors.append(e)
 
     ts = [threading.Thread(target=work) for _ in range(6)]

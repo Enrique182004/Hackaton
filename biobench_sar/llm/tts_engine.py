@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import queue
 import subprocess
@@ -35,7 +36,7 @@ class TTSEngine:
         text = (text or "").strip()
         if not text:
             return None
-        for name in ORDER[ORDER.index(self.backend):]:
+        for name in ORDER[ORDER.index(self.backend) :]:
             try:
                 if name == "edge":
                     if self._edge_cooling_down():
@@ -45,7 +46,7 @@ class TTSEngine:
                     return None
                 if name == "pyttsx3" and self._pyttsx3(text):
                     return None
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 log.warning("tts backend %s failed: %s", name, exc)
         log.info("tts disabled/unavailable; text: %s", text)
         return None
@@ -54,10 +55,8 @@ class TTSEngine:
         with self._lock:
             proc, self._proc = self._proc, None
         if proc is not None and proc.poll() is None:
-            try:
+            with contextlib.suppress(Exception):
                 proc.terminate()
-            except Exception:  # noqa: BLE001
-                pass
         if self._q is not None:
             self._q.put(None)
             self._q = None
@@ -86,10 +85,8 @@ class TTSEngine:
     def _cleanup(self) -> None:
         files = sorted(self.out_dir.glob("*.mp3"), key=lambda p: p.stat().st_mtime)
         for old in files[: max(0, len(files) - MAX_FILES)]:
-            try:
+            with contextlib.suppress(OSError):
                 old.unlink()
-            except OSError:
-                pass
 
     def _say(self, text: str) -> bool:
         with self._lock:
@@ -105,7 +102,9 @@ class TTSEngine:
         with self._lock:
             if self._q is None:
                 self._q = queue.Queue()
-                self._thread = threading.Thread(target=self._pyttsx3_worker, args=(self._q,), daemon=True, name="pyttsx3")
+                self._thread = threading.Thread(
+                    target=self._pyttsx3_worker, args=(self._q,), daemon=True, name="pyttsx3"
+                )
                 self._thread.start()
             q = self._q
         q.put(text)
@@ -117,7 +116,7 @@ class TTSEngine:
             import pyttsx3
 
             engine = pyttsx3.init()
-        except Exception:  # noqa: BLE001
+        except Exception:
             log.exception("pyttsx3 init failed")
             return
         while True:
@@ -127,5 +126,5 @@ class TTSEngine:
             try:
                 engine.say(item)
                 engine.runAndWait()
-            except Exception:  # noqa: BLE001
+            except Exception:
                 log.exception("pyttsx3 speak failed")

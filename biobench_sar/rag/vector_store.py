@@ -35,9 +35,7 @@ class VectorStore:
         self._count = int(self._col.count())
 
     def _open(self) -> Any:
-        return self._client.get_or_create_collection(
-            self._collection_name, metadata={"hnsw:space": "cosine"}
-        )
+        return self._client.get_or_create_collection(self._collection_name, metadata={"hnsw:space": "cosine"})
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
         if self._embedder is not None:
@@ -86,7 +84,7 @@ class VectorStore:
                 include=["documents", "metadatas", "distances"],
             )
         out: list[RetrievedChunk] = []
-        for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0]):
+        for doc, meta, dist in zip(res["documents"][0], res["metadatas"][0], res["distances"][0], strict=False):
             meta = dict(meta or {})
             out.append(RetrievedChunk(doc, str(meta.get("source", "")), 1.0 - float(dist), meta))
         return out
