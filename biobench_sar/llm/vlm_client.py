@@ -876,6 +876,14 @@ def dictates_problem(spoken: str, like: str | None = None, language: str = "en")
     return "equals" in said or "=" not in (like or "")
 
 
+def says_equation(spoken: str, language: str = "en") -> bool:
+    """Whether a reply reads out an equation: "equals" with two numbers or more ("two x equals fourteen"); a lone
+    "x equals five" is a value, not a problem."""
+    seq = _math_seq(spoken, language)
+    numbers = [word for word in seq if word not in ("plus", "minus", "times", "over", "equals")]
+    return "equals" in seq and len(numbers) >= 2
+
+
 def reads_back(spoken: str, problem: str | None, language: str = "en") -> bool:
     """Whether a reply says this exact problem (its numbers and operations in the same order)."""
     wanted, said = _math_seq(problem or "", language), _math_seq(spoken, language)
@@ -1010,7 +1018,7 @@ def check_quiz_answer(
         return _tutor(action, spoken_text=wrong, animation_state="error", verdict="wrong")
     else:
         praise = spoken if state == "celebrating" and usable else correct
-    if praise != correct and dictates_problem(praise, None, language) and not reads_problem(praise, upcoming, language):
+    if praise != correct and says_equation(praise, language) and not reads_problem(praise, upcoming, language):
         praise = correct  # it read out a problem of its own (an example's): only the quiz's next one is read out
     if upcoming and not reads_problem(praise, upcoming, language):
         # The next turn checks it, so it must be read out now.
