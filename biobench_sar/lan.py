@@ -29,7 +29,8 @@ LAN_MODE_HEADER = "X-SAR-LAN"
 PIN_DIGITS = 6
 # Per device (TCP peer address): MAX_FAILURES misses within FAILURE_WINDOW_S lock that device for LOCKOUT_S,
 # doubling with each further lockout up to MAX_LOCKOUT_S. A device quiet for FORGET_S starts over.
-MAX_FAILURES = 10
+# Five, so that one device (at most 30 misses in its first hour) can never reach the server-wide cap alone.
+MAX_FAILURES = 5
 FAILURE_WINDOW_S = 60.0
 LOCKOUT_S = 60.0
 MAX_LOCKOUT_S = 60.0 * 60
@@ -388,6 +389,11 @@ class JoinPin:
             record = self._clients.get(key)
             mine = max(0.0, record.locked_until - now) if record is not None else 0.0
             return max(mine, self._global_locked_for(now))
+
+    def server_locked_for(self) -> float:
+        """Seconds until anyone may guess again once the server-wide cap is reached; 0.0 below it."""
+        with self._lock:
+            return self._global_locked_for(self._clock())
 
     def issue_token(self) -> str:
         """A fresh random cookie token, valid for token_ttl_s. Call it only after verify() returned True."""
