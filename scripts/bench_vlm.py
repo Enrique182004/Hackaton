@@ -19,6 +19,10 @@ Graded in code (grading.py): QQC/QQW/QQP a quadratic x^2 - 2x - 15 = 0 checked r
 system right / wrong, EQQW the wrong quadratic in Spanish. A wrong answer must be "error" with one hint and no answer.
 QQ2/EQQ2: the right quadratic with one root per line (every answer line is read). QFN: only 1/2 + 1/3 on the board,
 never graded ("I can't see your final answer yet"); QFC: 1/2 + 1/3 = 5/6 worked out, graded right.
+Landing review R1-R5: QK the right answer with the check 3(5) + 5 = 20 under it (graded right: a read of only the
+check is asked again for the answer line; never "Not quite"), QT a power tower as the answer (fast, never praised),
+QXR "3 = x" under "6 = 2x" (graded right), HR/EHR help on the student's own wrong sum 1/2 + 1/3 = 2/5 (five sixths
+never said), QS2/EQS2 a system one value per line (graded right).
 
 --flow runs the whole pipeline (Assistant + this model, a synthetic board, a temporary quiz bank): a quiz with a wrong
 then right answer on 3x + 5 = 20, a wrong then right quadratic (one root per line), then "stop the quiz" -> the
@@ -27,6 +31,7 @@ confirmation -> "yes" -> stopped with the score. --flow es runs it in Spanish ("
 Example (the final-wiring live check): --scenarios --profile math --runs 2 --only ELO,ELE,EH,EHA,EQD,EQC,EQW,CR
 Code grading: --scenarios --profile math --runs 2 --only QC,QW,QQC,QQW,QQP,QSC,QSW,H,HA,EQC,EQW,EQQW
 Answer lines and unfinished work: --scenarios --profile math --runs 2 --only QQ2,EQQ2,QFN,QFC,QN
+Landing review: --scenarios --profile math --runs 2 --only QK,QT,QXR,HR,EHR,QS2,EQS2
 Pipeline: --flow en --runs 2 and --flow es --runs 2
 Answer-leak check: --scenarios --profile math --runs 3 --only EQCN,EQWN and --runs 2 --only H,EH,HS,EHS
 """
@@ -972,10 +977,103 @@ GRADED_SCENARIOS = {
         check=_graded,
     ),
 }
+# The landing review's R1-R5, live: a check line under the answer, a power tower, the letter on the right, the
+# student's own result in help, a system one value per line.
+LAST_CHECK = {**QUIZ_TASK, "number": 5, "total": 5, "next_problem": None}
+TOWER = "x = ((((9)^6)^6)^6)^6"
+SUM_BOARD = "1/2 + 1/3 = 2/5"
+
+
+def _never_wrong(spoken: str) -> str | None:
+    """A check line ("3(5) + 5 = 20") is no answer: graded or asked again, never "Not quite"."""
+    return "graded the check line wrong" if re.search(r"^\s*(?:not\s+quite|casi)\b", spoken, re.I) else None
+
+
+def _not_praised(spoken: str) -> str | None:
+    return "praised an answer code cannot read" if praises(spoken) else None
+
+
+def _never_says_the_sum(spoken: str) -> str | None:
+    """Help on the student's own wrong sum: the problem's result (five sixths) is never said."""
+    said = re.search(r"five\s+sixths|5\s*/\s*6|cinco\s+sextos", spoken, re.I)
+    return "gave the result" if said or grading.states_solution(spoken, grading.solve_text("1/2 + 1/3")) else None
+
+
+LANDING_SCENARIOS = {
+    "QK": Scenario(
+        f"quiz check {EQUATION}, right, with the check 3(5) + 5 = 20 under it",
+        "Check my answer.",
+        lambda: make_board([EQUATION, "x = 5", "3(5) + 5 = 20"]),
+        "celebrating",
+        mode="quiz",
+        task=LAST_CHECK,
+        context=[],
+        check=_never_wrong,
+    ),
+    "QT": Scenario(
+        f"quiz check {EQUATION}, a power tower as the answer: never frozen, never praised",
+        "Check my answer.",
+        lambda: make_board([EQUATION, TOWER]),
+        "",
+        mode="quiz",
+        task=LAST_CHECK,
+        context=[],
+        check=_not_praised,
+    ),
+    "QXR": Scenario(
+        "quiz check 7 - 2x = 1, right, the letter on the right: 6 = 2x / 3 = x",
+        "Check my answer.",
+        lambda: make_board(["7 - 2x = 1", "6 = 2x", "3 = x"]),
+        "celebrating",
+        mode="quiz",
+        task={**LAST_CHECK, "problem": "7 - 2x = 1", "answer": "x = 3"},
+        context=[],
+        check=_graded,
+    ),
+    "HR": Scenario(
+        f"help on the student's own wrong sum {SUM_BOARD}",
+        "Is this right?",
+        lambda: make_board([SUM_BOARD]),
+        "",
+        context=[],
+        check=_never_says_the_sum,
+    ),
+    "EHR": Scenario(
+        f"ES help on the student's own wrong sum {SUM_BOARD}",
+        "¿Está bien?",
+        lambda: make_board([SUM_BOARD]),
+        "",
+        context=[],
+        check=_all(_never_says_the_sum, spanish),
+        language="es",
+    ),
+    "QS2": Scenario(
+        f"quiz check the system {SYSTEM}, right, one value per line: x = 7 / y = 3",
+        "Check my answer.",
+        lambda: make_board(["x + y = 10", "x - y = 4", "x = 7", "y = 3"]),
+        "celebrating",
+        mode="quiz",
+        task=SYSTEM_TASK,
+        context=[],
+        check=_graded,
+    ),
+    "EQS2": Scenario(
+        f"ES quiz check the system {SYSTEM}, right, one value per line: x = 7 / y = 3",
+        "Revisa mi respuesta.",
+        lambda: make_board(["x + y = 10", "x - y = 4", "x = 7", "y = 3"]),
+        "celebrating",
+        mode="quiz",
+        task=SYSTEM_TASK,
+        context=[],
+        check=_all(_graded, spanish),
+        language="es",
+    ),
+}
 MATH_SCENARIOS.update(SPANISH_SCENARIOS)
 MATH_SCENARIOS.update(NO_FILES_SCENARIOS)
 MATH_SCENARIOS.update(CROP_SCENARIOS)
 MATH_SCENARIOS.update(GRADED_SCENARIOS)
+MATH_SCENARIOS.update(LANDING_SCENARIOS)
 SCENARIOS = {"biology": BIO_SCENARIOS, "math": MATH_SCENARIOS}
 
 

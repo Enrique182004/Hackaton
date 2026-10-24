@@ -1331,6 +1331,7 @@ def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -
         *("EQCN", "EQWN", "QCN", "QWN", "HS", "EHS"),
         *("QQC", "QQW", "QQP", "QSC", "QSW", "EQQW"),
         *("QQ2", "EQQ2", "QFN", "QFC"),
+        *("QK", "QT", "QXR", "HR", "EHR", "QS2", "EQS2"),
     }
     assert all(b.MATH_SCENARIOS[k].language == "es" for k in ("ELO", "ELE", "EH", "EHA", "EQD", "EQC", "EQW"))
     assert set(b.BIO_SCENARIOS) == {"A", "B", "AB", "BA"}
@@ -2253,6 +2254,25 @@ def test_bench_answer_line_and_unfinished_scenarios(monkeypatch: pytest.MonkeyPa
     assert b.MATH_SCENARIOS["QFC"].expected == "celebrating"
     steps = [s.board for s in b.FLOWS["en"]] + [s.board for s in b.FLOWS["es"]]
     assert steps.count([b.Q2, "x = 5", "x = -3"]) == 2, "both flows check a root per line"
+
+
+def test_bench_landing_review_scenarios(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = _bench(monkeypatch)
+    check_line = b.MATH_SCENARIOS["QK"]
+    assert check_line.expected == "celebrating", "a read of only the check is asked again for the answer line"
+    assert check_line.check(vc.TEXTS["en"]["reread"]) is None and check_line.check("Correct, great job!") is None
+    assert check_line.check("Not quite. Subtract 5 from both sides first.") == "graded the check line wrong"
+    assert b.MATH_SCENARIOS["QT"].check("Correct, great job!") and b.MATH_SCENARIOS["QT"].check("Ask me again.") is None
+    assert b.MATH_SCENARIOS["QXR"].expected == "celebrating" and b.MATH_SCENARIOS["QXR"].task["answer"] == "x = 3"
+    for key in ("HR", "EHR"):
+        sum_board = b.MATH_SCENARIOS[key]
+        assert sum_board.mode == "help" and sum_board.check("Not quite. It is five sixths.")
+        assert sum_board.check("Casi. Un medio más un tercio es igual a cinco sextos.") == "gave the result"
+    assert b.MATH_SCENARIOS["HR"].check("Not quite. Find a common denominator first.") is None
+    for key in ("QS2", "EQS2"):
+        _, regions = b.MATH_SCENARIOS[key].board()
+        assert len(regions) == 4, "two equations, then one value per line"
+    assert b.MATH_SCENARIOS["EQS2"].language == "es" and b.MATH_SCENARIOS["EHR"].language == "es"
 
 
 @pytest.mark.parametrize("language", ["en", "es"])
