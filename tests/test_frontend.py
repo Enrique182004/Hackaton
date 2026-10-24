@@ -410,21 +410,51 @@ def test_projector_quiz_card_follows_tutor_events(tmp_path: Path) -> None:
         PROJECTOR
         + f"const QUIZ = {QUIZ};\n"
         + """
-const card = $("quiz-card");
+const card = $("problem-card");
 installFetch({ "GET /api/tutor": { status: 200, body: { mode: "quiz", learn_topic: null, quiz: QUIZ } } });
 sock.fire("connect");
 await settle();
 // A reconnect asks the server, so a quiz that started while the page was away still shows.
 assert.ok(!card.classList.contains("hidden"));
-assert.equal($("quiz-card-count").textContent, "Quiz · problem 2 of 8");
-assert.equal($("quiz-card-problem").textContent, "3x + 5 = 20");
+assert.equal($("problem-card-label").textContent, "Quiz · problem 2 of 8");
+assert.equal($("problem-card-text").textContent, "3x + 5 = 20");
 // Made-up problems have no text: the card keeps the count only.
 sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: { ...QUIZ, number: 3, problem: null } });
-assert.equal($("quiz-card-count").textContent, "Quiz · problem 3 of 8");
-assert.equal($("quiz-card-problem").textContent, "");
+assert.equal($("problem-card-label").textContent, "Quiz · problem 3 of 8");
+assert.equal($("problem-card-text").textContent, "");
 sock.fire("tutor", { mode: "help", learn_topic: null, quiz: null });
 assert.ok(card.classList.contains("hidden"));
 sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: { ...QUIZ, active: false } });
+assert.ok(card.classList.contains("hidden"));
+""",
+    )
+
+
+@needs_node
+def test_projector_problem_card_shows_dictated_and_board_problems(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR
+        + """
+const card = $("problem-card");
+sock.fire("connect");
+await settle();
+sock.fire("tutor", { mode: "practice", learn_topic: null, quiz: null, problem: { text: "4x + 7 = 19", source: "dictated" } });
+assert.ok(!card.classList.contains("hidden"));
+assert.equal($("problem-card-label").textContent, "Try this");
+assert.equal($("problem-card-text").textContent, "4x + 7 = 19");
+sock.fire("tutor", { mode: "help", learn_topic: null, quiz: null, problem: { text: "<b>2x</b> = 4", source: "board" } });
+assert.equal($("problem-card-label").textContent, "Your problem");
+assert.equal($("problem-card-text").textContent, "<b>2x</b> = 4", "set as text, never as HTML");
+// The labels follow the language the assistant answers in, like the quiz label.
+sock.fire("language", { setting: "es", current: "es" });
+assert.equal($("problem-card-label").textContent, "Tu problema");
+sock.fire("tutor", { mode: "practice", learn_topic: null, quiz: null, problem: { text: "4x + 7 = 19", source: "dictated" } });
+assert.equal($("problem-card-label").textContent, "Prueba este");
+sock.fire("language", { setting: "en", current: "en" });
+assert.equal($("problem-card-label").textContent, "Try this");
+sock.fire("tutor", { mode: "help", learn_topic: "fractions", quiz: null, problem: null });
 assert.ok(card.classList.contains("hidden"));
 """,
     )
@@ -445,7 +475,7 @@ await settle();
 sock.fire("tutor", { mode: "help", learn_topic: null, quiz: null });
 reply({ status: 200, body: { mode: "quiz", learn_topic: null, quiz: QUIZ } });
 await settle();
-assert.ok($("quiz-card").classList.contains("hidden"));
+assert.ok($("problem-card").classList.contains("hidden"));
 """,
     )
 
@@ -1140,7 +1170,7 @@ assert.deepEqual(answers, ["Subtract 5 from both sides of 3x + 5 = 20.", "…"])
     )
 
 
-# ---- projector: quiz card and bubble -------------------------------------------------
+# ---- projector: problem card and bubble -------------------------------------------------
 
 
 @needs_node
@@ -1151,7 +1181,7 @@ def test_projector_quiz_card_steps_aside_while_the_board_is_read(tmp_path: Path)
         PROJECTOR
         + f"const QUIZ = {QUIZ};\n"
         + """
-const card = $("quiz-card");
+const card = $("problem-card");
 sock.fire("connect");
 sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: QUIZ });
 await settle();
@@ -1171,8 +1201,8 @@ assert.ok(!card.classList.contains("capturing"));
 
 def test_projector_quiz_card_is_faint_and_hidden_while_capturing() -> None:
     css = (STATIC / "css" / "style.css").read_text(encoding="utf-8")
-    rule = re.search(r"#quiz-card\s*\{([^}]*)\}", css)
-    assert rule, "no #quiz-card rule"
+    rule = re.search(r"#problem-card\s*\{([^}]*)\}", css)
+    assert rule, "no #problem-card rule"
     body = rule.group(1)
     # A glow or a thick bright outline is picked up as ink by find_ink_regions and read by the VLM.
     assert "box-shadow" not in body and "text-shadow" not in body
@@ -1180,7 +1210,7 @@ def test_projector_quiz_card_is_faint_and_hidden_while_capturing() -> None:
     assert border and float(border.group(1)) <= 2
     width = re.search(r"max-width:\s*([\d.]+)vw", body)
     assert width and float(width.group(1)) <= 30
-    assert re.search(r"#quiz-card\.capturing\s*\{[^}]*visibility:\s*hidden", css)
+    assert re.search(r"#problem-card\.capturing\s*\{[^}]*visibility:\s*hidden", css)
 
 
 @needs_node
@@ -1637,7 +1667,7 @@ assert.equal(title.textContent, "Asistente del pizarrón – proyector");
 assert.equal($("text-input").placeholder, "Escribe una pregunta: Enter para enviar, Esc para cancelar");
 assert.equal($("debug-conn").textContent, "conexión: conectada");
 sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: QUIZ });
-assert.equal($("quiz-card-count").textContent, "Quiz · problema 2 de 8");
+assert.equal($("problem-card-label").textContent, "Quiz · problema 2 de 8");
 sock.fire("status", { state: "thinking", detail: "busy" });
 assert.equal(label(), "Ocupado – espera un momento");
 // The answer is shown as the model wrote it, whatever the page's language.
@@ -1646,7 +1676,7 @@ assert.equal($("bubble").textContent, "x = 5");
 sock.fire("language", { setting: "en", current: "en" });
 assert.equal(doc.documentElement.lang, "en");
 assert.equal(label(), "Still busy – wait a moment");
-assert.equal($("quiz-card-count").textContent, "Quiz · problem 2 of 8");
+assert.equal($("problem-card-label").textContent, "Quiz · problem 2 of 8");
 assert.equal($("bubble").textContent, "x = 5");
 sock.fire("language", { setting: "es", current: "es" });
 sock.fire("disconnect");
@@ -2086,13 +2116,13 @@ const sent = () => sock.emitted.filter(([name]) => name === "ui_rects").map(([, 
 const latest = () => sent().at(-1);
 $("avatar").rect = { left: 1000, top: 600, width: 160, height: 160 };
 $("bubble").rect = { left: 900, top: 480, width: 400, height: 100 };
-$("quiz-card").rect = { left: 32, top: 28, width: 300, height: 80 };
+$("problem-card").rect = { left: 32, top: 28, width: 300, height: 80 };
 $("status").rect = { left: 2300, top: 1540, width: 240, height: 40 };
 await wait(300);
 assert.deepEqual(sent(), [], "nothing goes out before the socket connects");
 sock.fire("connect");
 await settle();
-// The avatar and the status corner; the hidden bubble, quiz card, transcript and outline are not on the board.
+// The avatar and the status corner; the hidden bubble, problem card, transcript and outline are not on the board.
 // Each box gets 10 px of glow around it.
 const AVATAR = [495, 295, 90, 90];
 const STATUS = [1145, 765, 130, 30];
@@ -2115,7 +2145,7 @@ const right = Math.max(...edges.map((e) => e[0] + e[2]));
 const bottom = Math.max(...edges.map((e) => e[1] + e[3]));
 assert.ok(left < 500 && top < 300 && right > 700 && bottom > 400, "the edges go all the way round the ink");
 assert.deepEqual(rects[6], STATUS);
-// The quiz card is on the board while a quiz runs...
+// The problem card is on the board while a quiz runs...
 sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: { active: true, number: 1, total: 5, score: 0, problem: "2x = 6" } });
 await settle();
 assert.deepEqual(latest()[2], [11, 9, 160, 50]);
@@ -2933,7 +2963,7 @@ def test_projector_text_size_scales_what_the_room_reads() -> None:
         'body[data-text-size="large"]': "--text-scale: 1.25;",
         'body[data-text-size="xlarge"]': "--text-scale: 1.5;",
     }
-    for selector in ("#bubble", "#quiz-card-count", "#quiz-card-problem", "#transcript", "#status"):
+    for selector in ("#bubble", "#problem-card-label", "#problem-card-text", "#transcript", "#status"):
         rule = style_rules(selector)[selector]
         assert re.search(r"font-size:\s*calc\(.*\*\s*var\(--text-scale\)\)", rule), selector
     # A bigger text gets a wider bubble, but never more than half the board.
@@ -2972,9 +3002,9 @@ def test_projector_high_contrast_tells_right_from_wrong_by_more_than_colour() ->
     assert widths == {"HIGHLIGHT_BORDER": "3", "HIGHLIGHT_BORDER_CONTRAST": "6"}
     assert "border: 3px" in style_rules("#highlight")["#highlight"]
     # The quiz card's words go to full strength; its border stays thin and glow-free (the camera reads it as ink).
-    card = contrast[f"{on} #quiz-card"]
+    card = contrast[f"{on} #problem-card"]
     assert "color: var(--white)" in card and "border" not in card and "shadow" not in card
-    assert "color: var(--cyan)" in contrast[f"{on} #quiz-card-count"]
+    assert "color: var(--cyan)" in contrast[f"{on} #problem-card-label"]
     # The board stays black: high contrast adds no fill anywhere.
     assert not any("background" in body for body in contrast.values())
 

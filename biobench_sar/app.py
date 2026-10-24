@@ -65,7 +65,7 @@ NO_TEXT_ERROR = "no readable text found (scanned PDF or blank image?)"
 ONLY_ANSWERS_ERROR = "only answers found: they are kept out of the notes, so there is nothing to store"
 # Any text works: query() only needs one to rank a file's chunks, and every one of them comes back.
 ALL_CHUNKS_PROBE = "answer"
-# The projector page sends a handful (avatar, bubble, quiz card, highlight); more is a broken or hostile client.
+# The projector page sends a handful (avatar, bubble, problem card, highlight); more is a broken or hostile client.
 MAX_UI_RECTS = 32
 JOIN_LANGUAGES = ("en", "es")
 JOIN_TEXTS = {
@@ -782,7 +782,7 @@ def create_app(
 
     @socketio.on("ui_rects")
     def on_ui_rects(data: Any = None) -> None:
-        # The projector page's own UI (avatar, bubble, quiz card, highlight) in projector px, so the camera's
+        # The projector page's own UI (avatar, bubble, problem card, highlight) in projector px, so the camera's
         # view of the projection is not read as ink. The assistant keeps them with their time and ages them out.
         if not socket_allowed():
             disconnect()

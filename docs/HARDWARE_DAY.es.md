@@ -122,7 +122,7 @@ Calcula unos 45 minutos y haz la parte A un día antes.
       cámara también lo ve) y vuelve a alinear.
 14. **Tinta.** Escribe `3x + 5 = 20` en grande en el pizarrón.
     ✅ En la pestaña Pizarrón aparece un recuadro naranja alrededor en uno o dos segundos (Más herramientas →
-    «Dibujos: 1»). Pip, el globo de diálogo y la tarjeta del quiz nunca llevan recuadro: la página del proyector
+    «Dibujos: 1»). Pip, el globo de diálogo y la tarjeta del problema nunca llevan recuadro: la página del proyector
     le dice al servidor dónde están, y esa parte de la imagen de la cámara se ignora.
 
 ## E. Primeras clases (inglés)
@@ -133,7 +133,7 @@ página del proyector. Las frases van en inglés, tal cual.
 | Di / escribe | Esperado |
 | --- | --- |
 | "Help me with the next step" (con `3x + 5 = 20` en el pizarrón) | Pip camina justo a la izquierda de la ecuación y la señala, y un contorno brillante late alrededor de la ecuación (se desvanece a los 8 s, más o menos). Explica el siguiente paso ("subtract five from both sides"). **Nunca dice x = 5.** |
-| "Give me a similar problem" | Dicta en palabras una ecuación nueva de dos pasos, que se ve escrita en el panel. Pip se queda donde no tapa nada de lo escrito. |
+| "Give me a similar problem" | Dicta en palabras una ecuación nueva de dos pasos, que se ve escrita en el panel y en la tarjeta del proyector («Prueba este»). Pip se queda donde no tapa nada de lo escrito. |
 | "Quiz me" | Empieza un quiz. Lee el problema 1 de 10 y lo muestra en una tarjeta arriba a la izquierda del proyector. Escribe la respuesta y di "check my answer". El programa califica lo que escribiste: si está bien hay 🎉 y el siguiente problema; si está mal, una pista en ámbar (nunca la respuesta) y el contorno alrededor de tu respuesta. Si no puede leer la respuesta, te dice que no pudo leerla bien y que se la vuelvas a pedir. |
 | "I'm stuck" (durante el quiz) | Una pista sobre el mismo problema. El quiz y la calificación no cambian. |
 | "I want to learn how to solve fractions" (pizarrón vacío) | Una introducción corta y luego "Do you have an exercise in mind, or should I make one up for you?". Responde "make one up" y dicta un problema para empezar. |
@@ -149,7 +149,7 @@ Cambia el idioma del panel a **Español** (o deja **Auto** y simplemente habla e
 | Di / escribe | Esperado |
 | --- | --- |
 | «Ayúdame con el siguiente paso» | Explica el siguiente paso en español, sin decir el resultado, y resalta la ecuación. |
-| «Dame un problema parecido» | Dicta una ecuación nueva en palabras («dos x más tres es igual a once»). |
+| «Dame un problema parecido» | Dicta una ecuación nueva en palabras («dos x más tres es igual a once») y la muestra en la tarjeta del proyector. |
 | «Hazme un quiz» (o «Examíname») | Empieza el quiz en español. Una respuesta escrita como `x = 5` o «x es igual a cinco» se califica igual. |
 | «Quiero aprender a resolver fracciones» | Una introducción corta y la pregunta «¿Tienes un ejercicio en mente o quieres que invente uno?». Responde «invéntame uno». |
 | Presiona **Hablar** y no digas nada | «No te entendí. Dilo otra vez, un poco más cerca del micrófono.» Si en cambio dice «No puedo oír el micrófono…», el micrófono solo mandó silencio: ve el paso 10. |

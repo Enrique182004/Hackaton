@@ -182,10 +182,15 @@ MATH_SCHEMA = '{"spoken_text": str, "animation_state": "idle|walking|pointing|ce
 # Reading the answer into its own key first makes the model look at the board, and lets code check the value.
 QUIZ_SCHEMA = MATH_SCHEMA.replace('{"spoken_text"', '{"board_answer": str, "spoken_text"')
 # Same for practice: code can then tell when the "new" problem is the board's one read back.
-PRACTICE_SCHEMA = MATH_SCHEMA.replace('{"spoken_text"', '{"board_problem": str, "spoken_text"')
+# The problem in symbols is also what the projector's card shows: new_problem for one the assistant dictates,
+# board_problem for the student's own.
+PRACTICE_SCHEMA = MATH_SCHEMA.replace('{"spoken_text"', '{"board_problem": str, "new_problem": str, "spoken_text"')
+HELP_SCHEMA = MATH_SCHEMA.replace('{"spoken_text"', '{"board_problem": str, "spoken_text"')
+LEARN_SCHEMA = MATH_SCHEMA.replace('{"spoken_text"', '{"new_problem": str, "spoken_text"')
 
 MATH_HELP = """MODE: step-by-step help.
-- Read the equation on the board and the student's latest step.
+- FIRST copy the problem written on the board into board_problem, exactly ("" if the board is empty). Then read \
+the student's latest step.
 - Explain ONLY the next single operation in simple words, e.g. "subtract five from both sides".
 - NEVER give the final answer or the value of the variable, even if the student asks for it.
 - If the latest step has a mistake, say gently what to fix.
@@ -196,25 +201,26 @@ problem: "idle", target = screen center.
 
 Examples (JSON only):
 Board (ink center 700,400): 2x + 3 = 11. Query: "Help me."
-{"spoken_text": "First get the x term alone. Subtract three from both sides, then write that step.", "animation_state": "pointing", "target_x": 700, "target_y": 400}
+{"board_problem": "2x + 3 = 11", "spoken_text": "First get the x term alone. Subtract three from both sides, then write that step.", "animation_state": "pointing", "target_x": 700, "target_y": 400}
 Board (ink center 900,500): 1/2 + 1/3. Query: "I'm stuck."
-{"spoken_text": "To add one half and one third, find a common denominator. What number do two and three both go into?", "animation_state": "pointing", "target_x": 900, "target_y": 500}
+{"board_problem": "1/2 + 1/3", "spoken_text": "To add one half and one third, find a common denominator. What number do two and three both go into?", "animation_state": "pointing", "target_x": 900, "target_y": 500}
 Board (ink center 650,620): x^2 = 49. Query: "Just tell me x."
-{"spoken_text": "You can do it! Undo x squared by taking the square root of both sides. Write that step.", "animation_state": "pointing", "target_x": 650, "target_y": 620}"""
+{"board_problem": "x^2 = 49", "spoken_text": "You can do it! Undo x squared by taking the square root of both sides. Write that step.", "animation_state": "pointing", "target_x": 650, "target_y": 620}"""
 
 MATH_PRACTICE = """MODE: similar problem.
 - FIRST copy the problem written on the board into board_problem, exactly ("" if the board is empty).
 - Make ONE new problem of the same type and difficulty with NEW numbers (and maybe a new letter). \
 It must be different from the board's problem: never read the board's problem back.
 - Dictate only the new problem in words so the student can write it. Do not solve it or say its answer.
+- Write the new problem in symbols in new_problem ("4x + 7 = 19"): the same problem you dictate.
 - animation_state "idle"; target = screen center.
 - If the board is empty, make up a simple one-step equation.
 
 Examples (JSON only, 1920x1080 screen):
 Board: 2x + 3 = 11. Query: "Give me a similar problem."
-{"board_problem": "2x + 3 = 11", "spoken_text": "Try this one. Four x plus seven equals nineteen. Write it down and solve it.", "animation_state": "idle", "target_x": 960, "target_y": 540}
+{"board_problem": "2x + 3 = 11", "new_problem": "4x + 7 = 19", "spoken_text": "Try this one. Four x plus seven equals nineteen. Write it down and solve it.", "animation_state": "idle", "target_x": 960, "target_y": 540}
 Board: 2/3 + 1/6. Query: "Another one like this."
-{"board_problem": "2/3 + 1/6", "spoken_text": "Here is a new one. Three fourths plus one eighth. Give it a try.", "animation_state": "idle", "target_x": 960, "target_y": 540}"""
+{"board_problem": "2/3 + 1/6", "new_problem": "3/4 + 1/8", "spoken_text": "Here is a new one. Three fourths plus one eighth. Give it a try.", "animation_state": "idle", "target_x": 960, "target_y": 540}"""
 
 MATH_QUIZ = """MODE: quiz. The message gives the quiz stage and the problem.
 - Stage dictate: say the problem number, read the given problem in words and ask for the answer on the board. \
@@ -244,17 +250,18 @@ example, solved step by step, after your sentence. Then ask exactly: "{OFFER_QUE
 - Stage example: dictate ONE easy starter problem on the topic in words, then invite the student to write it on the \
 board and try the first step. Do not solve it.
 - Stage own: ask the student to write their exercise on the board and then ask you for help.
+- new_problem: in stage example the starter problem in symbols ("1/4 + 2/4"); "" in every other stage.
 - Always "idle", target = screen center.
 
 Examples (JSON only, 1920x1080 screen):
 Learn stage: offer. Topic: a fraction. Query: "What is a fraction?"
-{{"spoken_text": "A fraction is a part of a whole, like one slice of a pizza cut into equal slices. \
+{{"new_problem": "", "spoken_text": "A fraction is a part of a whole, like one slice of a pizza cut into equal slices. \
 {OFFER_QUESTION}", "animation_state": "idle", "target_x": 960, "target_y": 540}}
 Learn stage: example. Topic: adding fractions. Query: "Make one up."
-{{"spoken_text": "Let's start easy. One fourth plus two fourths. Write it on the board and try the first step.", \
+{{"new_problem": "1/4 + 2/4", "spoken_text": "Let's start easy. One fourth plus two fourths. Write it on the board and try the first step.", \
 "animation_state": "idle", "target_x": 960, "target_y": 540}}
 Learn stage: own. Topic: fractions. Query: "I have one."
-{{"spoken_text": "Great! Write your exercise on the board, then ask me for help.", "animation_state": "idle", \
+{{"new_problem": "", "spoken_text": "Great! Write your exercise on the board, then ask me for help.", "animation_state": "idle", \
 "target_x": 960, "target_y": 540}}"""
 
 MATH_BASE_ES = f"""Eres un tutor de matemáticas amable para estudiantes de secundaria y preparatoria (fracciones, \
@@ -277,7 +284,8 @@ Responde SOLO con un objeto JSON:
 target_x / target_y son píxeles del proyector dentro del ancho y alto dados."""
 
 MATH_HELP_ES = """MODO: ayuda paso a paso.
-- Lee la ecuación del pizarrón y el último paso del estudiante.
+- PRIMERO copia el problema escrito en el pizarrón en board_problem, tal cual ("" si el pizarrón está vacío). \
+Luego lee el último paso del estudiante.
 - Explica SOLO la siguiente operación con palabras sencillas, por ejemplo "resta cinco en ambos lados".
 - NUNCA des la respuesta final ni el valor de la letra, aunque el estudiante te lo pida.
 - Si el último paso tiene un error, dile con amabilidad qué corregir.
@@ -288,25 +296,26 @@ que escriba el problema: "idle", target = centro de la pantalla.
 
 Ejemplos (solo JSON):
 Pizarrón (centro de la tinta 500,300): 2x + 3 = 11. Mensaje: "Ayúdame."
-{"spoken_text": "Primero deja sola la parte con x. Resta tres en ambos lados y escribe ese paso.", "animation_state": "pointing", "target_x": 500, "target_y": 300}
+{"board_problem": "2x + 3 = 11", "spoken_text": "Primero deja sola la parte con x. Resta tres en ambos lados y escribe ese paso.", "animation_state": "pointing", "target_x": 500, "target_y": 300}
 Pizarrón (centro de la tinta 600,350): 1/2 + 1/3. Mensaje: "Estoy atorado."
-{"spoken_text": "Para sumar un medio y un tercio, busca un denominador común. ¿Qué número se puede dividir entre dos y entre tres?", "animation_state": "pointing", "target_x": 600, "target_y": 350}
+{"board_problem": "1/2 + 1/3", "spoken_text": "Para sumar un medio y un tercio, busca un denominador común. ¿Qué número se puede dividir entre dos y entre tres?", "animation_state": "pointing", "target_x": 600, "target_y": 350}
 Pizarrón (centro de la tinta 450,420): x^2 = 49. Mensaje: "Nada más dime cuánto vale x."
-{"spoken_text": "¡Tú puedes! Para quitar el cuadrado, saca la raíz cuadrada en ambos lados. Escribe ese paso.", "animation_state": "pointing", "target_x": 450, "target_y": 420}"""
+{"board_problem": "x^2 = 49", "spoken_text": "¡Tú puedes! Para quitar el cuadrado, saca la raíz cuadrada en ambos lados. Escribe ese paso.", "animation_state": "pointing", "target_x": 450, "target_y": 420}"""
 
 MATH_PRACTICE_ES = """MODO: problema parecido.
 - PRIMERO copia el problema escrito en el pizarrón en board_problem, tal cual ("" si el pizarrón está vacío).
 - Inventa UN problema nuevo del mismo tipo y dificultad con números NUEVOS (y quizá otra letra). Tiene que ser \
 distinto del problema del pizarrón: nunca leas de nuevo el problema del pizarrón.
 - Dicta solo el problema nuevo con palabras para que el estudiante lo escriba. No lo resuelvas ni digas su respuesta.
+- Escribe el problema nuevo con símbolos en new_problem ("4x + 7 = 19"): el mismo que dictas.
 - animation_state "idle"; target = centro de la pantalla.
 - Si el pizarrón está vacío, inventa una ecuación sencilla de un paso.
 
 Ejemplos (solo JSON, pantalla de 1280x800):
 Pizarrón: 2x + 3 = 11. Mensaje: "Dame uno parecido."
-{"board_problem": "2x + 3 = 11", "spoken_text": "Prueba este. Cuatro x más siete es igual a diecinueve. Escríbelo y resuélvelo.", "animation_state": "idle", "target_x": 640, "target_y": 400}
+{"board_problem": "2x + 3 = 11", "new_problem": "4x + 7 = 19", "spoken_text": "Prueba este. Cuatro x más siete es igual a diecinueve. Escríbelo y resuélvelo.", "animation_state": "idle", "target_x": 640, "target_y": 400}
 Pizarrón: 2/3 + 1/6. Mensaje: "Otro así."
-{"board_problem": "2/3 + 1/6", "spoken_text": "Aquí va uno nuevo. Tres cuartos más un octavo. Inténtalo.", "animation_state": "idle", "target_x": 640, "target_y": 400}"""
+{"board_problem": "2/3 + 1/6", "new_problem": "3/4 + 1/8", "spoken_text": "Aquí va uno nuevo. Tres cuartos más un octavo. Inténtalo.", "animation_state": "idle", "target_x": 640, "target_y": 400}"""
 
 MATH_QUIZ_ES = """MODO: quiz. El mensaje da la etapa del quiz y el problema.
 - Etapa dictar: di el número del problema, lee el problema dado con palabras y pide la respuesta en el pizarrón. \
@@ -336,20 +345,21 @@ oración un ejemplo resuelto paso a paso. Luego pregunta exactamente: "{OFFER_QU
 - Etapa ejemplo: dicta con palabras UN problema fácil para empezar sobre el tema e invita al estudiante a escribirlo \
 en el pizarrón e intentar el primer paso. No lo resuelvas.
 - Etapa propio: pídele al estudiante que escriba su ejercicio en el pizarrón y que luego te pida ayuda.
+- new_problem: en la etapa ejemplo, el problema para empezar con símbolos ("1/4 + 2/4"); "" en las demás etapas.
 - Siempre "idle", target = centro de la pantalla.
 
 Ejemplos (solo JSON, pantalla de 1280x800):
 Etapa de aprender: ofrecer. Tema: una fracción. Mensaje: "¿Qué es una fracción?"
-{{"spoken_text": "Una fracción es una parte de un entero, como una rebanada de una pizza partida en partes \
+{{"new_problem": "", "spoken_text": "Una fracción es una parte de un entero, como una rebanada de una pizza partida en partes \
 iguales. {OFFER_QUESTION_ES}", "animation_state": "idle", "target_x": 640, "target_y": 400}}
 Etapa de aprender: ejemplo. Tema: suma de fracciones. Mensaje: "Invéntame uno."
-{{"spoken_text": "Empecemos con uno fácil. Un cuarto más dos cuartos. Escríbelo en el pizarrón e intenta el primer \
+{{"new_problem": "1/4 + 2/4", "spoken_text": "Empecemos con uno fácil. Un cuarto más dos cuartos. Escríbelo en el pizarrón e intenta el primer \
 paso.", "animation_state": "idle", "target_x": 640, "target_y": 400}}
 Etapa de aprender: propio. Tema: fracciones. Mensaje: "Yo tengo uno."
-{{"spoken_text": "¡Muy bien! Escribe tu ejercicio en el pizarrón y luego pídeme ayuda.", "animation_state": "idle", \
+{{"new_problem": "", "spoken_text": "¡Muy bien! Escribe tu ejercicio en el pizarrón y luego pídeme ayuda.", "animation_state": "idle", \
 "target_x": 640, "target_y": 400}}"""
 
-_SCHEMAS = {"quiz": QUIZ_SCHEMA, "practice": PRACTICE_SCHEMA}
+_SCHEMAS = {"help": HELP_SCHEMA, "quiz": QUIZ_SCHEMA, "practice": PRACTICE_SCHEMA, "learn": LEARN_SCHEMA}
 _RULES = {
     "en": (("help", MATH_HELP), ("practice", MATH_PRACTICE), ("quiz", MATH_QUIZ), ("learn", MATH_LEARN)),
     "es": (("help", MATH_HELP_ES), ("practice", MATH_PRACTICE_ES), ("quiz", MATH_QUIZ_ES), ("learn", MATH_LEARN_ES)),
@@ -404,12 +414,16 @@ class TutorAction(AvatarAction):
     verdict: a graded quiz check, "correct" or "wrong"; None when there was no answer to grade.
     dictated: the quiz problem this reply read out (dictate: the current one; a correct check: the next one).
     display_text: the reply before mathspeak, for the screen ("3x + 5 = 20"); spoken_text is what the voice says.
+    board_problem: the problem the model copied off the board ("2x + 3 = 11"), for the projector's card.
+    new_problem: the problem this reply dictates, in symbols: the model's, or code's when code replaced its words.
     """
 
     failed: bool = False
     verdict: str | None = None
     dictated: str | None = None
     display_text: str | None = None
+    board_problem: str | None = None
+    new_problem: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {f.name: getattr(self, f.name) for f in fields(AvatarAction)}
@@ -1180,6 +1194,103 @@ def _starter_missing(action: AvatarAction, task: Mapping[str, Any] | None, langu
     return not dictates_problem(action.spoken_text, None, language)
 
 
+def fallback_problem(kind: str, task: Mapping[str, Any] | None) -> str | None:
+    """The problem fallback_text dictates, in symbols, for the projector's card; None when it dictates none."""
+    if kind == "learn":
+        return _starter(_clean((task or {}).get("topic"))) if learn_stage(task) == "example" else None
+    return _seed_problem(3, 6) if kind == "practice" else None
+
+
+# What a 3B model writes for "nothing on the board" instead of "".
+_NO_PROBLEM = frozenset(
+    {"n/a", "na", "none", "null", "nothing", "empty", "blank", "unknown", "nada", "ninguno", "vacio", "vacío"}
+)
+# A problem has an operation between two operands ("2x + 3", "x = 5", "1/2", "3(x+2)") or a root ("√9")...
+_OPERATION = re.compile(r"[\w)\]]\s*[=+\-*/^<>×÷]\s*[\w(\[√-]|√\s*[\w(]")
+# ...and a number or a lone letter: "not-visible" has an operation but no operand.
+_OPERAND = re.compile(r"\d|(?<![^\W\d_])[a-z](?![^\W\d_])", re.IGNORECASE)
+# The prompt's own ink-region line ("left=700 top=450 width=400 height=150, center=(900, 525)"), which the 3B model
+# copies into board_problem when the ink is not a readable problem.
+_PROMPT_BOX = re.compile(r"\b(?:left|top|width|height|center)\s*=", re.IGNORECASE)
+
+
+def _card_value(text: str | None) -> str | None:
+    """A problem the projector's card can show: an operation on numbers or letters, not a placeholder or the
+    prompt's own box coordinates; None otherwise."""
+    clean = _clean(text) if text else None
+    if not clean or clean.strip(" .").lower() in _NO_PROBLEM or _PROMPT_BOX.search(clean):
+        return None
+    return clean if _OPERATION.search(clean) and _OPERAND.search(clean) else None
+
+
+# The words the card compares on top of numbers and operations: a letter, or a power the voice must say too.
+_CARD_POWERS = frozenset({"squared", "cubed", "power", "root", "cuadrado", "cubo", "potencia", "raiz"})
+_CARD_FORMS = {"negative": "minus", "cuadrada": "cuadrado", "cubica": "cubo", "ye": "y"}
+_FRACTION_WORDS = frozenset(
+    {
+        "half",
+        "halves",
+        "third",
+        "thirds",
+        "fourth",
+        "fourths",
+        "quarter",
+        "quarters",
+        "fifth",
+        "fifths",
+        "sixth",
+        "sixths",
+        "seventh",
+        "sevenths",
+        "eighth",
+        "eighths",
+        "ninth",
+        "ninths",
+        "tenth",
+        "tenths",
+    }
+)
+
+
+def _card_seq(text: str, language: str = "en") -> list[str]:
+    """_math_seq plus letters and powers, in order, with "negative" read as "minus" and "a half" as "one half": what
+    the card compares between the problem it shows and the words the voice says."""
+    spanish = normalize_reply_language(language) == "es"
+    words, forms = (_NUMBER_WORDS_ES, _WORD_FORMS_ES) if spanish else (_NUMBER_WORDS, _WORD_FORMS)
+    tokens = _norm_words(text, language).split()
+    out: list[str] = []
+    for i, word in enumerate(tokens):
+        if not spanish and word == "a" and i + 1 < len(tokens) and tokens[i + 1] in _FRACTION_WORDS:
+            word = "one"
+        word = forms.get(word, word)
+        word = _CARD_FORMS.get(word, word)
+        if word.endswith("s") and word[:-1] in words:
+            word = word[:-1]
+        if word in words or word.isdigit() or word in _CARD_POWERS or (len(word) == 1 and word.isalpha()):
+            out.append(word)
+    return out
+
+
+def _card_reads(spoken: str, problem: str, language: str = "en") -> bool:
+    """Whether the voice reads out exactly this problem: its numbers, operations, letters and powers in the same
+    order. Other words may come in between ("three times x" for 3x), so this is looser than reads_back but, unlike
+    reads_problem, never passes a swapped or different problem."""
+    wanted, said = _card_seq(problem, language), iter(_card_seq(spoken, language))
+    return bool(wanted) and all(token in said for token in wanted)
+
+
+def _card_problems(action: AvatarAction, kind: str, task: Mapping[str, Any] | None, language: str) -> AvatarAction:
+    """Keep only the problems the projector's card may show for this reply: board_problem in help and practice,
+    new_problem only when the reply dictates one (practice, a lesson's example) and its words read that problem out
+    in order (_card_reads), so the card never shows a problem the voice did not say."""
+    board = _card_value(getattr(action, "board_problem", None)) if kind in ("help", "practice") else None
+    new = _card_value(getattr(action, "new_problem", None))
+    dictates = kind == "practice" or (kind == "learn" and learn_stage(task) == "example")
+    if not dictates or (new and not _card_reads(action.spoken_text, new, language)):
+        new = None
+    return _tutor(action, board_problem=board, new_problem=new)
+
+
 def fallback_text(kind: str, task: Mapping[str, Any] | None, has_ink: bool, language: str = "en") -> str:
     """What to say when the model's reply is unusable even after a retry."""
     t = task or {}
@@ -1189,10 +1300,10 @@ def fallback_text(kind: str, task: Mapping[str, Any] | None, has_ink: bool, lang
         if stage == "offer":
             return text_for(language, "learn_offer", topic=topic, offer=text_for(language, "offer"))
         if stage == "example":
-            return text_for(language, "learn_example", problem=_starter(topic))
+            return text_for(language, "learn_example", problem=fallback_problem(kind, t))
         return text_for(language, "learn_own")
     if kind == "practice":
-        return text_for(language, "try_this", problem=_seed_problem(3, 6))
+        return text_for(language, "try_this", problem=fallback_problem(kind, t))
     if kind == "quiz" or has_ink:
         return text_for(language, "step")
     return text_for(language, "write_problem")
@@ -1283,7 +1394,7 @@ def _salvage(
         off = reads_back(spoken, board, language) or not dictates_problem(spoken, board, language)
         variant = similar_problem(board) if off or not in_language(text, language) else None  # same shape, new numbers
         if variant:
-            return replace(action, spoken_text=text_for(language, "try_this", problem=variant))
+            return _tutor(action, spoken_text=text_for(language, "try_this", problem=variant), new_problem=variant)
     earlier = [str(t.get("a") or "") for t in list(recent_turns or []) if isinstance(t, Mapping)]
 
     def copied(sentence: str) -> bool:
@@ -1304,11 +1415,14 @@ def _salvage(
         and not copied(s)
         and in_language(s, language)
     ]
+    fell_back = not kept
     out = " ".join(kept) if kept else fallback_text(kind, task, has_ink, language)
     if kind == "learn" and _starter_missing(replace(action, spoken_text=_spoken(out, language)), task, language):
-        out = fallback_text(kind, task, has_ink, language)
+        out, fell_back = fallback_text(kind, task, has_ink, language), True
     if kind == "learn" and learn_stage(task) == "offer":
         out = _with_offer_question(out, language)
+    if fell_back:  # code's words now: the card shows code's problem, not the model's
+        return _tutor(action, spoken_text=out, new_problem=fallback_problem(kind, task))
     return replace(action, spoken_text=out)
 
 
@@ -1384,6 +1498,12 @@ class RawReply(NamedTuple):
     board_answer: str | None
     failed: bool = False
     board_problem: str | None = None
+    new_problem: str | None = None
+
+
+def _reply_parts(text: str, action: AvatarAction) -> tuple[AvatarAction, str | None, bool, str | None, str | None]:
+    """RawReply's fields for a parsed reply: the action and the helper keys read off the same text."""
+    return action, board_answer(text), False, _reply_value(text, "board_problem"), _reply_value(text, "new_problem")
 
 
 class VLMClient:
@@ -1475,18 +1595,19 @@ class VLMClient:
             if self.backend != "mock":
                 note = _retry_note(action, kind, task, query, recent_turns, board, language, reply.board_answer)
             if note is None:
-                return action
+                return _card_problems(action, kind, task, language)
             logger.info("asking the model again: %s", note)
             retry = self._evaluate(*args, note=note, **extra)
             if not retry.failed:
                 again, board = self._finish(retry, mode, task, query, language), retry.board_problem or board
+                again = _tutor(again, board_problem=board)  # a retry that left the board out keeps the first read
                 if _retry_note(again, kind, task, query, recent_turns, board, language, retry.board_answer) is None:
-                    return again
+                    return _card_problems(again, kind, task, language)
                 action = again
             if kind == "quiz" and quiz_stage(task) == "check":
                 return action  # graded in code: still the next problem, so it stays ungraded ("ask me again")
             salvaged = _salvage(action, kind, task, query, recent_turns, bool(ink_regions), board, language)
-            return speakable(salvaged, language)
+            return _card_problems(speakable(salvaged, language), kind, task, language)
         except Exception as exc:  # evaluate must never raise
             logger.exception("Math post-processing failed, using the raw answer: %s", exc)
             return reply.action
@@ -1495,7 +1616,7 @@ class VLMClient:
         self, reply: RawReply, mode: str, task: Mapping[str, Any] | None, query: str, language: str = "en"
     ) -> AvatarAction:
         ruled = apply_task_rules(reply.action, mode, task, reply.board_answer, query=query, language=language)
-        return speakable(ruled, language)
+        return _tutor(speakable(ruled, language), board_problem=reply.board_problem, new_problem=reply.new_problem)
 
     def _evaluate(
         self,
@@ -1518,7 +1639,7 @@ class VLMClient:
             mode = resolve_mode(mode, task)
             if self.backend == "mock":
                 text = self._mock(query, context, ink_regions, projector_size, mode, task, language)
-                return RawReply(parse_vlm_response(text, projector_size), board_answer(text))
+                return RawReply(*_reply_parts(text, parse_vlm_response(text, projector_size)))
             prompt = build_prompt(
                 query,
                 context,
@@ -1549,7 +1670,7 @@ class VLMClient:
                 failed = _tutor(parse_vlm_response(text, projector_size), failed=True)
                 return RawReply(replace(failed, spoken_text=text_for(language, "not_json")), None, True)
             action = _crop_target(parse_vlm_response(text, projector_size), text, crop, projector_size)
-            return RawReply(action, board_answer(text), False, _reply_value(text, "board_problem"))
+            return RawReply(*_reply_parts(text, action))
         except requests.Timeout:
             logger.error("VLM request timed out (backend=%s)", self.backend)
             key = "timeout"
@@ -1639,6 +1760,9 @@ class VLMClient:
             elif mode in ("learn", "practice"):
                 spoken = fallback_text(mode, t, bool(ink_regions), language)
                 reply = {"spoken_text": spoken, "animation_state": "idle", **center}
+                problem = fallback_problem(mode, t)
+                if problem:
+                    reply["new_problem"] = problem
         if reply is None:
             spanish = language == "es"
             heard = f'Escuché: "{query}".' if spanish else f'I heard: "{query}".'

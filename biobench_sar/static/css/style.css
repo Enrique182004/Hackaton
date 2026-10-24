@@ -98,19 +98,20 @@ body[data-text-size="xlarge"] { --text-scale: 1.5; }
   text-align: center; }
 #transcript::before { content: "\201C"; } #transcript::after { content: "\201D"; }
 
-/* Current quiz problem, written the normal way (3x + 5 = 20). It sits inside the camera's view for the whole
-   quiz, so it is small, thin and has no glow: bright projected text shows up as ink in the camera picture.
+/* The problem being worked on (the quiz's, one the assistant dictated, or the student's read off the board), written
+   the normal way (3x + 5 = 20). It sits inside the camera's view most of the session, so it is small, thin and has
+   no glow: bright projected text shows up as ink in the camera picture.
    Below the avatar, so the avatar stays visible when it points at work in this corner. */
-#quiz-card { position: fixed; left: 16px; top: 14px; max-width: 26vw; padding: 0.15em 0.5em; z-index: 5;
+#problem-card { position: fixed; left: 16px; top: 14px; max-width: 26vw; padding: 0.15em 0.5em; z-index: 5;
   color: rgba(255, 255, 255, 0.75); background: transparent; border: 1px solid rgba(127, 252, 255, 0.5);
   border-radius: 10px; }
-#quiz-card-count { display: block; font-size: calc(clamp(11px, 0.85vw, 18px) * var(--text-scale));
+#problem-card-label { display: block; font-size: calc(clamp(11px, 0.85vw, 18px) * var(--text-scale));
   color: rgba(127, 252, 255, 0.75); }
-#quiz-card-problem { display: block; font-size: calc(clamp(16px, 1.7vw, 34px) * var(--text-scale)); font-weight: 600;
+#problem-card-text { display: block; font-size: calc(clamp(16px, 1.7vw, 34px) * var(--text-scale)); font-weight: 600;
   line-height: 1.2; overflow-wrap: anywhere; }
-#quiz-card-problem:empty { display: none; }
+#problem-card-text:empty { display: none; }
 /* Out of the picture while the student asks and the assistant reads the board (main.js CAPTURE_STATES). */
-#quiz-card.capturing { visibility: hidden; }
+#problem-card.capturing { visibility: hidden; }
 
 #text-overlay { position: fixed; left: 0; right: 0; top: 40%; display: flex; justify-content: center; z-index: 60; }
 #text-input { width: min(70vw, 900px); font-size: 28px; padding: 12px 18px; color: var(--white);
@@ -163,6 +164,6 @@ body[data-contrast="on"] #avatar #bubble { border-width: 6px; color: var(--white
 body[data-contrast="on"] #avatar.state-error #bubble { border-style: dashed; text-shadow: none; }
 body[data-contrast="on"] #avatar.state-celebrating #bubble { border-style: double; }
 body[data-contrast="on"] #highlight { border-width: 6px; }
-body[data-contrast="on"] #quiz-card { color: var(--white); }
-body[data-contrast="on"] #quiz-card-count { color: var(--cyan); }
+body[data-contrast="on"] #problem-card { color: var(--white); }
+body[data-contrast="on"] #problem-card-label { color: var(--cyan); }
 body[data-contrast="on"] #transcript { text-shadow: none; }

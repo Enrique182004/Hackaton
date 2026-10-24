@@ -35,7 +35,8 @@ Non-negotiables:
   system binaries like Tesseract and PortAudio before Python code.
 - **Defensive JSON parsing** — `try/except` around VLM output; strip markdown fences before `json.loads`.
 - VLM output schema: `{spoken_text, animation_state: idle|walking|pointing|celebrating|error, target_x, target_y}`.
-  Quiz and practice prompts add one internal helper key (`board_answer` / `board_problem`) that code removes.
+  Math prompts add internal helper keys that code removes: `board_answer` (quiz), `board_problem` (help, practice),
+  `new_problem` (practice, lesson starters; feeds the projector's problem card).
 - **Phones only behind the PIN** — any non-loopback bind turns the LAN PIN gate on (`lan.py`,
   [docs/MOBILE.md](docs/MOBILE.md)); never add a route or socket handler that skips it.
 

@@ -10,7 +10,7 @@ const CENTER = { x: FRAME / 2, y: FRAME / 2 };
 const EDGE = 24; // min gap to the window edge; leaves room for the celebrate hop rotating the bubble
 const STATES = ["idle", "walking", "pointing", "celebrating", "error"];
 const MOVE_MS = 1500;
-// While the student asks and the assistant reads the board, the quiz card steps aside: projected text in the
+// While the student asks and the assistant reads the board, the problem card steps aside: projected text in the
 // camera picture looks like ink, and the model would read the printed problem as the student's work.
 const CAPTURE_STATES = ["listening", "transcribing", "thinking"];
 // Server states with a proj.<state> label; anything else is shown as sent.
@@ -47,9 +47,9 @@ const debugEl = $("debug");
 const debugConn = $("debug-conn");
 const debugEvent = $("debug-event");
 const crosshair = $("crosshair");
-const quizCard = $("quiz-card");
-const quizCount = $("quiz-card-count");
-const quizProblem = $("quiz-card-problem");
+const problemCard = $("problem-card");
+const problemLabel = $("problem-card-label");
+const problemText = $("problem-card-text");
 const highlightEl = $("highlight");
 
 let currentState = "idle";
@@ -202,7 +202,7 @@ function applyHighlight(d, state) {
   else clearHighlight();
 }
 
-// Visible on the board: not display:none (itself or a parent), and not the quiz card stepping aside.
+// Visible on the board: not display:none (itself or a parent), and not the problem card stepping aside.
 function onBoard(node) {
   for (let n = node; n && n !== body; n = n.parentNode) if (n.classList.contains("hidden")) return false;
   return !node.classList.contains("capturing");
@@ -227,7 +227,7 @@ function uiRects() {
   const sy = PROJ_H / window.innerHeight;
   const boxes = [];
   // [what is drawn, what decides whether it shows]: the typing box shows with its overlay.
-  const parts = [[avatar], [bubble], [quizCard], [highlightEl], [transcriptEl], [statusEl], [textInput, textOverlay], [debugEl]];
+  const parts = [[avatar], [bubble], [problemCard], [highlightEl], [transcriptEl], [statusEl], [textInput, textOverlay], [debugEl]];
   for (const [node, holder = node] of parts) {
     if (!onBoard(holder) || !onBoard(node)) continue;
     const r = node.getBoundingClientRect();
@@ -378,7 +378,7 @@ function renderStatus(d) {
   // The corner is read from across the room, so it says what to do rather than the internal state name.
   bindText(statusLabel, () => (d.detail === "busy" ? t("proj.busy") : LABELLED_STATES.includes(s) ? t(`proj.${s}`) : s));
   const capturing = CAPTURE_STATES.includes(s);
-  quizCard.classList.toggle("capturing", capturing);
+  problemCard.classList.toggle("capturing", capturing);
   // A new question: the last answer's outline is stale, and the camera must not see it as writing.
   if (capturing) clearHighlight(true);
   // Like the quiz card: the camera reads the board right after "thinking", so a held caption goes as soon as a
@@ -389,17 +389,22 @@ function renderStatus(d) {
 
 function onTutor(d) {
   tutorVersion += 1;
-  const quiz = d.quiz;
-  const active = Boolean(quiz && quiz.active);
-  quizCard.classList.toggle("hidden", !active);
-  if (!active) return;
-  bindText(quizCount, () => t("proj.quiz", { n: quiz.number, total: quiz.total }));
-  // No problem text means the assistant makes problems up and reads them out itself.
-  quizProblem.textContent = quiz.problem || "";
+  const quiz = d.quiz && d.quiz.active ? d.quiz : null;
+  // Outside a quiz the card shows the problem the assistant dictated or read off the board (tutor.py show_problem).
+  const shown = !quiz && d.problem && d.problem.text ? d.problem : null;
+  problemCard.classList.toggle("hidden", !quiz && !shown);
+  if (quiz) {
+    bindText(problemLabel, () => t("proj.quiz", { n: quiz.number, total: quiz.total }));
+    // No problem text means the assistant makes problems up and reads them out itself.
+    problemText.textContent = quiz.problem || "";
+  } else if (shown) {
+    bindText(problemLabel, () => t(shown.source === "board" ? "proj.problem.board" : "proj.problem.dictated"));
+    problemText.textContent = shown.text;
+  }
   uiChanged();
 }
 
-// The corner and the quiz card speak the language the assistant answers in; the bubble is the answer itself.
+// The corner and the problem card speak the language the assistant answers in; the bubble is the answer itself.
 function onLanguage(d) {
   languageVersion += 1;
   const lang = languageFor(d);
@@ -452,7 +457,7 @@ function refreshAccessibility() {
 // "tutor" events missed while disconnected would leave a stale card, so ask the server once per connect.
 function refreshTutor() {
   const seen = tutorVersion;
-  quizCard.classList.add("hidden");
+  problemCard.classList.add("hidden");
   if (typeof fetch !== "function") return;
   fetch("/api/tutor")
     .then((r) => (r.ok ? r.json() : null))

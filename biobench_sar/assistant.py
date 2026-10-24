@@ -446,6 +446,22 @@ class Assistant:
             self._tutor_pushed = state
         self._emit("tutor", state)
 
+    def _show_problem(self, action: AvatarAction, task: Task | None, *, has_ink: bool) -> None:
+        """The projector card follows the turn. A turn that dictates a problem (practice, a lesson's example) shows
+        it, or clears the card when the reply has none the card can show: an older problem must not stand in for
+        the one just read out. Help shows the student's problem, read off the board when there is ink on it."""
+        kind = task["kind"] if task is not None else "help"
+        if kind == "quiz":
+            return  # the quiz owns the card
+        if kind == "practice" or (kind == "learn" and task is not None and task.get("stage") == "example"):
+            dictated = getattr(action, "new_problem", None)
+            if dictated:
+                self.tutor.show_problem(dictated, "dictated")
+            else:
+                self.tutor.clear_problem()
+        elif kind == "help" and has_ink:
+            self.tutor.show_problem(getattr(action, "board_problem", None), "board")
+
     def quiz_problems(self) -> list[QuizProblem]:
         """Worksheet problems from the ticked files only, at most Settings.quiz_length spread over every level."""
         return pick_progressive(self.quiz_bank.problems(self.selection.query_sources()), self.settings.quiz_length)
@@ -625,6 +641,8 @@ class Assistant:
                 action, display = self._advance_quiz(task, action, display, graded=bool(ink), language=language)
             if not failed:
                 self.tutor.add_turn(text, action.spoken_text)
+            if not failed and self.tutoring:
+                self._show_problem(action, task, has_ink=bool(ink))
             self.push_tutor()
             self._say(action.to_dict(), action.spoken_text, display, language)
             self._replied_in(language)
