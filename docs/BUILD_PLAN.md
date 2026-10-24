@@ -432,7 +432,7 @@ HTTP (F implements, E calls). Every `/api/*` response sends `Cache-Control: no-s
 | PUT | `/api/documents/selection` | `{"all": true}` → every file active, or `{"sources": ["a.md", ...]}` → exactly those active (unknown names ignored; `[]` = none, answers skip RAG); non-list `sources` / other body → 400. Returns the `GET /api/documents` body. Persisted to `SAR_SELECTION_FILE` |
 | DELETE | `/api/documents/<source>` | `{"deleted": n}`; 404 if unknown. Also drops it from the selection |
 | GET | `/api/search?q=&k=` | `{"results": [{"text", "source", "score"}]}`, k clamped 1–10 |
-| GET | `/api/ink` | `{"regions": [InkRegion], "size": [w, h]}`; 503 without a frame |
+| GET | `/api/ink` | `{"regions": [InkRegion], "size": [w, h]}`: the ink the model is shown (`Assistant.board_ink`: projected UI, glare and the board's frame dropped); 503 without a frame |
 | POST | `/api/upload` | multipart `files[]` → `{"files": [{"name", "chunks", "replaced"?, "error"?}], "total_chunks": int}`; with an explicit selection, uploaded files become active |
 | GET | `/api/status` | `{"fps", "camera_running", "calibrated", "doc_chunks", "active_documents", "total_documents", "vlm_backend", "vlm_model", "audio_available", "tts_backend", "listen_mode", "state", "busy", "last_latency_s", "uptime_s", "profile", "mode", "language", "current_language", "glare"}`. `glare` = `null` or `{"fraction", "hotspots": [[x, y, w, h]], "severe": bool}` (severe above 1 % of the board) |
 | GET | `/api/tutor` | `TutorSession.to_dict()`, including `"confirm_stop": bool` |
@@ -479,8 +479,8 @@ Client → server: `text_query {text}`, `trigger_listen {}`, `ui_rects {"rects":
 `ui_rects` comes from the projector page: the boxes of the projected UI in projector pixels (avatar, speech
 bubble, quiz card, highlight), sent whenever they change and at least every 1 s while visible. The server forwards
 them to `Assistant.set_ui_rects(rects)`. Rects older than 3 s are ignored, and an ink region overlapping any UI
-rect by more than 50 % of its own area is dropped before the model and before snapping. Then the camera never
-reads Pip, the bubble or the quiz card as the student's ink.
+rect by more than 50 % of its own area is dropped before the model, before snapping and from the dashboard's
+`/api/ink` boxes. Then the camera never reads Pip, the bubble or the quiz card as the student's ink.
 
 Projector UI: hotkey **Space** = push-to-talk, **T** = type a query, **C** = toggle debug overlay, **F** =
 fullscreen. The page also listens to `tutor` and shows the current quiz problem in normal notation (e.g.
@@ -508,7 +508,7 @@ built, each with its reason.
 | RAG context is the retrieved chunks | In math, answer keys are stripped from the whole document at ingestion and from every chunk at prompt time | An answer in a prompt gets read out or copied as the student's |
 | `target_x` / `target_y` are the model's | Snapped in code to the ink (pointing/error/celebrating) or a free spot (idle/walking) | The model copies few-shot pixels and box corners |
 | "Project a highlight on the relevant part of the equation" (math §5B) | `highlight` box sent with the answer; the projector draws a pulsing outline | — (this is the spec, now built) |
-| The camera reads the student's ink | Projected UI boxes (`ui_rects`) are masked from ink detection | Bright projected text and shapes were segmented as ink |
+| The camera reads the student's ink | Projected UI boxes (`ui_rects`) are masked from ink detection; a bar at least 90 % of the board's height lying wholly in its outer 10 % on the left or right is dropped as the board's frame (so is a student's full-height margin line there) | Bright projected text and shapes were segmented as ink, and so was the frame when the projection overhung the board |
 | Camera at 30+ FPS | The camera loop never waits on the model; the hardware check passes at ≥ 28 FPS | A 30 fps webcam that measures 29.x must still pass |
 | English only | English and Spanish end to end (`lang.py`, `mathspeak_es.py`, es-MX voices, translated dashboard) | The classroom is bilingual |
 | `/precharge` dashboard (biology §5) | `/dashboard`, with `/precharge` kept as an alias | Clearer name for teachers |

@@ -620,13 +620,12 @@ def create_app(
 
     @app.get("/api/ink")
     def api_ink() -> Any:
-        from biobench_sar.core.vision_loop import find_ink_regions
-
-        frame = svc.vision.latest_warped()
+        # The ink the model is shown, so the dashboard never boxes Pip, the bubble, the quiz card or the board's frame.
+        regions, frame = assistant.board_ink()
         if frame is None:
             return jsonify({"regions": [], "size": list(settings.projector_size), "error": "no frame"}), 503
         height, width = frame.shape[:2]
-        return jsonify({"regions": find_ink_regions(frame, **settings.ink_kwargs), "size": [width, height]})
+        return jsonify({"regions": regions, "size": [width, height]})
 
     @app.post("/api/query")
     def api_query() -> Any:

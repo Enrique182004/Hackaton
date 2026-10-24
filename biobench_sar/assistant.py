@@ -47,6 +47,10 @@ MAX_GLARE_SHARE = 0.5
 UI_RECTS_TTL_S = 3.0
 MAX_UI_RECTS = 32
 UI_OVERLAP = 0.5
+# The whiteboard's metal frame, seen when the projection overhangs the board: a bar at least FRAME_HEIGHT_SHARE of
+# the board's height that lies wholly in the outer FRAME_EDGE_SHARE of its width, on the left or the right.
+FRAME_HEIGHT_SHARE = 0.9
+FRAME_EDGE_SHARE = 0.1
 # "pointing": the fingertip stops this far left of the ink it points at, so the avatar does not cover it.
 POINT_GAP = 24
 # Ink regions are word and symbol blobs; blobs this many line heights apart or closer, side by side, are one line.
@@ -240,6 +244,21 @@ def drop_ui_ink(ink: list[Any], rects: Iterable[Box], highlight: Box | None = No
         return any(_overlap(box, rect) > UI_OVERLAP * box[2] * box[3] for rect in boxes)
 
     return [region for region in ink if not covered(region)]
+
+
+def drop_frame_ink(ink: list[Any], board_size: tuple[int, int]) -> list[Any]:
+    """Ink regions that are not the board's frame: a bar about as tall as the board at its left or right edge is the
+    metal frame inside an overhanging projection, never the student's writing."""
+    width, height = board_size
+    edge = FRAME_EDGE_SHARE * width
+
+    def is_frame(region: Any) -> bool:
+        box = _box(region)
+        if box is None or not FRAME_HEIGHT_SHARE * height <= box[3] <= height:
+            return False
+        return box[0] + box[2] <= edge or box[0] >= width - edge
+
+    return [region for region in ink if not is_frame(region)]
 
 
 def _union(a: Box, b: Box) -> Box:
@@ -661,12 +680,19 @@ class Assistant:
             return crop.jpeg, crop
         return (encode_jpeg(warped) if warped is not None else None), None
 
+    def board_ink(self) -> tuple[list[Any], Any]:
+        """(the ink regions the model is shown for the latest frames, the projector-space frame they were found on);
+        ([], None) without a frame. The dashboard's ink overlay boxes these, so it never boxes the projected UI."""
+        raw, calibration, warped = self._board()
+        return self._ink(raw, calibration, warped), warped
+
     def _ink(self, raw: Any, calibration: Any, warped: Any) -> list[Any]:
         from biobench_sar.core.vision_loop import find_ink_regions
 
         if warped is None:
             return []
-        ink = find_ink_regions(warped, **self.settings.ink_kwargs)
+        board = (int(warped.shape[1]), int(warped.shape[0]))
+        ink = drop_frame_ink(find_ink_regions(warped, **self.settings.ink_kwargs), board)
         rects = self.ui_rects()
         if ink and rects:
             try:
@@ -679,7 +705,6 @@ class Assistant:
         if not hotspots:
             return ink
         try:
-            board = (int(warped.shape[1]), int(warped.shape[0]))
             return drop_glare_ink(ink, hotspots_on_board(hotspots, calibration), board)
         except Exception:
             log.exception("glare filter failed; keeping every ink region")

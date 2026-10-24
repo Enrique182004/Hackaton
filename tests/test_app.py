@@ -402,6 +402,44 @@ def test_ink_with_frame_returns_regions_and_size(built: Any, fakes: Any, monkeyp
     assert r.get_json() == {"regions": [region], "size": [30, 20]}
 
 
+WORK = {"x": 100, "y": 100, "w": 120, "h": 40, "cx": 160, "cy": 120}  # 3x + 5 = 20
+PIP = {"x": 520, "y": 240, "w": 60, "h": 90, "cx": 550, "cy": 285}
+PIP_RECT = [500, 220, 120, 130]
+
+
+def _board_with(fakes: Any, monkeypatch: pytest.MonkeyPatch, *regions: dict[str, int]) -> None:
+    vision = sys.modules["biobench_sar.core.vision_loop"]
+    monkeypatch.setattr(vision, "find_ink_regions", lambda frame, **kw: [dict(r) for r in regions])
+    fakes.vision.frame = np.zeros((360, 640, 3), np.uint8)
+
+
+def test_ink_drops_blobs_under_the_projected_ui(built: Any, fakes: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    _board_with(fakes, monkeypatch, WORK, PIP)
+    built[0].config["SAR_ASSISTANT"].set_ui_rects([PIP_RECT])
+    assert built[0].test_client().get("/api/ink").get_json() == {"regions": [WORK], "size": [640, 360]}
+
+
+def test_ink_keeps_blobs_under_a_stale_ui_rect(built: Any, fakes: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from biobench_sar import assistant as assistant_module
+    from biobench_sar.assistant import UI_RECTS_TTL_S
+
+    now = [1000.0]
+    monkeypatch.setattr(assistant_module, "time", types.SimpleNamespace(monotonic=lambda: now[0]))
+    _board_with(fakes, monkeypatch, WORK, PIP)
+    built[0].config["SAR_ASSISTANT"].set_ui_rects([PIP_RECT])
+    client = built[0].test_client()
+    assert client.get("/api/ink").get_json()["regions"] == [WORK]
+    now[0] += UI_RECTS_TTL_S + 0.5
+    assert client.get("/api/ink").get_json()["regions"] == [WORK, PIP], "the page stopped reporting its boxes"
+
+
+def test_ink_drops_the_board_frame(built: Any, fakes: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    left = {"x": 0, "y": 0, "w": 20, "h": 360, "cx": 10, "cy": 180}
+    right = {"x": 610, "y": 10, "w": 25, "h": 340, "cx": 622, "cy": 180}
+    _board_with(fakes, monkeypatch, left, WORK, right)
+    assert built[0].test_client().get("/api/ink").get_json()["regions"] == [WORK]
+
+
 def test_query_empty_text_is_400(built: Any) -> None:
     client = built[0].test_client()
     assert client.post("/api/query", json={"text": "   "}).status_code == 400

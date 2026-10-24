@@ -107,7 +107,8 @@ Budget about 45 minutes, and do part A the day before.
 14. **Ink.** Write `3x + 5 = 20` large on the board.
     ✅ On the Board tab, an orange box appears around it within a second or two (More tools → "Drawings: 1").
     Pip, the speech bubble and the quiz card are never boxed: the projector page tells the server where they
-    are, and that part of the camera picture is ignored.
+    are, and that part of the camera picture is ignored. Neither is the board's metal frame at the left or right
+    edge when the picture spills past the board.
 
 ## E. First lessons (English)
 

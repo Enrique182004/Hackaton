@@ -1542,6 +1542,49 @@ def test_drop_ui_ink() -> None:
     assert drop_ui_ink(ink, [(0.0, 0.0, 1280.0, 800.0)], outline) == [{"x": 1}], "a full-screen card is no highlight"
 
 
+FRAME_LEFT = {"x": 0, "y": 10, "w": 30, "h": 780, "cx": 15, "cy": 400}  # the board's metal frame
+
+
+def test_drop_frame_ink() -> None:
+    from biobench_sar.assistant import drop_frame_ink
+
+    right = {"x": 1240, "y": 0, "w": 40, "h": 800}
+    inset = {"x": 60, "y": 20, "w": 20, "h": 760}  # the projection overhangs more: the frame sits in from the edge
+    divider = {"x": 630, "y": 0, "w": 20, "h": 800}  # a line the student drew down the middle
+    short = {"x": 0, "y": 100, "w": 30, "h": 600}
+    merged = {"x": 0, "y": 0, "w": 200, "h": 800}  # the frame and writing beside it: the writing must stay
+    at_limits = {"x": 1152, "y": 40, "w": 30, "h": 720}  # 90 % of the height, starting at the right 10 % strip
+    just_short = {"x": 0, "y": 40, "w": 129, "h": 719}  # 1 px over the strip and 1 px under the height
+    ink = [dict(LINE_1), FRAME_LEFT, right, inset, divider, short, merged, at_limits, just_short, {"x": 1}]
+    assert drop_frame_ink(ink, (BOARD_W, BOARD_H)) == [LINE_1, divider, short, merged, just_short, {"x": 1}]
+    assert drop_frame_ink([FRAME_LEFT], (4, 4)) == [FRAME_LEFT], "taller than the board: not this board's frame"
+
+
+def test_the_board_frame_is_dropped_before_the_model(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _with_ink(monkeypatch, LINE_1, FRAME_LEFT)
+    h.vision.frame = np.zeros((BOARD_H, BOARD_W, 3), np.uint8)
+    h.assistant.handle_query("check this")
+    assert h.vlm.seen[-1][2] == [LINE_1]
+
+
+def test_board_ink_is_the_ink_the_model_sees(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert h.assistant.board_ink() == ([], None), "no frame"
+    _with_ink(monkeypatch, LINE_1, LINE_2, FRAME_LEFT)
+    h.vision.frame = np.zeros((BOARD_H, BOARD_W, 3), np.uint8)
+    h.assistant.set_ui_rects([[380, 380, 300, 150]])  # the speech bubble over line 2
+    ink, frame = h.assistant.board_ink()
+    assert ink == [LINE_1] and frame is h.vision.frame
+
+
+def test_board_ink_drops_ink_in_a_glare_hotspot(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _with_ink(monkeypatch, REGION_A, REGION_B)
+    _glare(monkeypatch, [(50, 30, 40, 30)])  # around REGION_B's center (70, 45)
+    raw = np.full((100, 100, 3), 128, np.uint8)
+    h.assistant.services.vision = RawVision(raw)  # no calibration: the raw frame is the board
+    ink, frame = h.assistant.board_ink()
+    assert ink == [REGION_A] and frame.shape == raw.shape
+
+
 def test_place_target_unit() -> None:
     from biobench_sar.assistant import place_target
 

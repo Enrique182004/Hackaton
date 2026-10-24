@@ -301,7 +301,7 @@ Calibrate again after moving the webcam (section 6).
 | No `projector` line, or `displays ... skipped`, in the hardware check | This computer's display list couldn't be read | Check the display settings by eye: a second display at 1280 × 800 |
 | `tesseract FAIL` in the hardware check | Tesseract isn't installed (only photo uploads need it) | `winget install UB-Mannheim.TesseractOCR` (Windows) or `brew install tesseract` (macOS). If it is installed and still fails on Windows, add `C:\Program Files\Tesseract-OCR` to your user `PATH` and open a new PowerShell window |
 | Decimals, minus signs or exponents misread | Camera at 720p; thin or light marker; symbols too small | 1920×1080 camera; black marker; bigger, clearer symbols (section 4) |
-| No orange boxes around drawings | Faint, dry or light-coloured marker; uneven light | Fresh black or blue marker; even lighting |
+| No orange boxes around drawings | Faint, dry or light-coloured marker; uneven light; writing in a glare spot or under Pip, the speech bubble or the quiz card (those parts are ignored on purpose) | Fresh black or blue marker; even lighting; fix the glare; write away from Pip |
 | Board looks pure white and the ink looks faded everywhere | Camera over-exposed | Dim the lights near the board; lower exposure in the camera's own app |
 | Picture dark and grainy | Room too dark | Turn some room lights on |
 | Camera stays at 1280×720 | Camera does not support 1080p or the USB link is too slow | USB 3 port without a hub, or another camera |
