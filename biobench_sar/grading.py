@@ -1002,7 +1002,8 @@ def _stated(sentence: str, solutions: Answers, language: str | None) -> bool:
 
 def solution_sentences(text: Any, solutions: Answers | None, language: str | None = None) -> list[str]:
     """The sentences of a reply that state the problem's solution as an answer ("x = 5", "x is 5", "x equals five",
-    "la respuesta es cinco", "x es igual a 5"), as written; [] without solutions."""
+    "la respuesta es cinco", "x es igual a 5") or as a result ("15 divided by 3 is 5", "you should get five", "x turns
+    out to be 5", "obtienes cinco"), as written; [] without solutions."""
     if not solutions:
         return []
     sentences = [s.strip() for s in _SENTENCES.split(str(text or "").strip()) if s.strip()]
