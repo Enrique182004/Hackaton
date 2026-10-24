@@ -263,8 +263,8 @@ def test_corpus_has_no_forbidden_symbols(text: str) -> None:
     assert not re.search(r"[\^/*=+<>%√×÷]|\d", spoken), spoken
 
 
-@pytest.mark.parametrize(("text", "expected"), CASES)
-def test_cases_have_no_forbidden_symbols(text: str, expected: str) -> None:
+@pytest.mark.parametrize("text", [t for t, _ in CASES])
+def test_cases_have_no_forbidden_symbols(text: str) -> None:
     assert not re.search(r"[\^/*=+<>%√×÷]", to_speech(text))
 
 
@@ -309,6 +309,13 @@ def test_deep_nesting_does_not_raise() -> None:
     text = "(" * 400 + "x" + ")" * 400 + " = 2"
     out = to_speech(text)
     assert "=" not in out and "2" not in out
+
+
+def test_long_sign_and_power_chains_stay_in_band(caplog: pytest.LogCaptureFixture) -> None:
+    signs = to_speech("-" * 3000 + "4")
+    powers = to_speech("x" + "^x" * 3000)
+    assert "four" in signs and "^" not in powers
+    assert "falling back" not in caplog.text
 
 
 def test_unbalanced_groups() -> None:

@@ -614,7 +614,10 @@ class _Parser:
         if k > j + 1 and nxt.kind in ("letter", "word"):
             raise _Fail  # "- a list item", not "negative a"
         self.i = j + 1
-        return _Node("neg", tok.text, (self.unary(),))
+        self._enter()
+        child = self.unary()
+        self.depth -= 1
+        return _Node("neg", tok.text, (child,))
 
     def power(self) -> _Node:
         base = self.postfix()
@@ -622,7 +625,9 @@ class _Parser:
         if not self._is_op(tok, {"^"}):
             return base
         save, self.i = self.i, j + 1
+        self._enter()
         exp = self._try(self.unary)
+        self.depth -= 1
         if exp is None:
             self.i = save
             return base
