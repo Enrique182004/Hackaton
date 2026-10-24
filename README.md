@@ -9,7 +9,7 @@ answer, and can quiz you from your own worksheets through a local knowledge base
 
 | Profile | Spec | What the avatar does |
 | --- | --- | --- |
-| `math` (default) | [docs/sar_math_tutor_prompt.md](docs/sar_math_tutor_prompt.md) | Math tutor: next-step hints, similar problems, quizzes |
+| `math` (default) | [docs/sar_math_tutor_prompt.md](docs/sar_math_tutor_prompt.md) | Math tutor: next-step hints, similar problems, quizzes, learning a new topic |
 | `biology` | [docs/sar_whiteboard_assistant_prompt.md](docs/sar_whiteboard_assistant_prompt.md) | Research assistant that checks *Acanthamoeba* isolation flowcharts for Laguna de Bustillos |
 
 **Plan, contracts and status:** [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md)
@@ -69,9 +69,20 @@ The tutor has three modes. Say one of the phrases (or type it on the dashboard) 
 | **Practice** | "similar problem", "another one like this", "more practice" | Reads the equation on the board, swaps the numbers or letters to keep the same difficulty and dictates the new equation for you to write (`idle`). |
 | **Quiz** | "quiz me", "start a quiz" | Dictates problem 1 of N (also shown top-left on the projector in normal notation, e.g. `3x + 5 = 20`). Write your answer and talk again ("check my answer"): `celebrating` and the next problem if it is right, `error` and one hint if it is wrong — never the answer. |
 
+**Learning a topic** works in any mode, even with an empty board. Say what you want to learn ("I want to
+learn how to solve fractions", "teach me equations", "how do I add fractions?"): the avatar introduces the
+idea in a sentence or two and asks *"Do you have an exercise in mind, or should I make one up for you?"*
+
+- "make one up", "give me one", "you choose" — it dictates an easy starter problem; write it and try the
+  first step, then ask for help as usual.
+- "I have one", "I'll write mine" — it asks you to write your exercise on the board and then ask for help.
+
+The assistant remembers the last three questions and answers, so follow-ups like "I did it" or "what now?"
+make sense.
+
 The same controls exist over HTTP: `GET /api/tutor`, `PUT /api/tutor/mode {"mode": "help"|"practice"|"quiz"}`,
-`POST /api/tutor/quiz/start`, `POST /api/tutor/quiz/stop`. Every change is pushed to the pages as a `tutor`
-Socket.IO event.
+`POST /api/tutor/quiz/start`, `POST /api/tutor/quiz/stop`. Every change of mode, quiz or topic is pushed to
+the pages as a `tutor` Socket.IO event.
 
 ### Quiz banks
 

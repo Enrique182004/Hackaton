@@ -3,7 +3,8 @@
 > Source of truth for the **math** subject profile (`SAR_PROFILE=math`, the default). The original
 > Environmental Biology directive, [sar_whiteboard_assistant_prompt.md](sar_whiteboard_assistant_prompt.md),
 > is kept as the `biology` profile and still describes the module layout and RAG ingestion formats.
-> How the spec maps onto code: [BUILD_PLAN.md](BUILD_PLAN.md) (contracts G–I and the math scenario cases).
+> How the spec maps onto code: [BUILD_PLAN.md](BUILD_PLAN.md) (contracts G–I, the math semantics of each
+> mode and the math scenario test cases).
 
 ## 1. Project Overview & Operational Context
 
@@ -63,6 +64,19 @@ When generating the VLM prompt and backend logic, enforce these core tutoring be
 - **Quiz Mode:** The AI queries the local ChromaDB for progressive math problems from uploaded worksheets,
   dictates the problem, and evaluates the student's physical ink answer.
 
+### C. Learning a Topic (works with an empty board)
+
+A student does not need anything on the board to start. They can say, for example, "I want to learn how to
+solve a fraction":
+
+1. The AI explains the idea of the topic briefly, in plain words for a middle or high school student.
+2. It asks whether the student has an exercise in mind or whether it should make one up.
+3. It follows up on the answer: it dictates an easy starter problem and invites the student to try the first
+   step, or it asks the student to write their own exercise on the board and then ask for help.
+
+The AI remembers the last few turns of the conversation, so follow-ups such as "make one up", "I have my
+own" or "I did it" make sense without repeating the question.
+
 ## 6. Required JSON Output Schema
 
 The VLM must be rigidly prompted to return ONLY this JSON structure to prevent application crashes:
@@ -75,3 +89,8 @@ The VLM must be rigidly prompted to return ONLY this JSON structure to prevent a
   "target_y": 420
 }
 ```
+
+The schema is the same in every mode and for both profiles: a mode only changes what goes into `spoken_text`
+and which `animation_state` is chosen (for example `pointing` at the next step in help mode, `celebrating`
+for a correct quiz answer, `error` with one hint for a wrong one). `target_x` / `target_y` are projector
+pixels.

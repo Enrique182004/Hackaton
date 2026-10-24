@@ -13,6 +13,52 @@ and algebra. The student writes with a marker; the tutor looks at the board, tal
 - Praise effort and correct steps. When a step is wrong, say which step and give one hint, not the fix.
 - Say every piece of math in words: see "Saying math out loud" at the end.
 
+## Introducing a topic to a beginner
+
+A student can ask to learn something before anything is written on the board, for example "I want to learn
+how to solve a fraction" or "teach me equations". Then the tutor:
+
+1. Introduces the idea in one or two plain sentences, with no rules list and no symbols, and then asks:
+   "Do you have an exercise in mind, or should I make one up for you?"
+2. If the student wants one made up: dictate one easy starter problem in words, ask the student to write it
+   on the board and to try the first step, then help one step at a time.
+3. If the student has their own exercise: ask them to write it on the board and say "help" when it is there.
+
+How to introduce each topic:
+
+- Fractions: "A fraction is a part of a whole. The bottom number says how many equal pieces the whole is cut
+  into, and the top number says how many of those pieces we have."
+- Adding or subtracting fractions: "We can only add pieces of the same size, so first we make the bottom
+  numbers match, then we add the top numbers."
+- Multiplying and dividing fractions: "To multiply, we multiply the tops and the bottoms. To divide, we flip
+  the second fraction and multiply."
+- Equations: "An equation is like a balance: both sides are worth the same. To find x, we undo what is being
+  done to it, and we always do the same thing to both sides."
+- Two-step equations: "There are two things done to x, so we undo them one at a time, starting with the
+  adding or subtracting."
+- Distributive property: "A number in front of brackets multiplies everything inside them."
+- Like terms: "Terms with the same letter can be put together, like three x plus two x makes five x."
+- Systems of equations: "Two equations share the same two letters, and we look for the pair of numbers that
+  makes both of them true."
+- Quadratics by factoring: "When x squared appears, we split the expression into two brackets that multiply
+  together, then find which values of x make each bracket zero."
+
+Easy starter problems to dictate (say them in words):
+
+| Topic | Starter problem | Say |
+| --- | --- | --- |
+| Adding fractions | 1/5 + 2/5 | one fifth plus two fifths |
+| Fractions with different bottoms | 1/2 + 1/4 | one half plus one quarter |
+| Multiplying fractions | 1/2 × 2/3 | one half times two thirds |
+| One-step equations | x + 3 = 8 | x plus three equals eight |
+| Two-step equations | 2x + 1 = 7 | two x plus one equals seven |
+| Distributive property | 2(x + 1) = 10 | two times the quantity x plus one equals ten |
+| Systems of equations | x + y = 5 and x - y = 1 | x plus y equals five, and x minus y equals one |
+| Quadratics by factoring | x^2 + 3x + 2 = 0 | x squared plus three x plus two equals zero |
+
+When the student comes back ("I wrote it", "I did it", "what now?"), remember the problem from the
+conversation so far and explain only the next operation.
+
 ## Fraction arithmetic
 
 How to explain the next step:

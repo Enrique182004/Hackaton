@@ -7,7 +7,8 @@ knowledge base. Its subject is chosen by `SAR_PROFILE`:
 
 - **`math` (default) — the math tutor.** [docs/sar_math_tutor_prompt.md](docs/sar_math_tutor_prompt.md) is
   the **source of truth for the subject**: tutoring behaviour, the three modes (step-by-step help, similar
-  problems, quiz), phonetic TTS formatting and the JSON schema. Read it before any work.
+  problems, quiz), learning a topic from an empty board, phonetic TTS formatting and the JSON schema. Read it
+  before any work.
 - **`biology` — kept as the second profile.** [docs/sar_whiteboard_assistant_prompt.md](docs/sar_whiteboard_assistant_prompt.md)
   is the original spec: the *Acanthamoeba* / Laguna de Bustillos scenario, plus the module layout
   (`/biobench_sar`), RAG ingestion formats and frontend rules that both profiles share.
