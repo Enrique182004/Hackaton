@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import random
 import re
 import threading
 from collections import deque
 from typing import Any
 
-from biobench_sar.rag.quiz_bank import QuizProblem
+from biobench_sar.rag.quiz_bank import QuizProblem, invent_problem
 
 MODES = ("help", "practice", "quiz")
-DEFAULT_QUIZ_LENGTH = 10  # problems the model invents when no ticked file has any
+DEFAULT_QUIZ_LENGTH = 10  # problems in a quiz without worksheet problems (they are invented, see start_quiz)
 MAX_TURNS = 3
 MAX_TURN_CHARS = 400
 MAX_TOPIC_WORDS = 8
@@ -34,11 +35,14 @@ _STOP_QUIZ = _compile(
     r"\b(?:stop|end|quit|exit|cancel|finish|leave)\s+(?:the\s+|this\s+|my\s+)?quiz\b",
     r"\bno\s+more\s+quiz",
     r"\bquiz\s+(?:is\s+)?over\b",
+    r"\bdone\s+with\s+(?:the\s+|this\s+|my\s+)?quiz",
+    r"\bstop\s+quizzing\b",
 )
 _QUIZ = _compile(
     r"\bquiz\s+me\b",
     r"\b(?:start|begin|do|take|give\s+me|let's\s+do|let's\s+start|lets\s+do|lets\s+start)\s+"
     r"(?:a\s+|the\s+|another\s+|my\s+)?(?:math\s+|new\s+)?quiz\b",
+    r"\b(?:want|have|need|try)\s+(?:a\s+|another\s+)(?:math\s+|new\s+|short\s+|little\s+)?quiz\b",
     r"\bquiz\s+mode\b",
     r"\btest\s+me\b",
 )
@@ -47,6 +51,16 @@ _PRACTICE = _compile(
     r"\b(?:another|one\s+more|a\s+new)\s+(?:one\s+|problem\s+|exercise\s+|question\s+|equation\s+)?like\s+(?:this|that|it)\b",
     r"\bmore\s+practice\b",
     r"\bpractice\s+(?:mode|problems?)\b",
+    r"\blet'?s\s+practi[cs]e\b",
+    r"\b(?:want|like|need)\s+to\s+practi[cs]e\b",
+    r"^practi[cs]e$",
+)
+_REPEAT = _compile(
+    r"\b(?:repeat|say|read)\s+(?:that|it|the\s+(?:problem|question|equation))\s+again\b",
+    r"\brepeat\s+(?:that|it|the\s+(?:problem|question|equation)|please)\b",
+    r"^(?:repeat|again|pardon|sorry|what)$",
+    r"\bwhat\s+was\s+the\s+(?:problem|question|equation)\b",
+    r"\b(?:didn't|did\s+not)\s+(?:hear|get|catch)\s+(?:that|it|the\s+(?:problem|question))\b",
 )
 _HELP = _compile(
     r"\bhelp\b",
@@ -77,6 +91,11 @@ def is_quiz_stop(text: str) -> bool:
     return _any(_STOP_QUIZ, _norm(text))
 
 
+def is_repeat_request(text: str) -> bool:
+    """ "Can you repeat the problem?": read the current quiz problem again instead of grading the board."""
+    return _any(_REPEAT, _norm(text))
+
+
 # "learn ..." / "teach me ..." say what they want outright; the how-to forms must also name a math topic,
 # or "how do I solve this?" would turn a question about the board into a lesson.
 _LEARN_TRUSTED = _compile(r"\blearn(?:\s+about)?\s+(?P<rest>.+)", r"\bteach\s+me(?:\s+about)?\s+(?P<rest>.+)")
@@ -95,7 +114,22 @@ _MATH_TOPIC = re.compile(
     r"word\s+problem|long\s+division|mixed\s+number|place\s+value|rounding|scientific\s+notation|"
     r"absolute\s+value|coordinate|linear|system\s+of)\w*"
 )
-_DEIXIS = re.compile(r"\b(?:this|that|these|those|it|here|there|board|above|mine)\b")
+_DEIXIS = re.compile(r"\b(?:this|that|these|those|it|here|there|board|above|below|mine)\b")
+# "the equation", "my answer", "the next step", "the left side": the student's own work, not a topic. A named
+# concept ("the order of operations", "the quadratic formula") is still a topic.
+_BOARD_OBJECT = re.compile(
+    r"\b(?:the|my|our|your)\s+(?:(?:next|last|first|second|third|other|left|right|top|bottom|same|whole|final|"
+    r"current|new)\s+)?(?:equation|expression|problem|exercise|question|fraction|answer|step|side|term|variable|"
+    r"number|sum|result|solution|bracket|parenthes\w*|denominator|numerator|work|mistake|x|y)s?\b"
+    r"|\bnext\s+step\b|\bstep\s+(?:one|two|three|\d+)\b"
+)
+# An explicit problem ("3x + 5 = 20", "three x plus five equals twenty", "one half and one third") is a request
+# for step-by-step help with it, not for a lesson.
+_EXPLICIT = re.compile(
+    r"\d|\b(?:equals|plus|minus|times|divided\s+by|squared|cubed)\b|"
+    r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:halves|half|thirds?|fourths?|quarters?|fifths?|"
+    r"sixths?|sevenths?|eighths?|ninths?|tenths?)\b"
+)
 _LEADING_FILLER = re.compile(r"^(?:more\s+about|a\s+bit\s+about|a\s+little\s+about|about|the\s+basics\s+of|some)\s+")
 _TRAILING_FILLER = re.compile(
     r"(?:^|\s+)(?:please|now|today|thanks|thank\s+you|again|for\s+me|to\s+me|with\s+me|right\s+now)$"
@@ -116,6 +150,10 @@ def _gerund(verb: str) -> str:
     return verb + "ing"
 
 
+def _about_the_board(rest: str) -> bool:
+    return bool(_DEIXIS.search(rest) or _BOARD_OBJECT.search(rest) or _EXPLICIT.search(rest))
+
+
 def _topic(rest: str, *, starts_with_verb: bool) -> str | None:
     rest = _LEADING_FILLER.sub("", rest.strip())
     for prefix in ("how to ", "to "):
@@ -123,21 +161,32 @@ def _topic(rest: str, *, starts_with_verb: bool) -> str | None:
             rest, starts_with_verb = rest[len(prefix) :], True
     while (trimmed := _TRAILING_FILLER.sub("", rest)) != rest:
         rest = trimmed
+    # Checked on the whole phrase: cut to MAX_TOPIC_WORDS first, "... the equation on the board" lost "board".
+    if _about_the_board(rest):
+        return None
     words = rest.split()[:MAX_TOPIC_WORDS]
-    if not words or _DEIXIS.search(" ".join(words)):
+    if not words:
         return None
     if starts_with_verb:
         words[0] = _gerund(words[0])
     return " ".join(words)
 
 
-def detect_learn_request(text: str) -> str | None:
-    """The topic of a general "I want to learn X" / "teach me X" / "how do I X?" request, else None."""
+def detect_learn_request(text: str, *, board_in_use: bool = False) -> str | None:
+    """The topic of a general "I want to learn X" / "teach me X" / "how do I X?" request, else None.
+
+    Never for the student's own work: "this", "the equation", "my answer", "the next step" or an explicit problem
+    ("how do I solve 3x + 5 = 20"). The how-to and "explain" forms are also skipped when `board_in_use` (ink on the
+    board or a quiz running) or when they ask for a mode ("explain the next step" is help): then they are about
+    the board. "learn" / "teach me" say it outright and still start a lesson.
+    """
     norm = _norm(text)
     for pattern in _LEARN_TRUSTED:
         found = pattern.search(norm)
         if found:
             return _topic(found.group("rest"), starts_with_verb=False)
+    if board_in_use or detect_mode(text) is not None:
+        return None
     for pattern in _LEARN_GUARDED:
         found = pattern.search(norm)
         if not found:
@@ -153,6 +202,7 @@ def detect_learn_request(text: str) -> str | None:
 _OFFER_DECLINE = _compile(
     r"\b(?:don't|dont|do\s+not|haven't|havent|have\s+not)\s+(?:have|got)\b",
     r"\bno\s+(?:i\s+)?(?:don't|dont|do\s+not)\b",
+    r"^(?:um\s+|well\s+)?i\s+(?:don't|dont|do\s+not)$",
 )
 _OFFER_OWN = _compile(
     r"\bi\s+(?:have|got|already\s+have)\s+(?:one|an?\s+(?:exercise|problem|question|example)|my\s+own|homework)\b",
@@ -165,7 +215,8 @@ _OFFER_OWN = _compile(
 )
 _OFFER_GENERATE = _compile(
     r"\bmake\s+(?:one|it|me\s+one|one\s+up|up\s+one|up\s+a\s+(?:problem|exercise|question))\b",
-    r"\bgive\s+me\s+(?:one|an?\s+(?:exercise|problem|question|example))\b",
+    r"\bgive\s+me\s+(?:one|an?\s+(?:(?:easy|easier|hard|harder|new|simple|different|random|small)\s+)?"
+    r"(?:one|exercise|problem|question|example))\b",
     r"\byou\s+(?:choose|pick|decide|make\s+one|make\s+it|come\s+up)\b",
     r"\byour\s+choice\b",
     r"\bsurprise\s+me\b",
@@ -189,11 +240,13 @@ def detect_offer_reply(text: str) -> str | None:
 class TutorSession:
     """Thread-safe: the pipeline thread and HTTP handlers both change it."""
 
-    def __init__(self) -> None:
+    def __init__(self, rng: random.Random | None = None) -> None:
         self._lock = threading.RLock()
+        self._rng = rng or random.Random()
         self._mode = "help"
         self._quiz: str | None = None  # None | "active" | "finished"
         self._problems: list[QuizProblem] = []
+        self._invented: dict[int, QuizProblem] = {}  # index -> made-up problem, when no file has any
         self._total = 0
         self._index = 0
         self._score = 0
@@ -209,24 +262,31 @@ class TutorSession:
             return self._mode
 
     def set_mode(self, mode: str) -> None:
+        """Switch mode. A pending lesson offer expires; practice and quiz also end the lesson."""
         if mode not in MODES:
             raise ValueError(f"mode must be one of {', '.join(MODES)}")
         with self._lock:
             if mode != "quiz":
                 self._quiz = None
                 self._dictated = False
+            if mode != "help":
+                self._learn_topic = None
+            self._offer_pending = False
             self._mode = mode
 
     # ---- quiz ----------------------------------------------------------------
-    def start_quiz(self, problems: list[QuizProblem]) -> None:
-        """Start over. With no problems the model invents DEFAULT_QUIZ_LENGTH progressive ones."""
+    def start_quiz(self, problems: list[QuizProblem], length: int = DEFAULT_QUIZ_LENGTH) -> None:
+        """Start over. With no problems, `length` progressive problems are made up as the quiz reaches them
+        (quiz_bank.invent_problem), so each one has a known text and answer like a worksheet problem."""
         with self._lock:
             self._mode = "quiz"
             self._quiz = "active"
             self._problems = list(problems)
-            self._total = len(self._problems) or DEFAULT_QUIZ_LENGTH
+            self._invented = {}
+            self._total = len(self._problems) or max(1, length)
             self._index = self._score = 0
             self._missed = self._dictated = False
+            self._learn_topic, self._offer_pending = None, False
 
     def stop_quiz(self) -> None:
         with self._lock:
@@ -265,8 +325,20 @@ class TutorSession:
         with self._lock:
             return self._problem_at(self._index + 1) if self._quiz == "active" else None
 
+    @property
+    def invented(self) -> bool:
+        """The running quiz makes its problems up: no ticked file had any."""
+        with self._lock:
+            return self._quiz is not None and not self._problems
+
     def _problem_at(self, index: int) -> QuizProblem | None:
-        return self._problems[index] if index < len(self._problems) else None
+        if self._problems:
+            return self._problems[index] if index < len(self._problems) else None
+        if index >= self._total:
+            return None
+        if index not in self._invented:
+            self._invented[index] = invent_problem(index + 1, self._total, self._rng)
+        return self._invented[index]
 
     @property
     def dictated(self) -> bool:
@@ -311,8 +383,16 @@ class TutorSession:
             self._offer_pending = True
 
     def resolve_offer(self) -> None:
+        """The student answered the offer: the lesson goes on with the same topic."""
         with self._lock:
             self._offer_pending = False
+
+    def expire_offer(self) -> None:
+        """The student said something else: the offer is only answered by the very next turn."""
+        with self._lock:
+            if self._offer_pending:
+                self._offer_pending = False
+                self._learn_topic = None
 
     # ---- conversation memory -------------------------------------------------
     def turns(self) -> list[dict[str, str]]:

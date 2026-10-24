@@ -7,16 +7,23 @@ import csv
 import json
 import logging
 import os
+import random
 import re
 import tempfile
 import threading
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
 
 DEFAULT_LEVEL = 1
+# A worksheet without "Level N" headings is taken to get harder as it goes (the usual layout): its problems get
+# levels 1..POSITION_LEVELS by position, so they mix with a quiz bank's levels instead of all being level 1.
+POSITION_LEVELS = 5
+INVENTED_SOURCE = "(invented)"
 PROBLEM_COLUMNS = ("problem", "question", "exercise")
 ANSWER_COLUMNS = ("answer", "solution")
 TOPIC_COLUMNS = ("topic", "subject", "unit")
@@ -108,6 +115,7 @@ def parse_worksheet_text(text: str, source: str) -> list[QuizProblem]:
     problems: list[dict[str, Any]] = []
     by_number: dict[int, dict[str, Any]] = {}
     topic, level, in_key = "", DEFAULT_LEVEL, False
+    levelled = last_kept = False
     for raw in text.splitlines():
         line = _clean(raw)
         if not line:
@@ -120,18 +128,19 @@ def parse_worksheet_text(text: str, source: str) -> list[QuizProblem]:
             in_key, title = False, heading.group("text")
             found = _LEVEL.search(title)
             if found:
-                level = _level(found.group("n"))
+                level, levelled = _level(found.group("n")), True
                 title = _LEVEL.sub("", title).strip(" -—–:")
             if title:
                 topic = title
             continue
         found = _LEVEL.fullmatch(line.strip(" -—–:"))
         if found:
-            level = _level(found.group("n"))
+            level, levelled = _level(found.group("n")), True
             continue
         answer = _ANSWER_LINE.match(line)
         if answer:
-            if problems and problems[-1]["answer"] is None:
+            # Only under the problem it belongs to: a skipped instruction line can have its own answer.
+            if last_kept and problems[-1]["answer"] is None:
                 problems[-1]["answer"] = answer.group("text").strip()
             continue
         numbered = _NUMBERED.match(line)
@@ -147,11 +156,16 @@ def parse_worksheet_text(text: str, source: str) -> list[QuizProblem]:
         given = None
         if inline and inline.start() > 0:
             given, body = inline.group("text").strip(), body[: inline.start()].strip()
-        if not _looks_like_math(body):
+        last_kept = _looks_like_math(body)
+        if not last_kept:
             continue
         item = {"problem": body, "answer": given or None, "topic": topic, "level": level}
         problems.append(item)
         by_number.setdefault(number, item)
+    if not levelled:
+        span = min(len(problems), POSITION_LEVELS)
+        for i, item in enumerate(problems):
+            item["level"] = DEFAULT_LEVEL + i * span // len(problems)
     return [QuizProblem(p["problem"], p["answer"], p["topic"], p["level"], source) for p in problems]
 
 
@@ -171,11 +185,31 @@ def _document_text(path: Path) -> str:
     return ""
 
 
+_PREFIXED = re.compile(r"^\s*(?:problem|question|exercise|problema|pregunta|ejercicio)\s*#?\s*\d{1,3}\s*[:.)]", re.I)
+# Words that can sit next to a real problem's math; any other word makes a numbered line prose (a tip, a step).
+_PROBLEM_WORDS = frozenset(
+    {"solve", "simplify", "evaluate", "factor", "expand", "find", "calculate", "compute", "what", "how", "much"}
+    | {"many", "round", "convert", "write", "graph", "plot", "and", "the", "for"}
+)
+
+
+def _mostly_math(body: str) -> bool:
+    words = [w for w in re.findall(r"[a-zA-Z]{3,}", body) if w.lower() not in _PROBLEM_WORDS]
+    return _looks_like_math(body) and len(words) <= 1
+
+
 def is_worksheet(source: str, text: str) -> bool:
-    """The file name, first line or a markdown heading calls it a worksheet, quiz, exercise set, homework..."""
+    """Called a worksheet (file name, first line or a heading: worksheet, quiz, exercise, homework...) or laid out
+    like one: "Problem N:" lines, "Answer:" lines, or numbered lines that are mostly bare math."""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     titles = [re.sub(r"[_.\-]+", " ", Path(source).stem), *lines[:1], *(line for line in lines if line.startswith("#"))]
-    return any(_WORKSHEET_HINT.search(title) for title in titles)
+    if any(_WORKSHEET_HINT.search(title) for title in titles):
+        return True
+    if any(_PREFIXED.match(line) or _ANSWER_LINE.match(line) for line in lines):
+        return True
+    numbered = [found.group("text") for found in map(_NUMBERED.match, lines) if found]
+    math = sum(1 for body in numbered if _mostly_math(_clean(body)))
+    return math >= 2 and 2 * math >= len(numbered)
 
 
 def parse_quiz_file(path: str | Path, source: str) -> list[QuizProblem]:
@@ -189,6 +223,254 @@ def parse_quiz_file(path: str | Path, source: str) -> list[QuizProblem]:
     except Exception as exc:
         log.warning("could not read quiz problems from %s: %s", source, exc)
         return []
+
+
+def pick_progressive(problems: Sequence[QuizProblem], length: int) -> list[QuizProblem]:
+    """At most `length` of the (easiest-first) problems, spread evenly so the quiz still climbs every level."""
+    if length <= 0 or len(problems) <= length:
+        return list(problems)
+    if length == 1:
+        return [problems[0]]
+    last = len(problems) - 1
+    return [problems[round(i * last / (length - 1))] for i in range(length)]
+
+
+# ---- answers kept away from the model ------------------------------------------------------------------------
+
+_ANSWER_TAIL = re.compile(r"[(\[]?\s*\b(?:answers?|ans|solutions?|respuestas?)\b\s*[:=].*$", re.I)
+# The ingestor writes a CSV row as "Row 3: problem is 3/4 - 1/2, answer is 1/4, topic is ..., level is 1."
+_CSV_ROW = re.compile(r"^\s*Row\s+\d+\s*:")
+_CSV_ANSWER = re.compile(
+    r"(?:,\s*)?\b(?:\w+[ _])?(?:answer|solution|respuesta)s?\s+is\s+.*?(?=,\s|\.\s|\.?\s*$)", re.I | re.M
+)
+
+
+def strip_answers(text: str) -> str:
+    """The text without its answers: "Answer: x = 6" lines, "(answer: 6)", an answer-key block and a quiz-bank row's
+    "answer is ...". Retrieved notes go into every math prompt; with an answer in them the model reads it out or
+    copies it as the student's answer."""
+    out: list[str] = []
+    in_key = False
+    for line in text.splitlines():
+        cleaned = _clean(line)
+        if _ANSWER_KEY.match(cleaned):
+            in_key = True
+            continue
+        if in_key:
+            if not _HEADING.match(cleaned):
+                continue  # everything under "Answer key" is an answer
+            in_key = False
+        if _ANSWER_LINE.match(cleaned):
+            continue
+        if _CSV_ROW.match(line):
+            line = _CSV_ANSWER.sub("", line)
+        line = _ANSWER_TAIL.sub("", line).rstrip()
+        if cleaned and not line.strip():
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+# ---- solving and inventing problems ---------------------------------------------------------------------------
+
+_MATH_TOKEN = re.compile(r"\s*(?:(?P<num>\d+(?:\.\d+)?|\.\d+)|(?P<var>[a-z])|(?P<op>[-+*/÷()=]))", re.I)
+_INSTRUCTION = re.compile(
+    r"^\s*(?:solve|simplify|evaluate|compute|calculate|work\s+out|find|what\s+is)(?:\s+for\s+[a-z])?\s*:?\s*", re.I
+)
+Linear = tuple[Fraction, Fraction]  # a*x + b
+
+
+class _Unsolvable(ValueError):
+    pass
+
+
+class _LinearParser:
+    """Recursive descent over + - * / ( ) with implicit products (2x, 3(x + 1)); values are linear in one letter."""
+
+    def __init__(self, tokens: list[tuple[str, str]]) -> None:
+        self.tokens = tokens
+        self.pos = 0
+        self.var: str | None = None
+
+    def peek(self) -> tuple[str, str] | None:
+        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+    def take(self) -> tuple[str, str]:
+        token = self.peek()
+        if token is None:
+            raise _Unsolvable("unexpected end")
+        self.pos += 1
+        return token
+
+    def expr(self) -> Linear:
+        value = self.term()
+        while (token := self.peek()) is not None and token[1] in "+-":
+            self.take()
+            a, b = self.term()
+            value = (value[0] + a, value[1] + b) if token[1] == "+" else (value[0] - a, value[1] - b)
+        return value
+
+    def term(self) -> Linear:
+        value = self.fraction()
+        while (token := self.peek()) is not None:
+            if token[1] in ("*", "÷"):
+                self.take()
+                value = _times(value, self.fraction()) if token[1] == "*" else _over(value, self.fraction())
+            elif token[0] in ("num", "var") or token[1] == "(":
+                value = _times(value, self.fraction())
+            else:
+                break
+        return value
+
+    def fraction(self) -> Linear:
+        # A written fraction bar binds tighter than × and ÷: "5/6 ÷ 1/3" is (5/6) ÷ (1/3).
+        value = self.unary()
+        while (token := self.peek()) is not None and token[1] == "/":
+            self.take()
+            value = _over(value, self.unary())
+        return value
+
+    def unary(self) -> Linear:
+        token = self.peek()
+        if token is not None and token[1] in "+-":
+            self.take()
+            a, b = self.unary()
+            return (-a, -b) if token[1] == "-" else (a, b)
+        return self.atom()
+
+    def atom(self) -> Linear:
+        kind, text = self.take()
+        if kind == "num":
+            return Fraction(0), Fraction(text)
+        if kind == "var":
+            if self.var not in (None, text):
+                raise _Unsolvable("more than one letter")
+            self.var = text
+            return Fraction(1), Fraction(0)
+        if text == "(":
+            value = self.expr()
+            if self.take()[1] != ")":
+                raise _Unsolvable("unbalanced brackets")
+            return value
+        raise _Unsolvable(f"unexpected {text!r}")
+
+
+def _times(p: Linear, q: Linear) -> Linear:
+    if p[0] and q[0]:
+        raise _Unsolvable("not linear")
+    return p[0] * q[1] + q[0] * p[1], p[1] * q[1]
+
+
+def _over(p: Linear, q: Linear) -> Linear:
+    if q[0]:
+        raise _Unsolvable("dividing by the letter")
+    return p[0] / q[1], p[1] / q[1]
+
+
+def _fmt(value: Fraction) -> str:
+    return str(value.numerator) if value.denominator == 1 else f"{value.numerator}/{value.denominator}"
+
+
+def _math_tokens(text: str) -> list[tuple[str, str]]:
+    tokens: list[tuple[str, str]] = []
+    pos, text = 0, text.strip()
+    while pos < len(text):
+        found = _MATH_TOKEN.match(text, pos)
+        if not found:
+            raise _Unsolvable(f"not math at {pos}")
+        kind = found.lastgroup or "op"
+        tokens.append((kind, found.group(kind).lower()))
+        pos = found.end()
+    return tokens
+
+
+def solve_problem(text: str | None) -> str | None:
+    """The answer of a one-letter linear equation ("2(x + 5) = 3x + 4" -> "x = 6") or of plain arithmetic
+    ("1/2 + 1/3" -> "5/6"), else None (quadratics, systems, word problems...)."""
+    norm = str(text or "").replace("×", "*").replace("·", "*").replace("−", "-").replace("–", "-")
+    norm = _INSTRUCTION.sub("", norm.strip()).rstrip(" ?.")
+    norm = re.sub(r"\s*=\s*[?_\s]*$", "", norm)  # "12 ÷ 4 = ?" asks for the value
+    if "=" not in norm:
+        norm = re.sub(r"(?<=\d)\s*x\s*(?=\d)", "*", norm)  # "6 x 7" is a product, not a letter
+    try:
+        parser = _LinearParser(_math_tokens(norm))
+        left = parser.expr()
+        right = None
+        if (token := parser.peek()) is not None and token[1] == "=":
+            parser.take()
+            right = parser.expr()
+        if parser.peek() is not None or not parser.tokens:
+            return None
+        if right is None:
+            return None if parser.var else _fmt(left[1])
+        if parser.var is None or left[0] == right[0]:
+            return None
+        return f"{parser.var} = {_fmt((right[1] - left[1]) / (left[0] - right[0]))}"
+    except (_Unsolvable, ValueError, ZeroDivisionError):
+        return None
+
+
+def _x(coefficient: int) -> str:
+    return "x" if coefficient == 1 else f"{coefficient}x"
+
+
+def _add_or_subtract(r: random.Random) -> str:
+    a, b = r.randint(2, 9), r.randint(2, 12)
+    return f"x + {a} = {a + b}" if r.random() < 0.5 else f"x - {a} = {b}"
+
+
+def _multiply_or_divide(r: random.Random) -> str:
+    a, b = r.randint(2, 9), r.randint(2, 10)
+    return f"{a}x = {a * b}" if r.random() < 0.5 else f"x/{a} = {b}"
+
+
+def _two_step(r: random.Random) -> str:
+    a, x = r.randint(2, 6), r.randint(2, 10)
+    if r.random() < 0.5:
+        b = r.randint(1, 9)
+        return f"{a}x + {b} = {a * x + b}"
+    b = r.randint(1, min(9, a * x - 1))
+    return f"{a}x - {b} = {a * x - b}"
+
+
+def _two_step_harder(r: random.Random) -> str:
+    if r.random() < 0.5:
+        a, q, b = r.randint(2, 5), r.randint(1, 6), r.randint(1, 9)
+        return f"x/{a} + {b} = {q + b}"
+    a, x, d = r.randint(2, 5), r.randint(1, 6), r.randint(1, 9)
+    return f"{a * x + d} - {a}x = {d}"
+
+
+def _distributive(r: random.Random) -> str:
+    a, b = r.randint(2, 5), r.randint(1, 6)
+    if r.random() < 0.5:
+        return f"{a}(x + {b}) = {a * (r.randint(1, 9) + b)}"
+    return f"{a}(x - {b}) = {a * r.randint(1, 9)}"
+
+
+def _both_sides(r: random.Random) -> str:
+    c, extra, x, b = r.randint(1, 4), r.randint(1, 4), r.randint(1, 9), r.randint(1, 9)
+    return f"{_x(c + extra)} + {b} = {_x(c)} + {extra * x + b}"
+
+
+_INVENTED: tuple[tuple[str, Callable[[random.Random], str]], ...] = (
+    ("one-step equations", _add_or_subtract),
+    ("one-step equations", _multiply_or_divide),
+    ("two-step equations", _two_step),
+    ("two-step equations", _two_step_harder),
+    ("distributive property", _distributive),
+    ("x on both sides", _both_sides),
+)
+
+
+def invent_problem(number: int, total: int, rng: random.Random | None = None) -> QuizProblem:
+    """A made-up problem `number` of `total` for a quiz without worksheet problems, with its answer: one-step
+    equations first, x on both sides last. A 3B model asked to invent one mostly echoes the student instead."""
+    rng = rng or random.Random()
+    index = min(len(_INVENTED) - 1, (max(1, number) - 1) * len(_INVENTED) // max(1, total))
+    topic, make = _INVENTED[index]
+    problem = make(rng)
+    return QuizProblem(problem, solve_problem(problem), topic, index + 1, INVENTED_SOURCE)
 
 
 class QuizBank:
