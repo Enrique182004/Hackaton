@@ -50,12 +50,17 @@ Check the hardware any time with `python scripts/hardware_check.py`.
 
 ## The dashboard
 
-- **System** — camera fps, calibration, knowledge size, model, microphone and voice at a glance; one-click
-  projector calibration.
-- **Whiteboard** — live calibrated or raw camera view with detected ink regions and the avatar's last target.
-- **Ask** — type or push-to-talk; a timeline of every answer with its state, latency, target and cited sources.
-- **Knowledge** — drag-and-drop PDF/TXT/MD/CSV/DOCX/PPTX/PNG/JPG, see and remove documents, test retrieval.
-- **Event log & configuration** — every socket event and the active settings.
+Open `http://localhost:5050/dashboard` on your laptop. It is laid out like a lab notebook, in three steps:
+
+1. **Choose your study files**: drag in PDFs, Word or PowerPoint files, CSVs, notes or photos of notes.
+   Tick the files the assistant should use. Unticked files are kept but ignored when answering.
+2. **Set up the board**: see what the camera sees, check the list (each problem says how to fix it), and
+   press **Line up camera and projector** once after moving either one.
+3. **Ask a question**: type it, press **Talk**, or click an example. Every answer is written into the
+   notebook with a note saying what the assistant did, which files it read and how long it took.
+
+**Behind the scenes** (collapsed) holds the raw camera view, detected drawings, file search, settings and
+the activity log.
 
 ## Configuration
 
@@ -74,6 +79,8 @@ Everything is an environment variable (see `biobench_sar/config.py`). The ones y
 | `SAR_WAKE_WORD` | `assistant` | Wake word |
 | `SAR_TTS_BACKEND` | `edge` | `edge` (online), `say` (macOS), `pyttsx3` (offline) or `none` |
 | `SAR_INK_MIN_AREA` / `_BLOCK_SIZE` / `_C` | `150` / `31` / `15` | Ink detection thresholds |
+| `SAR_RECORD_SECONDS` | `5` | How long push-to-talk records |
+| `SAR_SILENCE_RMS` | `0.01` | Wake-word chunks quieter than this are skipped (push-to-talk always records) |
 
 ## Development
 
