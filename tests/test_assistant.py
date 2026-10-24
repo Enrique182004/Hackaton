@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import json
+import os
 import sys
 import threading
 import time
 import types
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
 
 from biobench_sar import assistant as assistant_module
-from biobench_sar.assistant import HISTORY_SIZE, Assistant, estimate_speech_seconds
+from biobench_sar.assistant import HISTORY_SIZE, Assistant, DocumentSelection, estimate_speech_seconds
 from biobench_sar.config import Settings
 from biobench_sar.schemas import AvatarAction, RetrievedChunk
 
@@ -40,11 +43,13 @@ class Store:
     def __init__(self) -> None:
         self.results: list[RetrievedChunk] = []
         self.error: Exception | None = None
+        self.calls: list[tuple[str, int, list[str] | None]] = []
 
-    def query(self, text: str, k: int) -> list[RetrievedChunk]:
+    def query(self, text: str, k: int, sources: list[str] | None = None) -> list[RetrievedChunk]:
+        self.calls.append((text, k, sources))
         if self.error:
             raise self.error
-        return list(self.results)
+        return [r for r in self.results if sources is None or r.source in sources]
 
 
 class VLM:
@@ -53,11 +58,13 @@ class VLM:
         self.action = AvatarAction("one two three four", "pointing", 10, 20)
         self.on_call: Callable[[], None] | None = None
         self.seen: list[tuple[str, bytes | None, list[Any]]] = []
+        self.contexts: list[list[Any]] = []
 
     def evaluate(
         self, query: str, image: bytes | None, context: list[Any], ink: list[Any], size: tuple[int, int]
     ) -> AvatarAction:
         self.seen.append((query, image, ink))
+        self.contexts.append(list(context))
         if self.on_call:
             self.on_call()
         if self.error:
@@ -442,3 +449,164 @@ def test_ink_thresholds_come_from_settings(h: Harness, monkeypatch: pytest.Monke
     h.vision.frame = np.zeros((4, 4, 3), np.uint8)
     h.assistant.handle_query("q")
     assert seen == Settings().ink_kwargs
+
+
+# ---- document selection ----------------------------------------------------------
+
+
+@pytest.fixture
+def sel_path(tmp_path: Path) -> Path:
+    return tmp_path / "state" / "selection.json"
+
+
+def _tmp_leftovers(path: Path) -> list[str]:
+    return [p.name for p in path.parent.iterdir() if p.name != path.name] if path.parent.exists() else []
+
+
+def test_selection_missing_file_means_all_active(sel_path: Path) -> None:
+    sel = DocumentSelection(sel_path)
+    assert sel.active is None and sel.query_sources() is None
+    assert not sel_path.exists(), "loading never writes"
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["{not json", "", "[]", '"a.md"', "null", '{"sources": "a.md"}', '{"all": false}', '{"other": 1}'],
+)
+def test_selection_corrupt_file_means_all_active(sel_path: Path, content: str) -> None:
+    sel_path.parent.mkdir(parents=True)
+    sel_path.write_text(content)
+    assert DocumentSelection(sel_path).active is None
+
+
+def test_selection_loads_all_and_sources(sel_path: Path) -> None:
+    sel_path.parent.mkdir(parents=True)
+    sel_path.write_text('{"all": true}')
+    assert DocumentSelection(sel_path).active is None
+    sel_path.write_text('{"sources": ["b.md", "a.md", 3, null]}')
+    sel = DocumentSelection(sel_path)
+    assert sel.active == {"a.md", "b.md"}, "non-string names dropped"
+    assert sel.query_sources() == ["a.md", "b.md"]
+    sel_path.write_text('{"sources": []}')
+    assert DocumentSelection(sel_path).active == set()
+
+
+def test_selection_select_and_select_all_persist(sel_path: Path) -> None:
+    sel = DocumentSelection(sel_path)
+    sel.select(["b.md", "a.md", "a.md"])
+    assert json.loads(sel_path.read_text()) == {"sources": ["a.md", "b.md"]}
+    assert DocumentSelection(sel_path).active == {"a.md", "b.md"}, "survives a restart"
+    sel.select([])
+    assert json.loads(sel_path.read_text()) == {"sources": []}
+    assert DocumentSelection(sel_path).active == set()
+    sel.select_all()
+    assert json.loads(sel_path.read_text()) == {"all": True}
+    assert DocumentSelection(sel_path).active is None
+    assert _tmp_leftovers(sel_path) == [], "temp files are renamed into place"
+
+
+def test_selection_active_is_a_copy(sel_path: Path) -> None:
+    sel = DocumentSelection(sel_path)
+    sel.select(["a.md"])
+    sel.active.add("b.md")  # type: ignore[union-attr]
+    assert sel.active == {"a.md"}
+
+
+def test_selection_activate_only_extends_an_explicit_selection(sel_path: Path) -> None:
+    sel = DocumentSelection(sel_path)
+    sel.activate(["new.md"])
+    assert sel.active is None and not sel_path.exists(), "all active already includes new files"
+    sel.select(["a.md"])
+    sel.activate(["new.md", "a.md"])
+    assert sel.active == {"a.md", "new.md"}
+    assert json.loads(sel_path.read_text()) == {"sources": ["a.md", "new.md"]}
+
+
+def test_selection_discard(sel_path: Path) -> None:
+    sel = DocumentSelection(sel_path)
+    sel.discard("a.md")
+    assert sel.active is None and not sel_path.exists()
+    sel.select(["a.md", "b.md"])
+    sel.discard("a.md")
+    sel.discard("missing.md")
+    assert sel.active == {"b.md"}
+    assert json.loads(sel_path.read_text()) == {"sources": ["b.md"]}
+
+
+def test_selection_write_is_atomic(sel_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sel = DocumentSelection(sel_path)
+    sel.select(["a.md"])
+    before = sel_path.read_text()
+
+    def fail(src: Any, dst: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", fail)
+    sel.select(["b.md"])
+    assert sel_path.read_text() == before, "a failed write never leaves a half-written file"
+    assert _tmp_leftovers(sel_path) == [], "the temp file is cleaned up"
+    assert sel.active == {"b.md"}, "the new selection still applies until restart"
+
+
+def test_selection_concurrent_updates_stay_consistent(sel_path: Path) -> None:
+    sel = DocumentSelection(sel_path)
+    sel.select([])
+    names = [f"f{i}.md" for i in range(40)]
+
+    def worker(chunk: list[str]) -> None:
+        for name in chunk:
+            sel.activate([name])
+            sel.discard(name)
+            sel.activate([name])
+
+    threads = [threading.Thread(target=worker, args=(names[i::4],)) for i in range(4)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert sel.active == set(names)
+    assert json.loads(sel_path.read_text()) == {"sources": sorted(names)}
+    assert DocumentSelection(sel_path).active == set(names)
+
+
+def test_assistant_loads_selection_from_settings_at_startup(isolated_selection_file: Path) -> None:
+    isolated_selection_file.write_text('{"sources": ["a.md"]}')
+    assert Settings().selection_file == isolated_selection_file
+    assert Harness().assistant.active_sources == {"a.md"}
+
+
+def test_assistant_defaults_to_all_active(h: Harness) -> None:
+    assert h.assistant.active_sources is None
+
+
+def test_pipeline_searches_everything_when_all_active(h: Harness) -> None:
+    h.store.results = [_chunk("a.md"), _chunk("b.md")]
+    h.assistant.handle_query("q")
+    assert h.store.calls == [("q", Settings().rag_top_k, None)]
+    assert h.assistant.history()[0]["sources"] == ["a.md", "b.md"]
+
+
+def test_pipeline_passes_sorted_selection_to_store(h: Harness) -> None:
+    h.store.results = [_chunk("a.md"), _chunk("b.md"), _chunk("c.md")]
+    h.assistant.selection.select(["c.md", "a.md"])
+    h.assistant.handle_query("q")
+    assert h.store.calls == [("q", Settings().rag_top_k, ["a.md", "c.md"])]
+    assert [c.source for c in h.vlm.contexts[0]] == ["a.md", "c.md"]
+    assert h.assistant.history()[0]["sources"] == ["a.md", "c.md"]
+
+
+def test_pipeline_skips_rag_when_selection_is_empty(h: Harness) -> None:
+    h.store.results = [_chunk("a.md")]
+    h.assistant.selection.select([])
+    h.assistant.handle_query("q")
+    assert h.store.calls == [], "store never queried"
+    assert h.vlm.contexts == [[]]
+    item = h.assistant.history()[0]
+    assert item["sources"] == [] and item["error"] is False
+    assert "speak" in h.names()
+
+
+def test_pipeline_follows_selection_changes_between_queries(h: Harness) -> None:
+    h.assistant.selection.select(["a.md"])
+    h.assistant.handle_query("one")
+    h.assistant.selection.select_all()
+    h.assistant.handle_query("two")
+    assert [c[2] for c in h.store.calls] == [["a.md"], None]

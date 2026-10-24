@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from biobench_sar.config import Settings
+from biobench_sar.config import DATA_DIR, Settings
 
 
 def _clear(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -60,3 +62,13 @@ def test_ink_settings_feed_find_ink_regions(monkeypatch: pytest.MonkeyPatch) -> 
         img, min_area=s.ink_min_area, max_regions=s.ink_max_regions, block_size=s.ink_block_size, c=s.ink_c
     )
     assert len(regions) == 1
+
+
+def test_selection_file_defaults_to_data_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SAR_SELECTION_FILE", raising=False)
+    assert Settings().selection_file == DATA_DIR / "selection.json"
+
+
+def test_selection_file_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SAR_SELECTION_FILE", str(tmp_path / "picked.json"))
+    assert Settings().selection_file == tmp_path / "picked.json"

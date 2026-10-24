@@ -98,7 +98,7 @@ class VectorStore:
     def __init__(self, persist_dir: Path, collection: str = "biobench", embed_model: str = "all-MiniLM-L6-v2",
                  embedder: Callable[[list[str]], list[list[float]]] | None = None) -> None  # embedder injectable for tests
     def add_chunks(self, chunks: list[Chunk]) -> int   # upsert, stable ids; returns number added
-    def query(self, text: str, k: int = 4) -> list[RetrievedChunk]
+    def query(self, text: str, k: int = 4, sources: list[str] | None = None) -> list[RetrievedChunk]  # None = all files, [] = nothing
     def count(self) -> int; def clear(self) -> None
 ```
 
@@ -138,12 +138,13 @@ HTTP (F implements, E calls):
 | GET | `/dashboard`, `/precharge` | operator dashboard (`templates/precharge.html`, `static/js/dashboard/`) |
 | GET | `/api/config` | active non-secret settings |
 | GET | `/api/history` | `{"interactions": [...]}` newest first (query, spoken_text, animation_state, target, sources, latency_s, error) |
-| GET | `/api/documents` | `{"documents": [{"source", "type", "chunks"}], "total_chunks"}` |
-| DELETE | `/api/documents/<source>` | `{"deleted": n}`; 404 if unknown |
+| GET | `/api/documents` | `{"documents": [{"source", "type", "chunks", "active": bool}], "total_chunks": int, "active_count": int, "all_active": bool}` — `active` = answers may use this file; `all_active` = no explicit selection (every file, default) |
+| PUT | `/api/documents/selection` | `{"all": true}` → every file active, or `{"sources": ["a.md", ...]}` → exactly those active (unknown names ignored; `[]` = none, answers skip RAG); non-list `sources` / other body → 400. Returns the `GET /api/documents` body. Persisted to `SAR_SELECTION_FILE` |
+| DELETE | `/api/documents/<source>` | `{"deleted": n}`; 404 if unknown. Also drops it from the selection |
 | GET | `/api/search?q=&k=` | `{"results": [{"text", "source", "score"}]}`, k clamped 1–10 |
 | GET | `/api/ink` | `{"regions": [InkRegion], "size": [w, h]}`; 503 without a frame |
-| POST | `/api/upload` | multipart `files[]` → `{"files": [{"name", "chunks", "error"?}], "total_chunks": int}` |
-| GET | `/api/status` | `{"fps", "camera_running", "calibrated", "doc_chunks", "vlm_backend", "vlm_model", "audio_available", "state"}` |
+| POST | `/api/upload` | multipart `files[]` → `{"files": [{"name", "chunks", "replaced"?, "error"?}], "total_chunks": int}`; with an explicit selection, uploaded files become active |
+| GET | `/api/status` | `{"fps", "camera_running", "calibrated", "doc_chunks", "active_documents", "total_documents", "vlm_backend", "vlm_model", "audio_available", "state"}` |
 | POST | `/api/query` | `{"text": str}` → `202 {"accepted": true}` (result arrives over socket) |
 | POST | `/api/listen` | push-to-talk trigger → `202` |
 | POST | `/api/calibrate` | shows checkerboard, captures, solves → `{"ok": bool, "error"?: str}` |
@@ -153,7 +154,8 @@ HTTP (F implements, E calls):
 
 Socket.IO events (server → client): `avatar_update {animation_state, target_x, target_y, spoken_text}`,
 `speak {url: str | null, text}`, `status {state: "idle"|"listening"|"transcribing"|"thinking"|"speaking", detail?}`,
-`transcript {text}`, `show_calibration {url}`, `hide_calibration {}`, `interaction {...history item}`.
+`transcript {text}`, `show_calibration {url}`, `hide_calibration {}`, `interaction {...history item}`,
+`documents_changed {...GET /api/documents body}` (after upload, delete and selection changes).
 On connect the server sends the current `status` to the new client.
 Busy handling: `/api/query` → 409 while a query runs; `/api/listen` → 409 already recording, 503 no mic;
 `/api/calibrate` → 503 without a frame, 409 while another calibration runs.

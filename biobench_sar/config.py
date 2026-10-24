@@ -52,6 +52,10 @@ class Settings:
     chroma_dir: Path = field(default_factory=lambda: Path(os.environ.get("SAR_CHROMA_DIR", DATA_DIR / "chroma_db")))
     upload_dir: Path = field(default_factory=lambda: Path(os.environ.get("SAR_UPLOAD_DIR", DATA_DIR / "uploads")))
     tts_dir: Path = field(default_factory=lambda: Path(os.environ.get("SAR_TTS_DIR", DATA_DIR / "tts")))
+    # Which uploaded files answers may use: {"all": true} or {"sources": [...]}.
+    selection_file: Path = field(
+        default_factory=lambda: Path(os.environ.get("SAR_SELECTION_FILE", DATA_DIR / "selection.json"))
+    )
     embed_model: str = field(default_factory=lambda: os.environ.get("SAR_EMBED_MODEL", "all-MiniLM-L6-v2"))
     rag_top_k: int = field(default_factory=lambda: _env_int("SAR_RAG_TOP_K", 4))
     # ollama | openai | mock

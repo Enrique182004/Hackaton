@@ -32,7 +32,10 @@ class VectorStore:
         Path(persist_dir).mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(path=str(persist_dir))
         self._col = self._open()
-        self._count = int(self._col.count())
+        self._count = 0
+        self._sources: list[dict[str, Any]] = []
+        with self._lock:
+            self._refresh()
 
     def _open(self) -> Any:
         return self._client.get_or_create_collection(self._collection_name, metadata={"hnsw:space": "cosine"})
@@ -75,6 +78,18 @@ class VectorStore:
     def _source_ids(self, source: str) -> list[str]:
         return list(self._col.get(where={"source": source}, include=[])["ids"])
 
+    def _refresh(self) -> None:
+        """Recompute the cached count and per-file summary. Caller holds the lock."""
+        self._count = int(self._col.count())
+        metadatas = self._col.get(include=["metadatas"])["metadatas"] or []
+        by_source: dict[str, dict[str, Any]] = {}
+        for meta in metadatas:
+            meta = meta or {}
+            source = str(meta.get("source", ""))
+            entry = by_source.setdefault(source, {"source": source, "type": str(meta.get("type", "")), "chunks": 0})
+            entry["chunks"] += 1
+        self._sources = sorted(by_source.values(), key=lambda d: (-d["chunks"], d["source"]))
+
     def add_chunks(self, chunks: list[Chunk]) -> int:
         unique = self._unique(chunks)
         if not unique:
@@ -82,7 +97,7 @@ class VectorStore:
         embeddings = self._embed([c.text for c in unique.values()])
         with self._lock:
             self._upsert(unique, embeddings)
-            self._count = int(self._col.count())
+            self._refresh()
         return len(unique)
 
     def replace_source(self, source: str, chunks: list[Chunk]) -> tuple[int, int]:
@@ -101,22 +116,35 @@ class VectorStore:
             stale = list(existing - unique.keys())
             if stale:
                 self._col.delete(ids=stale)
-            self._count = int(self._col.count())
+            self._refresh()
         return len(unique.keys() - existing), len(stale)
 
     def source_count(self, source: str) -> int:
         with self._lock:
             return len(self._source_ids(source))
 
-    def query(self, text: str, k: int = 4) -> list[RetrievedChunk]:
-        n = self._count
-        if n == 0 or not text.strip() or k <= 0:
+    def query(self, text: str, k: int = 4, sources: list[str] | None = None) -> list[RetrievedChunk]:
+        """Top-k chunks for `text`. `sources=None` searches every file; a list searches only those files."""
+        if sources is not None and not sources:
             return []
+        if self._count == 0 or not text.strip() or k <= 0:
+            return []
+        where: dict[str, Any] | None = None
+        names: set[str] = set()
+        if sources is not None:
+            names = set(sources)
+            ordered = sorted(names)
+            where = {"source": ordered[0]} if len(ordered) == 1 else {"source": {"$in": ordered}}
         emb = self._embed([text])
         with self._lock:
+            # Count under the same lock as the query: some chroma versions raise if n_results > matches.
+            n = self._count if where is None else sum(d["chunks"] for d in self._sources if d["source"] in names)
+            if n == 0:
+                return []
             res = self._col.query(
                 query_embeddings=emb,
                 n_results=min(k, n),
+                where=where,
                 include=["documents", "metadatas", "distances"],
             )
         out: list[RetrievedChunk] = []
@@ -130,23 +158,18 @@ class VectorStore:
         return self._count
 
     def list_sources(self) -> list[dict[str, Any]]:
-        """One entry per ingested file: name, type and chunk count, largest first."""
-        with self._lock:
-            metadatas = self._col.get(include=["metadatas"])["metadatas"] or []
-        by_source: dict[str, dict[str, Any]] = {}
-        for meta in metadatas:
-            meta = meta or {}
-            source = str(meta.get("source", ""))
-            entry = by_source.setdefault(source, {"source": source, "type": str(meta.get("type", "")), "chunks": 0})
-            entry["chunks"] += 1
-        return sorted(by_source.values(), key=lambda d: (-d["chunks"], d["source"]))
+        """One entry per ingested file: name, type and chunk count, largest first.
+
+        Cached and lock-free like count(): /api/status reads it on every poll.
+        """
+        return [dict(d) for d in self._sources]
 
     def delete_source(self, source: str) -> int:
         with self._lock:
             ids = self._col.get(where={"source": source})["ids"]
             if ids:
                 self._col.delete(ids=ids)
-            self._count = int(self._col.count())
+            self._refresh()
         return len(ids)
 
     def clear(self) -> None:
@@ -154,3 +177,4 @@ class VectorStore:
             self._client.delete_collection(self._collection_name)
             self._col = self._open()
             self._count = 0
+            self._sources = []

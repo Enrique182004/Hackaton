@@ -62,6 +62,8 @@ def test_status_shape(built: Any) -> None:
         "camera_running",
         "calibrated",
         "doc_chunks",
+        "active_documents",
+        "total_documents",
         "vlm_backend",
         "vlm_model",
         "audio_available",
@@ -73,6 +75,7 @@ def test_status_shape(built: Any) -> None:
         "uptime_s",
     } <= set(data)
     assert data["state"] == "idle" and data["audio_available"] is True
+    assert data["active_documents"] == 0 and data["total_documents"] == 0
 
 
 @pytest.fixture
@@ -312,14 +315,26 @@ def test_history_empty_then_after_query(built: Any) -> None:
 
 def test_documents_lists_sources_with_total(built: Any, fakes: Any) -> None:
     client = built[0].test_client()
-    assert client.get("/api/documents").get_json() == {"documents": [], "total_chunks": 0}
+    assert client.get("/api/documents").get_json() == {
+        "documents": [],
+        "total_chunks": 0,
+        "active_count": 0,
+        "all_active": True,
+    }
     fakes.store.sources = [
         {"source": "a.pdf", "type": "pdf", "chunks": 3},
         {"source": "b.txt", "type": "txt", "chunks": 2},
     ]
     data = client.get("/api/documents").get_json()
-    assert [d["source"] for d in data["documents"]] == ["a.pdf", "b.txt"]
-    assert data["total_chunks"] == 5
+    assert data == {
+        "documents": [
+            {"source": "a.pdf", "type": "pdf", "chunks": 3, "active": True},
+            {"source": "b.txt", "type": "txt", "chunks": 2, "active": True},
+        ],
+        "total_chunks": 5,
+        "active_count": 2,
+        "all_active": True,
+    }
 
 
 def test_delete_document_found_and_missing(built: Any, fakes: Any) -> None:
@@ -556,3 +571,245 @@ def test_socket_connect_mid_query_gets_current_state(built: Any, fakes: Any) -> 
     finally:
         gate.set()
         collect(socketio.test_client(app), ["speak"])
+
+
+# ---- document selection ---------------------------------------------------------
+
+DOCS = [
+    {"source": "a.pdf", "type": "pdf", "chunks": 3},
+    {"source": "b.txt", "type": "txt", "chunks": 2},
+    {"source": "c.md", "type": "md", "chunks": 1},
+]
+SELECTION = "/api/documents/selection"
+
+
+def _with_docs(fakes: Any) -> None:
+    fakes.store.sources = [dict(d) for d in DOCS]
+
+
+def _active(body: dict[str, Any]) -> dict[str, bool]:
+    return {d["source"]: d["active"] for d in body["documents"]}
+
+
+def _pushed(sio: Any, wait: bool = True) -> list[dict[str, Any]]:
+    got = collect(sio, ["documents_changed"], timeout=1.0) if wait else sio.get_received()
+    return [m["args"][0] for m in got if m["name"] == "documents_changed"]
+
+
+def _ask(app: Any, socketio: Any, text: str = "q") -> dict[str, Any]:
+    sio = socketio.test_client(app)
+    assert app.test_client().post("/api/query", json={"text": text}).status_code == 202
+    got = collect(sio, ["interaction"])
+    return next(m for m in got if m["name"] == "interaction")["args"][0]
+
+
+def test_select_sources_marks_exactly_those_active(built: Any, fakes: Any, settings: Settings) -> None:
+    _with_docs(fakes)
+    client = built[0].test_client()
+    r = client.put(SELECTION, json={"sources": ["c.md", "a.pdf", "nope.pdf", 7]})
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body == {
+        "documents": [
+            {"source": "a.pdf", "type": "pdf", "chunks": 3, "active": True},
+            {"source": "b.txt", "type": "txt", "chunks": 2, "active": False},
+            {"source": "c.md", "type": "md", "chunks": 1, "active": True},
+        ],
+        "total_chunks": 6,
+        "active_count": 2,
+        "all_active": False,
+    }
+    assert client.get("/api/documents").get_json() == body, "PUT returns the GET body"
+    assert json.loads(settings.selection_file.read_text()) == {"sources": ["a.pdf", "c.md"]}, "unknown names ignored"
+
+
+def test_select_none_switches_every_file_off(built: Any, fakes: Any) -> None:
+    _with_docs(fakes)
+    body = built[0].test_client().put(SELECTION, json={"sources": []}).get_json()
+    assert body["active_count"] == 0 and body["all_active"] is False
+    assert not any(_active(body).values())
+
+
+def test_select_all_switches_everything_back_on(built: Any, fakes: Any, settings: Settings) -> None:
+    _with_docs(fakes)
+    client = built[0].test_client()
+    client.put(SELECTION, json={"sources": []})
+    body = client.put(SELECTION, json={"all": True}).get_json()
+    assert body["all_active"] is True and body["active_count"] == 3 and all(_active(body).values())
+    assert json.loads(settings.selection_file.read_text()) == {"all": True}
+
+
+@pytest.mark.parametrize("sources", ["a.pdf", None, {"a.pdf": True}, 3])
+def test_select_non_list_sources_is_400(built: Any, fakes: Any, settings: Settings, sources: Any) -> None:
+    _with_docs(fakes)
+    r = built[0].test_client().put(SELECTION, json={"sources": sources})
+    assert r.status_code == 400 and "error" in r.get_json()
+    assert not settings.selection_file.exists()
+    assert built[0].config["SAR_ASSISTANT"].active_sources is None
+
+
+@pytest.mark.parametrize("payload", ["[1]", '"abc"', "null", "{}", '{"all": false}', "not json"])
+def test_select_malformed_body_is_400(built: Any, settings: Settings, payload: str) -> None:
+    r = built[0].test_client().put(SELECTION, data=payload, content_type="application/json")
+    assert r.status_code == 400 and "error" in r.get_json()
+    assert not settings.selection_file.exists()
+
+
+def test_cross_origin_selection_change_blocked(built: Any, fakes: Any, settings: Settings) -> None:
+    _with_docs(fakes)
+    r = built[0].test_client().put(SELECTION, json={"sources": []}, headers=EVIL)
+    assert r.status_code == 403 and not settings.selection_file.exists()
+
+
+def test_selection_change_pushes_documents_changed(built: Any, fakes: Any) -> None:
+    _with_docs(fakes)
+    app, socketio = built
+    sio = socketio.test_client(app)
+    sio.get_received()
+    body = app.test_client().put(SELECTION, json={"sources": ["b.txt"]}).get_json()
+    assert _pushed(sio) == [body]
+
+
+def test_rejected_selection_does_not_push(built: Any, fakes: Any) -> None:
+    app, socketio = built
+    sio = socketio.test_client(app)
+    sio.get_received()
+    assert app.test_client().put(SELECTION, json={"sources": "x"}).status_code == 400
+    time.sleep(0.05)
+    assert _pushed(sio, wait=False) == []
+
+
+def test_upload_pushes_documents_changed(built: Any, ingest_texts: list[str]) -> None:
+    app, socketio = built
+    sio = socketio.test_client(app)
+    sio.get_received()
+    client = app.test_client()
+    _upload(client)
+    pushed = _pushed(sio)
+    assert pushed == [client.get("/api/documents").get_json()]
+    assert pushed[0]["documents"] == [{"source": "notes.txt", "type": "", "chunks": 2, "active": True}]
+
+
+def test_upload_keeps_all_active_mode(built: Any, settings: Settings, ingest_texts: list[str]) -> None:
+    client = built[0].test_client()
+    _upload(client)
+    assert client.get("/api/documents").get_json()["all_active"] is True
+    assert not settings.selection_file.exists(), "no explicit selection is created"
+
+
+def test_upload_activates_new_file_when_selection_is_explicit(
+    built: Any, fakes: Any, settings: Settings, ingest_texts: list[str]
+) -> None:
+    _with_docs(fakes)
+    client = built[0].test_client()
+    client.put(SELECTION, json={"sources": ["a.pdf"]})
+    _upload(client, "new.txt")
+    body = client.get("/api/documents").get_json()
+    assert _active(body) == {"a.pdf": True, "b.txt": False, "c.md": False, "new.txt": True}
+    assert body["all_active"] is False and body["active_count"] == 2
+    assert json.loads(settings.selection_file.read_text()) == {"sources": ["a.pdf", "new.txt"]}
+
+
+def test_reupload_switches_a_deselected_file_back_on(built: Any, ingest_texts: list[str]) -> None:
+    client = built[0].test_client()
+    _upload(client, "notes.txt")
+    _upload(client, "other.txt")
+    client.put(SELECTION, json={"sources": ["other.txt"]})
+    _upload(client, "notes.txt")
+    assert _active(client.get("/api/documents").get_json()) == {"notes.txt": True, "other.txt": True}
+
+
+def test_failed_or_empty_upload_is_not_activated(built: Any, ingest_texts: list[str]) -> None:
+    app, _ = built
+    client = app.test_client()
+    client.put(SELECTION, json={"sources": []})
+    ingest_texts[:] = []
+    assert _upload(client, "empty.txt").get_json()["files"][0]["chunks"] == 0
+    assert _upload(client, "bad.exe").get_json()["files"][0]["error"]
+    assert app.config["SAR_ASSISTANT"].active_sources == set()
+
+
+def test_delete_removes_document_from_selection_and_pushes(built: Any, fakes: Any, settings: Settings) -> None:
+    _with_docs(fakes)
+    app, socketio = built
+    client = app.test_client()
+    client.put(SELECTION, json={"sources": ["a.pdf", "b.txt"]})
+    sio = socketio.test_client(app)
+    sio.get_received()
+    assert client.delete("/api/documents/a.pdf").get_json() == {"deleted": 3}
+    assert json.loads(settings.selection_file.read_text()) == {"sources": ["b.txt"]}
+    pushed = _pushed(sio)
+    assert pushed == [client.get("/api/documents").get_json()]
+    assert _active(pushed[0]) == {"b.txt": True, "c.md": False}
+
+
+def test_delete_missing_document_does_not_push(built: Any) -> None:
+    app, socketio = built
+    sio = socketio.test_client(app)
+    sio.get_received()
+    assert app.test_client().delete("/api/documents/nope.pdf").status_code == 404
+    time.sleep(0.05)
+    assert _pushed(sio, wait=False) == []
+
+
+def test_document_named_selection_can_still_be_deleted(built: Any, fakes: Any) -> None:
+    fakes.store.sources = [{"source": "selection", "type": "", "chunks": 1}]
+    assert built[0].test_client().delete(SELECTION).get_json() == {"deleted": 1}
+
+
+def test_status_counts_active_and_total_documents(built: Any, fakes: Any) -> None:
+    _with_docs(fakes)
+    client = built[0].test_client()
+    status = client.get("/api/status").get_json()
+    assert (status["active_documents"], status["total_documents"]) == (3, 3)
+    client.put(SELECTION, json={"sources": ["b.txt"]})
+    status = client.get("/api/status").get_json()
+    assert (status["active_documents"], status["total_documents"]) == (1, 3)
+
+
+def test_selection_survives_restart(settings: Settings, fakes: app_module.Services, templates_dir: Path) -> None:
+    _with_docs(fakes)
+    first, _ = app_module.create_app(settings, fakes, template_folder=str(templates_dir))
+    first.test_client().put(SELECTION, json={"sources": ["b.txt"]})
+    second, _ = app_module.create_app(settings, fakes, template_folder=str(templates_dir))
+    assert _active(second.test_client().get("/api/documents").get_json()) == {
+        "a.pdf": False,
+        "b.txt": True,
+        "c.md": False,
+    }
+
+
+def test_corrupt_selection_file_means_all_active(
+    settings: Settings, fakes: app_module.Services, templates_dir: Path
+) -> None:
+    _with_docs(fakes)
+    settings.selection_file.write_text("{garbage")
+    flask_app, _ = app_module.create_app(settings, fakes, template_folder=str(templates_dir))
+    body = flask_app.test_client().get("/api/documents").get_json()
+    assert body["all_active"] is True and body["active_count"] == 3
+
+
+def test_query_searches_every_file_when_all_active(built: Any, fakes: Any) -> None:
+    fakes.store.query_results = [_chunk("x", "a.pdf", 0.9), _chunk("y", "b.txt", 0.8)]
+    item = _ask(*built)
+    assert fakes.store.query_sources == [None]
+    assert item["sources"] == ["a.pdf", "b.txt"]
+
+
+def test_query_uses_only_selected_files(built: Any, fakes: Any) -> None:
+    _with_docs(fakes)
+    fakes.store.query_results = [_chunk("x", "a.pdf", 0.9), _chunk("y", "b.txt", 0.8)]
+    built[0].test_client().put(SELECTION, json={"sources": ["c.md", "b.txt"]})
+    item = _ask(*built)
+    assert fakes.store.query_sources == [["b.txt", "c.md"]], "sorted selection passed to the store"
+    assert item["sources"] == ["b.txt"]
+    assert built[0].test_client().get("/api/history").get_json()["interactions"][0]["sources"] == ["b.txt"]
+
+
+def test_query_with_every_file_off_skips_rag(built: Any, fakes: Any) -> None:
+    _with_docs(fakes)
+    fakes.store.query_results = [_chunk("x", "a.pdf", 0.9)]
+    built[0].test_client().put(SELECTION, json={"sources": []})
+    item = _ask(*built)
+    assert fakes.store.query_calls == [], "store never queried"
+    assert item["sources"] == [] and item["error"] is False

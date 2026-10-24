@@ -36,7 +36,8 @@ class FakeStore:
         self.fail_query = False
         self.query_results: list[Any] = []
         self.query_calls: list[tuple[str, int]] = []
-        self.sources: list[dict[str, Any]] = []
+        self.query_sources: list[list[str] | None] = []  # the `sources` filter of each query call
+        self.sources: list[dict[str, Any]] = []  # listed documents that have no fake chunks behind them
 
     def add_chunks(self, chunks: list[Any]) -> int:
         self.chunks.extend(chunks)
@@ -51,19 +52,30 @@ class FakeStore:
     def source_count(self, source: str) -> int:
         return sum(1 for c in self.chunks if c.source == source)
 
-    def query(self, text: str, k: int = 4) -> list[Any]:
+    def query(self, text: str, k: int = 4, sources: list[str] | None = None) -> list[Any]:
         if self.fail_query:
             raise RuntimeError("store down")
         self.query_calls.append((text, k))
-        return list(self.query_results)
+        self.query_sources.append(None if sources is None else list(sources))
+        if sources is None:
+            return list(self.query_results)
+        return [r for r in self.query_results if r.source in sources]
 
     def list_sources(self) -> list[dict[str, Any]]:
-        return list(self.sources)
+        by_source: dict[str, dict[str, Any]] = {}
+        for c in self.chunks:
+            entry = by_source.setdefault(
+                c.source, {"source": c.source, "type": str(c.metadata.get("type", "")), "chunks": 0}
+            )
+            entry["chunks"] += 1
+        return [dict(d) for d in self.sources] + sorted(by_source.values(), key=lambda d: (-d["chunks"], d["source"]))
 
     def delete_source(self, source: str) -> int:
         matched = [d for d in self.sources if d["source"] == source]
         self.sources = [d for d in self.sources if d["source"] != source]
-        return sum(d["chunks"] for d in matched)
+        removed = sum(1 for c in self.chunks if c.source == source)
+        self.chunks = [c for c in self.chunks if c.source != source]
+        return sum(d["chunks"] for d in matched) + removed
 
     def count(self) -> int:
         return len(self.chunks)
@@ -117,6 +129,14 @@ class FakeTTS:
         return "fake.mp3"
 
 
+@pytest.fixture(autouse=True)
+def isolated_selection_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Every Settings() in tests reads/writes a throwaway selection file, never the developer's data/."""
+    path = tmp_path / "selection.json"
+    monkeypatch.setenv("SAR_SELECTION_FILE", str(path))
+    return path
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return dataclasses.replace(
@@ -125,6 +145,7 @@ def settings(tmp_path: Path) -> Settings:
         tts_dir=tmp_path / "tts",
         chroma_dir=tmp_path / "chroma",
         calibration_file=tmp_path / "calibration.json",
+        selection_file=tmp_path / "selection.json",
         projector_width=640,
         projector_height=360,
     )
