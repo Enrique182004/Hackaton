@@ -263,7 +263,7 @@ _SOLO = frozenset(["solo", "solos"])
 #      ("Réstale 3–8").
 # A range with no word after it (rule 2's second and third cases) also yields to a subtraction cue
 # ("Calcula 1990-2000", "el resultado de 3-5"). The unit and noun list is closed on purpose: a word missing
-# from it ("3-5 libros") reads "menos", which is never worse than reading a subtraction as a range.
+# from it ("3-5 libros") reads "menos". A missed range is the accepted cost of never reading a subtraction as one.
 _RANGE_WORDS = _word_set(
     """
     µm μm um mm cm m km mL ml L g kg h min s horas minutos segundos días semanas meses años muestras células páginas
