@@ -32,7 +32,9 @@ Fix what is cheap and safe in the same PR; anything bigger goes in the PR descri
    fallbacks, and no "once X lands" comments, for code that is already in the repo.
 4. **Settings in one place.** Every `SAR_*` variable is read in `config.py` through the forgiving `_env_*`
    helpers inside a `default_factory`, never at import time and never with a bare `int()`/`float()`. A variable
-   is in `sar.env.example` or the README only if `Settings` reads it.
+   is in `sar.env.example` or the README only if `Settings` reads it (the one exception is `SAR_ENV_FILE`, which
+   `envfile.py` reads before `Settings` exists). A new setting goes in the README's configuration table with its
+   real default.
 5. **Docs still true.** Commands, file names and settings that README, CLAUDE.md, AGENTS.md, this file and
    `docs/` mention still exist and agree. New modules go in the table below.
 6. **No leftovers.** No debug `print`/`console.log`, commented-out code or TODO without a reason.
@@ -43,15 +45,20 @@ All paths are inside `biobench_sar/`.
 
 | Area | Files |
 | --- | --- |
-| Server | `app.py` (routes, Socket.IO), `assistant.py` (Sense → Think → Act pipeline, status, history, file selection), `config.py`, `envfile.py` (`sar.env`), `schemas.py` |
-| Tutor | `tutor.py` (modes, learn-a-topic requests, voice commands, quiz progress, conversation memory), `lang.py` (English/Spanish detection and Spanish intents) |
+| Server | `app.py` (routes, Socket.IO, the phone PIN gate), `assistant.py` (Sense → Think → Act pipeline, status, history, file selection, language, target snapping, UI masking), `config.py`, `envfile.py` (`sar.env`), `paths.py` (checkout vs desktop build), `schemas.py` |
+| Tutor | `tutor.py` (modes, learn-a-topic requests, voice commands, quiz progress, stop confirmation, conversation memory), `grading.py` (quiz answers graded with sympy), `lang.py` (English/Spanish detection and Spanish intents) |
+| Phones | `lan.py` (PIN, device cookies, host checks, Socket.IO gate), `templates/join.html`, `static/js/dashboard/phone.js`, `static/sw.js`, `static/manifest.webmanifest` |
 | Vision | `core/homography.py`, `core/vision_loop.py`, `core/ink_crop.py`, `core/glare.py` |
 | Audio | `core/audio_trigger.py`, `llm/tts_engine.py` |
 | RAG | `rag/ingestor.py`, `rag/vector_store.py`, `rag/quiz_bank.py` |
 | VLM | `llm/vlm_client.py`, `llm/mathspeak.py`, `llm/mathspeak_es.py` |
 | Seed documents | `knowledge/math/`, `knowledge/biology/` |
 | Projector page | `templates/index.html`, `static/css/style.css`, `static/js/main.js` |
-| Dashboard | `templates/precharge.html`, `static/css/dashboard.css`, `static/js/dashboard/*.js` |
+| Dashboard | `templates/precharge.html`, `static/css/dashboard.css`, `static/js/dashboard/*.js`, `static/js/i18n.js` (English and Spanish text for both pages) |
+
+Outside the package: `packaging/` (desktop builds: `launcher.py`, `sar.spec`, `windows/installer.iss`,
+`fetch_models.py`, `check_macos_app.py`), `scripts/` (setup, hardware check, VLM benchmark, ink sweep, local
+builds, icons) and `docs/` (specs, build plan, hardware guides in English and Spanish, desktop builds, phones).
 
 Optional: to keep your own agent focused across sessions, add to your personal
 `~/.claude/CLAUDE.md`:

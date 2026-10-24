@@ -4,7 +4,9 @@ Run this once before the event. Order matters.
 
 ## Per machine (once)
 - [ ] **App setup** — `bash scripts/setup_mac.sh --pull-model` (Windows: `scripts/setup_windows.ps1`), then
-      `.venv/bin/python -m pip install -r requirements-dev.txt`. Check with `.venv/bin/python scripts/hardware_check.py`.
+      `.venv/bin/python -m pip install -r requirements-dev.txt` and `cp sar.env.example sar.env` (room settings
+      for the classroom kit). Check with `.venv/bin/python scripts/hardware_check.py`; the full plug-in-and-test
+      runbook is [docs/HARDWARE_DAY.md](docs/HARDWARE_DAY.md).
 - [ ] **Ollama running** — open the Ollama app. The app needs the vision model **`qwen2.5vl:3b`**
       (`ollama pull qwen2.5vl:3b`, or the `--pull-model` flag above). `qwen2.5-coder:7b` is optional and only
       used by the `draft-with-ollama` skill for drafting code.

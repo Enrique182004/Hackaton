@@ -14,26 +14,41 @@ knowledge base. Its subject is chosen by `SAR_PROFILE`:
   (`/biobench_sar`), RAG ingestion formats and frontend rules that both profiles share.
 
 Where this file and a spec conflict on the project itself, the spec wins. How the specs map onto modules,
-and every cross-module contract: [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md).
+every cross-module contract, and the deliberate departures from the specs ("Implementation notes"):
+[docs/BUILD_PLAN.md](docs/BUILD_PLAN.md). Running it on the real kit:
+[docs/HARDWARE_DAY.md](docs/HARDWARE_DAY.md).
 
 Non-negotiables:
 - **Math is spoken in words** — never `^ / * =` in `spoken_text` ("two thirds", "x squared", "three x plus
   five equals twelve"); `llm/mathspeak.py` is the safety net, not an excuse to skip it in the prompt.
-- **Help mode never gives the final answer** — only the next operation, pointing at that part of the ink.
+- **Help mode never gives the final answer** — only the next operation, pointing at that part of the ink
+  (which the projector highlights). The prompt says so and code guards it: re-ask once, then cut the sentence.
+- **Quiz answers are graded in code** (`biobench_sar/grading.py`, sympy). The model only copies the student's
+  answer into `board_answer`; its own verdict never awards a point.
+- **Bilingual** — every spoken or shown text has an English and a Mexican Spanish version (`lang.py`,
+  `llm/mathspeak_es.py`, `static/js/i18n.js`).
+- **The camera reads only the student's ink** — projected UI is masked out (`ui_rects`), and targets are snapped
+  to the ink in code.
 - **No monoliths** — build one module at a time in the `/biobench_sar` layout; wait for the user to name it.
 - **Concurrency first** — the camera loop stays at ~30 FPS (hardware check passes at ≥ 28) whatever the LLM is doing.
 - **Setup commands first** — give Windows PowerShell install commands (and the macOS equivalents) for pip and
   system binaries like Tesseract and PortAudio before Python code.
 - **Defensive JSON parsing** — `try/except` around VLM output; strip markdown fences before `json.loads`.
 - VLM output schema: `{spoken_text, animation_state: idle|walking|pointing|celebrating|error, target_x, target_y}`.
+  Quiz and practice prompts add one internal helper key (`board_answer` / `board_problem`) that code removes.
+- **Phones only behind the PIN** — any non-loopback bind turns the LAN PIN gate on (`lan.py`,
+  [docs/MOBILE.md](docs/MOBILE.md)); never add a route or socket handler that skips it.
 
 ## Stack
 - Backend: Python 3.10–3.12 (openai-whisper/torch lag the newest Python), Flask, Flask-SocketIO
 - Vision: opencv-python, numpy (`cv2.findHomography` / `cv2.warpPerspective`)
-- Audio/TTS: pyaudio, openai-whisper (local), edge-tts / `say` / pyttsx3
+- Audio/TTS: pyaudio (raw capture; no SpeechRecognition), openai-whisper (local, en/es), edge-tts / `say` /
+  pyttsx3 (en-US and es-MX voices)
 - RAG: chromadb (persistent, local), sentence-transformers `all-MiniLM-L6-v2`
 - Parsers: PyMuPDF, pandas, python-docx, python-pptx, pytesseract
 - VLM: Ollama `qwen2.5vl:3b` by default (`SAR_VLM_BACKEND=openai|mock` for others)
+- Grading: sympy (`grading.py`)
+- Desktop builds: PyInstaller + Inno Setup ([docs/DESKTOP_BUILDS.md](docs/DESKTOP_BUILDS.md))
 - Frontend: vanilla HTML/CSS/JS; the projector page (`templates/index.html`) has a pure `#000000` background
   (black = invisible on the board); the dashboard is a normal light page
 - Tests: pytest; lint/format: ruff
@@ -49,6 +64,8 @@ SAR_VLM_BACKEND=mock SAR_TTS_BACKEND=none .venv/bin/python -m biobench_sar   # n
 .venv/bin/python scripts/hardware_check.py
 .venv/bin/python -m scripts.bench_vlm -n 3
 .venv/bin/python -m scripts.bench_vlm --scenarios --profile math   # pass/fail cases (--profile biology is the default)
+.venv/bin/python packaging/launcher.py --self-test                  # what CI runs on every desktop build
+cp sar.env.example sar.env                                          # room settings for the classroom kit
 ```
 
 Windows PowerShell (after `scripts/setup_windows.ps1`, which prints the first and the mock line too; a `$env:`
@@ -62,6 +79,7 @@ $env:SAR_VLM_BACKEND='mock'; $env:SAR_TTS_BACKEND='none'; .\.venv\Scripts\python
 
 Both profiles share `SAR_DATA_DIR` (knowledge base, ticked files, quiz bank); give each its own
 (`SAR_DATA_DIR=data/biology`) to keep them apart. Deleting `data/chroma_db` loads the bundled documents again.
+Every `SAR_*` setting and its default: the [README's configuration table](README.md#configuration).
 
 ## Code rules
 - Be terse. No preamble, no summaries unless asked. Output code only.
