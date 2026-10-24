@@ -17,10 +17,14 @@ They do **not** bundle:
   `~/.cache/whisper` (`%USERPROFILE%\.cache\whisper` on Windows). Without internet that warm-up fails and
   speech stays off until a start with internet; for rooms with no internet, use a build made with
   `bundle_whisper` (manual CI run, below), which ships the model.
-- **Tesseract** (optional): only needed to read text from uploaded photos and scanned PDFs.
+- **Tesseract** (optional): only needed to read text from uploaded photos (`.png`, `.jpg`). PDFs need a text
+  layer: a scanned PDF without one is refused with "no readable text found", so upload photos of the pages
+  instead. Install it with `winget install UB-Mannheim.TesseractOCR` (Windows) or `brew install tesseract`
+  (macOS).
 
 Phones and tablets can't run the assistant (it needs PyTorch, Whisper and Ollama), but they can drive
-it: see [Phones and tablets](#phones-and-tablets).
+it: see [Phones and tablets](#phones-and-tablets). Teachers setting up a classroom for the first time can
+follow [HARDWARE_DAY.md](HARDWARE_DAY.md) ([en español](HARDWARE_DAY.es.md)).
 
 ## Getting a build
 
@@ -97,8 +101,9 @@ pulled. A missing model only needs `ollama pull qwen2.5vl:3b`; no restart.
 
 ## Settings: `sar.env`
 
-Room settings (camera index, projector size, subject, model, port, …) are the same `SAR_*` variables as
-in the [README](../README.md); `sar.env.example` documents the common ones. Put them in a file called
+Room settings (camera index and size, projector size, subject, language, model, port, phone mode, …) are the
+same `SAR_*` variables as in the [README's configuration table](../README.md#configuration);
+`sar.env.example` is already filled in for the classroom kit (C930e at 1920×1080, Epson at 1280×800). Put them in a file called
 `sar.env` (copy the example, then edit). The app reads, in this order, and the first value it finds for
 a setting wins:
 
@@ -158,13 +163,20 @@ the output.
 
 Our focus is computers: the assistant needs a laptop or desktop next to the projector. A phone or
 tablet can still be the **remote dashboard** (upload files, ask, run the tutor, watch status) while the
-computer does the work, because the dashboard is a web page:
+computer does the work, because the dashboard is a web page. Phones join with a six-digit PIN
+([MOBILE.md](MOBILE.md) has the details and the security model):
 
-1. In `sar.env` set `SAR_HOST=0.0.0.0` and restart the app. The console now also prints
-   `On a phone or tablet (same Wi-Fi): http://<computer-ip>:5050/dashboard`.
+1. In `sar.env` set `SAR_LAN=1` and restart the app. The console prints the phone address
+   (`http://<computer-ip>:5050/join`) and the PIN. On the computer's own dashboard, **More tools → Use a phone
+   or tablet** shows them with a QR code, plus **New PIN** and **Disconnect all phones**. (On macOS, which has
+   no console window, use that card.)
 2. Allow the firewall prompt (Windows: *Private networks*; macOS: **Allow**). Put the phone on the same
-   Wi-Fi and open that address; *Add to Home Screen* gives it an app-like icon.
+   Wi-Fi, scan the QR code or open the address, and type the PIN. *Add to Home Screen* gives it an app-like
+   icon.
 3. Camera, microphone and speakers stay the computer's.
+
+`SAR_HOST=0.0.0.0` (or any address other than `127.0.0.1`, `localhost` or `::1`) also turns the PIN gate on: the
+server never listens on the network without it.
 
 If the phone can't load the address:
 
@@ -175,8 +187,9 @@ If the phone can't load the address:
   isolation"), so the phone never reaches the computer even with the firewall open. Try a phone hotspot
   that both join, or ask IT for a network that allows it.
 
-Only do this on a trusted classroom network: anyone who can reach that address can use the dashboard
-(the server rejects requests from other web pages, but has no login).
+Only do this on a password-protected (WPA2/WPA3) classroom network: the traffic is plain HTTP, so on open
+Wi-Fi anyone nearby could read the PIN. Turn phone mode off (remove `SAR_LAN=1`) after class; every restart
+makes a new PIN.
 
 ## Building locally
 
@@ -202,8 +215,8 @@ an M4 with packages already installed. Plan for ~3 GB of free disk and delete
 `build/` and `dist/` afterwards.
 `packaging/models/`, `packaging/build/` and `packaging/dist/` are git-ignored.
 
-Without a full build, `python packaging/launcher.py --self-test` checks the launcher and the app from
-the checkout.
+Without a full build, `.venv/bin/python packaging/launcher.py --self-test` checks the launcher and the app
+from the checkout.
 
 ## How it fits together (for developers)
 
