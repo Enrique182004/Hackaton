@@ -1047,7 +1047,7 @@ def wrong_answer_text(task: Mapping[str, Any] | None, language: str = "en", read
     """What code says to a wrong answer: "Not quite." and one hint for the problem's first step (grading.hint_for),
     "only part of the answer" when some values are missing, else the generic WRONG_TEXT."""
     t = task or {}
-    if read and grading.incomplete(grading.parse_answers(read), expected_answers(t)):
+    if read and grading.incomplete(grading.parse_answers(read, _clean(t.get("problem"))), expected_answers(t)):
         return text_for(language, "incomplete")
     hint = grading.hint_for(_clean(t.get("problem")), normalize_reply_language(language))
     return f"{text_for(language, 'not_quite')} {hint}" if hint else text_for(language, "wrong")
@@ -1077,10 +1077,10 @@ def check_quiz_answer(
     if copies_problem(read, upcoming, language):
         # The next problem is not on the board yet: this is no reading of the student's answer, so no grade either.
         return ungraded("reread")
-    given = grading.parse_answers(read)
-    if read is not None and (
-        grading.unfinished(read) or (given and grading.same_problem(read, _clean(t.get("problem"))))
-    ):
+    problem = _clean(t.get("problem"))
+    # A check line under the answer ("3(5) + 5 = 20" for x = 5) is no answer: alone it is not graded ("ask again").
+    given = grading.parse_answers(read, problem)
+    if read is not None and (grading.unfinished(read) or (given and grading.same_problem(read, problem))):
         # The problem copied back ("1/2 + 1/3", worked out in code it is its own answer) or worked only part of the
         # way ("2/6 + 3/6"): no final answer yet, so no point and no miss.
         return ungraded("unfinished")
@@ -1653,7 +1653,7 @@ class VLMClient:
         read = getattr(action, "board_answer", None) or ""
         notes = RETRY_NOTES[normalize_reply_language(language)]
         note = notes["wrong_answer"].format(answer=read.replace('"', "'"))
-        if grading.incomplete(grading.parse_answers(read), expected_answers(t)):
+        if grading.incomplete(grading.parse_answers(read, _clean(t.get("problem"))), expected_answers(t)):
             note += " " + notes["incomplete"]
         step = grading.hint_for(_clean(t.get("problem")), normalize_reply_language(language))
         if step:

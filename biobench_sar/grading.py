@@ -658,12 +658,45 @@ def _worked_value(clause: str) -> list[Value] | None:
     return _values(run) or []
 
 
-def parse_answers(text: Any) -> Answers:
+def _problem_kind(problem: Any) -> tuple[bool, Value | None] | None:
+    """(True, None) for a problem with a letter ("3x + 5 = 20"), (False, its value) for arithmetic ("1/2 + 1/3");
+    None without a problem or for one code can't read (a word problem)."""
+    if problem is None:
+        return None
+    parts = _equations(problem)
+    if not parts:
+        return None
+    if any(re.search(r"[a-z]", part.replace("sqrt", "")) for part in parts):
+        return True, None
+    value = _expression(parts[0]) if len(parts) == 1 and "=" not in parts[0] else None
+    return (False, value) if value is not None and _number(value) is not None else None
+
+
+def _is_check(clause: str, problem: tuple[bool, Value | None] | None) -> bool:
+    """Whether a line of arithmetic with no letter is a check or scratch work, not the answer: every such line for a
+    problem with a letter ("3(5) + 5 = 20", "15 + 5 = 20", "3(4) + 5 = 17" for 3x + 5 = 20), and for arithmetic one
+    that does not start from the problem's value ("3 × 4 = 12" for 12 ÷ 4). "1/2 + 1/3 = 5/6" and "3/6 + 2/6 = 5/6"
+    are the problem 1/2 + 1/3 worked out: the answer."""
+    if problem is None:
+        return False
+    sides = [_expression(side.strip()) for side in _LEADING_WORDS.sub("", clause).split("=")]
+    if len(sides) < 2 or any(side is None for side in sides):
+        return False  # a letter in it (a step) or not worked out ("12 ÷ 4 = ?")
+    letters, value = problem
+    return letters or not _close(sides[0], value)
+
+
+def parse_answers(text: Any, problem: Any = None) -> Answers:
     """A written or spoken answer as a set of (letter, value): "x = 5 or x = -3" -> {("x", 5), ("x", -3)},
     "x = 5, y = 2" -> {("x", 5), ("y", 2)}, "5" -> {("", 5)}, "(2, 3)" -> {("#1", 2), ("#2", 3)}, "1/2 + 1/3 = 5/6" ->
     {("", 5/6)}. Answers on separate lines all count; a check or a reason after one ("x = 4 because 2 times 4 is 8")
     does not. Steps and problems in the text ("3x + 5 = 20, x = 5") are skipped, and so is arithmetic not worked out
-    yet ("1/2 + 1/3", "2/6 + 3/6"); an empty set when nothing reads as an answer."""
+    yet ("1/2 + 1/3", "2/6 + 3/6"); an empty set when nothing reads as an answer.
+
+    Given the `problem` it answers, a line of arithmetic with no letter is a check, never the answer ("x = 5 ;
+    3(5) + 5 = 20" is x = 5, "3(5) + 5 = 20" alone is nothing), unless it is that arithmetic problem worked out
+    ("1/2 + 1/3 = 5/6" for 1/2 + 1/3)."""
+    kind = _problem_kind(problem)
     math_text = _answer_text(text)
     if not math_text.strip(" ;"):
         return _NONE
@@ -692,6 +725,8 @@ def parse_answers(text: Any) -> Answers:
             answers |= {(letter, v) for v in assigned[1]}
             continue
         if "=" in clause:
+            if _is_check(clause, kind):
+                continue
             value = _worked_value(clause)
             steps = steps or value is None  # the problem or a step ("3x + 5 = 20", "3x = 15")
             worked = value or worked

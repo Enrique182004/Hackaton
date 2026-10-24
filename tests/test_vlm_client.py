@@ -908,6 +908,38 @@ def test_quiz_check_of_worked_arithmetic_is_graded(read: str, verdict: str) -> N
     assert action.verdict == verdict  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize(
+    ("problem", "answer", "check"),
+    [
+        ("3x + 5 = 20", "x = 5", "3(5) + 5 = 20"),
+        ("3x + 5 = 20", "x = 5", "15 + 5 = 20"),
+        ("2x - 7 = 9", "x = 8", "2(8) - 7 = 9"),
+        ("x + 7 = 12", "x = 5", "5 + 7 = 12"),
+        ("5x + 4 = -11", "x = -3", "5(-3) + 4 = -11"),
+    ],
+)
+def test_quiz_check_of_a_substitution_check_on_the_bottom_line_is_never_wrong(
+    problem: str, answer: str, check: str
+) -> None:
+    task = {**QUIZ_CHECK, "problem": problem, "answer": answer}
+    for language in ("en", "es"):
+        for model in (PRAISE, HINT):
+            alone = vc.check_quiz_answer(model, task, check, language=language)
+            assert alone.verdict is None and alone.animation_state == "idle", "no point, no miss"  # type: ignore[attr-defined]
+            assert alone.spoken_text == vc.TEXTS[language]["reread"] and not getattr(alone, "hint_needed", False)
+        both = vc.check_quiz_answer(PRAISE, task, f"{answer} ; {check}", language=language)
+        assert both.verdict == "correct", "with the answer line copied too, that line is graded"  # type: ignore[attr-defined]
+        other = {**task, "answer": "x = 99"}
+        assert vc.check_quiz_answer(PRAISE, other, f"{answer} ; {check}", language=language).verdict == "wrong"  # type: ignore[attr-defined]
+
+
+def test_evaluate_of_a_substitution_check_records_no_miss() -> None:
+    reply = {"board_answer": "3(5) + 5 = 20", **CHEER.to_dict()}
+    action, _ = _ask(_math_client(), reply, query="Check my answer.", mode="quiz", task=QUIZ_CHECK)
+    assert action.verdict is None and action.animation_state == "idle"  # type: ignore[attr-defined]
+    assert action.spoken_text == vc.TEXTS["en"]["reread"]
+
+
 def test_evaluate_never_approves_the_problem_read_back() -> None:
     reply = {"board_answer": "1/2 + 1/3", **CHEER.to_dict()}
     action, _ = _ask(_math_client(), reply, query="Check my answer.", mode="quiz", task=_arithmetic_check("1/2 + 1/3"))

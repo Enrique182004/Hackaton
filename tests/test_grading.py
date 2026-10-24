@@ -471,6 +471,38 @@ def test_scratch_arithmetic_next_to_a_step_is_not_the_answer() -> None:
     assert _plain(parse_answers("15 - 9 = 6, so x = 6")) == {("x", 6)}
 
 
+@pytest.mark.parametrize(
+    ("problem", "answer", "check"),
+    [
+        ("3x + 5 = 20", "x = 5", "3(5) + 5 = 20"),
+        ("3x + 5 = 20", "x = 5", "3 * 5 + 5 = 20"),
+        ("3x + 5 = 20", "x = 5", "15 + 5 = 20"),
+        ("2x - 7 = 9", "x = 8", "2(8) - 7 = 9"),
+        ("x + 7 = 12", "x = 5", "5 + 7 = 12"),
+        ("5x + 4 = -11", "x = -3", "5(-3) + 4 = -11"),
+        ("3x + 5 = 20", "x = 4", "3(4) + 5 = 17"),  # the check of a wrong answer is no answer either
+        ("3x + 5 = 20", "x = 4", "3(4) + 5 = 20"),
+        ("12 ÷ 4", "3", "3 × 4 = 12"),
+        ("1/2 + 1/3", "5/6", "5/6 - 1/3 = 1/2"),
+    ],
+)
+def test_a_substitution_check_on_the_bottom_line_is_never_the_answer(problem: str, answer: str, check: str) -> None:
+    assert parse_answers(check, problem) == frozenset(), "alone, a check line is no answer"
+    assert not grading.unfinished(check), "nor unfinished work"
+    assert parse_answers(f"{answer} ; {check}", problem) == parse_answers(answer), "the answer line counts"
+    assert parse_answers(f"{answer}\n{check}", problem) == parse_answers(answer)
+
+
+def test_the_arithmetic_problem_worked_out_is_still_its_answer() -> None:
+    for read in ("1/2 + 1/3 = 5/6", "3/6 + 2/6 = 5/6", "1/2 + 1/3 = 3/6 + 2/6 = 5/6"):
+        assert _plain(parse_answers(read, "1/2 + 1/3")) == {("", Fraction(5, 6))}, read
+    assert _plain(parse_answers("1/2 + 1/3 = 2/5", "1/2 + 1/3")) == {("", Fraction(2, 5))}, "wrong, but an answer"
+    assert _plain(parse_answers("12 ÷ 4 = 3", "12 ÷ 4 = ?")) == {("", 3)}
+    assert _plain(parse_answers("15 + 5 = 20")) == {("", 20)}, "without the problem, arithmetic worked out as before"
+    word = "A rectangle is 3 cm wide and 4 cm long. Find its area."
+    assert _plain(parse_answers("3 × 4 = 12", word)) == {("", 12)}, "a word problem's arithmetic is its answer"
+
+
 def test_same_problem() -> None:
     assert grading.same_problem("1/2+1/3", "1/2 + 1/3")
     assert grading.same_problem("6/8", "Simplify 6/8") and grading.same_problem("12 ÷ 4", "12 ÷ 4 = ?")
