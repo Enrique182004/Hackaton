@@ -459,6 +459,8 @@ Y_IN_MATH = [
     ("despeja y y luego comprueba", "despeja ye y luego comprueba"),
     ("x y y son enteros", "x y ye son enteros"),
     ("Calcula x y y", "Calcula x y ye"),
+    ("Despeja y en 3y = 9", "Despeja ye en tres ye es igual a nueve"),
+    ("Despeja y, luego calcula x.", "Despeja ye, luego calcula x."),
 ]
 GENDER = [
     ("Tienes 1 error en el paso 2", "Tienes un error en el paso dos"),
@@ -602,6 +604,9 @@ PROSE = [
     "Calcula el valor y anótalo.",
     "Calcula y de ahí despeja x.",
     "Encuentra y para comprobar.",
+    # Seen live from qwen2.5vl:3b: a second instruction right after "despeja y" makes it the conjunction.
+    "Despeja y calcula la cantidad de carbono en el suelo.",
+    "Hay que despejar y comprobar el resultado.",
 ]
 
 NUMBERS = [

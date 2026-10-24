@@ -497,6 +497,17 @@ _VARIABLE_Y = re.compile(r"(?<![^\W\d_])[yY](?![^\W\d_])")
 _PREV_WORD = re.compile(r"([^\W\d_]+)[ \t]+$")
 # No conjunction can follow these words: "despeja y", "el eje y", "el valor de y", "despeja la y", "x y y".
 _Y_CUES = frozenset(["despeja", "despejar", "despejamos", "despejas", "eje", "variable", "de", "la", "y"])
+_Y_DESPEJA = frozenset(["despeja", "despejar", "despejamos", "despejas"])
+# "Despeja y calcula la cantidad": a second instruction right after "despeja y" makes the y a conjunction.
+_Y_SECOND_VERB = _word_set(
+    """
+    calcula comprueba verifica sustituye reemplaza resuelve simplifica encuentra halla escribe anota grafica evalúa
+    factoriza multiplica divide suma resta explica responde contesta dime determina obtén revisa compara redondea
+    aplica interpreta identifica completa justifica expresa reduce ordena traza dibuja marca mide registra calcular
+    comprobar verificar sustituir reemplazar resolver simplificar encontrar hallar escribir anotar graficar evaluar
+    factorizar multiplicar dividir sumar restar explicar responder contestar determinar obtener revisar comparar
+    """
+)
 _Y_VERBS = frozenset(
     ["encuentra", "encontrar", "halla", "hallar", "calcula", "calcular", "determina", "determinar", "obtén", "obtener"]
 )
@@ -1060,6 +1071,10 @@ def _variable_y(m: re.Match[str], *, chained: bool = True) -> str:
             # "x y y" ends on the variable, but "el valor de y y el de x" joins the variable to more prose.
             before = _VARIABLE_Y.match(s, word.start(1))
             if before and _variable_y(before, chained=False) == YV:
+                return y
+        if cue in _Y_DESPEJA:
+            after = _NEXT_WORD.match(s, m.end())
+            if after and after[1].lower() in _Y_SECOND_VERB:
                 return y
         return YV
     if cue == "para" and _Y_SOLVE.search(s, max(0, i - 80), i):
