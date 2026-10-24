@@ -87,12 +87,18 @@ def test_worksheet_problems_without_answers() -> None:
     ]
 
 
+def test_seed_worksheet_levels_follow_its_headings() -> None:
+    # The seed worksheet labels its sections with the quiz bank's level scale, so mixed quizzes climb evenly.
+    problems = parse_worksheet_text((SEED / "worksheet_linear_equations.md").read_text(), "w.md")
+    assert [p.level for p in problems] == [2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4]
+    assert problems[0].problem == "x + 9 = 15" and problems[-1].problem == "2(x + 5) = 3x + 4"
+
+
 def test_unlevelled_worksheet_gets_levels_by_position() -> None:
-    text = (SEED / "worksheet_linear_equations.md").read_text()
-    problems = parse_worksheet_text(text, "w.md")
-    levels = [p.level for p in problems]
-    assert levels == [1, 1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5], "one-step first, x on both sides last"
-    assert problems[-1].problem == "2(x + 5) = 3x + 4" and problems[-1].level == POSITION_LEVELS
+    lines = ["# Practice"] + [f"{n}. {n}x = {n * 2}" for n in range(1, 13)]
+    levels = [p.level for p in parse_worksheet_text("\n".join(lines), "w.md")]
+    assert levels == [1, 1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5], "spread over the levels by position"
+    assert levels[-1] == POSITION_LEVELS
 
 
 def test_seeded_quiz_is_progressive_and_short(tmp_path: Path) -> None:
