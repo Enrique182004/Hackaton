@@ -80,7 +80,9 @@ def _hostnames(value: object) -> tuple[str, ...]:
     if isinstance(value, str):
         return parse_hostnames(value)
     if isinstance(value, (list, tuple, set, frozenset)):
-        return parse_hostnames(",".join(str(v) for v in value))
+        # Each item must be one valid name: "bad name" is not two names.
+        names = (parse_hostnames(str(v)) for v in value)
+        return tuple(dict.fromkeys(parsed[0] for parsed in names if len(parsed) == 1))
     return ()
 
 

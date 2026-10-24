@@ -164,6 +164,13 @@ def isolated_quiz_bank(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
+@pytest.fixture(autouse=True)
+def no_lan_from_the_shell(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A developer's exported SAR_LAN / SAR_HOST must not turn the PIN gate on in tests that don't ask for it."""
+    for name in ("SAR_LAN", "SAR_HOST", "SAR_LAN_HOSTNAMES"):
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return dataclasses.replace(
@@ -183,8 +190,14 @@ def settings(tmp_path: Path) -> Settings:
 def templates_dir(tmp_path: Path) -> Path:
     folder = tmp_path / "templates"
     folder.mkdir()
-    (folder / "index.html").write_text("<html>index {{ projector_width }}x{{ projector_height }}</html>")
-    (folder / "precharge.html").write_text("<html>precharge {{ projector_width }}</html>")
+    (folder / "index.html").write_text(
+        "<html>index {{ projector_width }}x{{ projector_height }} lan={{ lan_enabled }}</html>"
+    )
+    (folder / "precharge.html").write_text("<html>precharge {{ projector_width }} lan={{ lan_enabled }}</html>")
+    (folder / "join.html").write_text(
+        "<html>join error={{ error }} lang={{ language }} lan={{ lan_enabled }} locked={{ locked_for }}"
+        " message={{ message }}</html>"
+    )
     return folder
 
 

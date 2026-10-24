@@ -275,3 +275,86 @@ def test_selection_file_defaults_to_data_dir(monkeypatch: pytest.MonkeyPatch) ->
 def test_selection_file_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("SAR_SELECTION_FILE", str(tmp_path / "picked.json"))
     assert Settings().selection_file == tmp_path / "picked.json"
+
+
+# ---- LAN mode (phones join with a PIN; docs/MOBILE.md) ----------------------------------------------
+def _clear_lan(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("SAR_LAN", "SAR_HOST", "SAR_LAN_HOSTNAMES"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def test_lan_mode_is_off_by_default_on_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_lan(monkeypatch)
+    s = Settings()
+    assert (s.lan, s.host, s.lan_hostnames) == (False, "127.0.0.1", ())
+
+
+@pytest.mark.parametrize("raw", ["1", "true", "TRUE", "yes", "on", " 1 "])
+def test_sar_lan_turns_lan_mode_on_and_listens_on_every_interface(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    _clear_lan(monkeypatch)
+    monkeypatch.setenv("SAR_LAN", raw)
+    s = Settings()
+    assert (s.lan, s.host) == (True, "0.0.0.0")
+
+
+@pytest.mark.parametrize("raw", ["0", "", "false", "no", "off", "2"])
+def test_sar_lan_off_values(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    _clear_lan(monkeypatch)
+    monkeypatch.setenv("SAR_LAN", raw)
+    s = Settings()
+    assert (s.lan, s.host) == (False, "127.0.0.1")
+
+
+def test_an_explicit_sar_host_wins_over_sar_lan(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_lan(monkeypatch)
+    monkeypatch.setenv("SAR_LAN", "1")
+    monkeypatch.setenv("SAR_HOST", "127.0.0.1")
+    s = Settings()
+    assert (s.lan, s.host) == (True, "127.0.0.1"), "the gate stays on; main() warns that phones can't reach it"
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("0.0.0.0", True),
+        ("", True),
+        ("::", True),
+        ("192.168.1.20", True),
+        ("my-laptop.local", True),
+        ("127.0.0.1", False),
+        ("127.0.0.2", False),
+        ("::1", False),
+        ("localhost", False),
+        (" 127.0.0.1 ", False),
+    ],
+)
+def test_any_network_bind_turns_the_pin_gate_on_without_sar_lan(
+    monkeypatch: pytest.MonkeyPatch, host: str, expected: bool
+) -> None:
+    _clear_lan(monkeypatch)
+    monkeypatch.setenv("SAR_HOST", host)
+    assert Settings().lan is expected
+
+
+def test_a_network_bind_can_never_be_built_ungated() -> None:
+    import dataclasses
+
+    assert Settings(lan=False, host="0.0.0.0").lan is True
+    assert dataclasses.replace(Settings(lan=False, host="127.0.0.1"), host="0.0.0.0").lan is True
+    assert Settings(lan=False, host="127.0.0.1").lan is False
+    assert Settings(lan=True, host="127.0.0.1").lan is True
+
+
+def test_lan_hostnames_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_lan(monkeypatch)
+    monkeypatch.setenv("SAR_LAN_HOSTNAMES", "My-Laptop.local, lab-pc ,*.evil, 10.0.0.1, my-laptop.local.")
+    assert Settings().lan_hostnames == ("my-laptop.local", "lab-pc")
+
+
+def test_lan_hostnames_passed_in_are_normalized() -> None:
+    assert Settings(lan_hostnames=("My-Laptop.local", "bad name", "lab-pc")).lan_hostnames == (  # type: ignore[arg-type]
+        "my-laptop.local",
+        "lab-pc",
+    )
+    assert Settings(lan_hostnames="a.local,b.local").lan_hostnames == ("a.local", "b.local")  # type: ignore[arg-type]
+    assert Settings(lan_hostnames=None).lan_hostnames == ()  # type: ignore[arg-type]
