@@ -110,7 +110,7 @@ frame per state) on a pure black page, so only Pip shows on the board.
 | State | When |
 | --- | --- |
 | `pointing` | Help, or a hint: the pencil tip lands just left of the ink it is talking about |
-| `error` | A mistake or a wrong quiz answer: amber, next to the wrong part |
+| `error` | A mistake or a wrong quiz answer: amber, at the part that is wrong |
 | `celebrating` | A right quiz answer, or a flowchart that is complete |
 | `idle` / `walking` | Talking, dictating or waiting: parked where it covers no writing |
 
@@ -144,7 +144,7 @@ During a quiz:
 - "I'm stuck", "hint" or "help" gives one hint on the same problem without leaving the quiz or costing a try.
   "Repeat the problem" reads it out again.
 - **Stopping asks first.** "Stop the quiz" gets *"Do you want to end the quiz? Say yes to stop, or keep
-  going."* "Yes" (or "sure", "ok", "yeah", "sí", "claro", "dale") ends it with your score. Anything else carries
+  going."* "Yes" (or "yeah", "ok", "sí", "claro", "dale") ends it with your score. Anything else carries
   on and is handled as usual, so an answer is graded. The dashboard's **Stop quiz** button stops at once.
 - The score counts problems right on the first try.
 
