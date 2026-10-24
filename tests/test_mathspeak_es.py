@@ -314,7 +314,8 @@ MARKDOWN = [
     ("**mal**", "mal"),
     ("*Nota:* 3x = 6", "Nota: tres x es igual a seis"),
 ]
-# Review round 2 (fix/mathspeak-es-review). Each group fails on the code before the fix.
+# Review round 2 (fix/mathspeak-es-review). Each group holds the fixes (they fail on the code before them) and
+# the guards that pin the readings right next to them ("x = 3-5 m", "9 – 4", "Despeja y, luego calcula x.").
 NBSP, NNBSP = chr(0x00A0), chr(0x202F)
 RANGES = [
     # An unspaced dash between two plain numbers is a range before a unit / noun, or with no other math around.
