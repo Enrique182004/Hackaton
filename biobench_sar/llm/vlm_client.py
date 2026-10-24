@@ -35,7 +35,6 @@ TEMPERATURE = 0.2
 # A repeated "another one" should not get the same problem back.
 MODE_TEMPERATURE = {"practice": 0.6}
 RETRY_TEMPERATURE = 0.7
-PROFILES = ("biology", "math")
 MODES = ("help", "practice", "quiz")
 # "learn" is a task kind, not a session mode: it can interrupt any mode, so it gets its own prompt.
 PROMPT_KINDS = (*MODES, "learn")

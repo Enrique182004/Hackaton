@@ -1,4 +1,4 @@
-import { $, request } from "./api.js";
+import { $, OFFLINE_HINT, request } from "./api.js";
 import { sideNote } from "./ask.js";
 import { logEvent } from "./log.js";
 import { MODE_LABELS, currentProfile, onProfileChange, profileKnown } from "./profile.js";
@@ -12,7 +12,6 @@ const CHOSEN_NOTES = {
   quiz: "Press Start quiz, or just say or type “I'm ready”.",
 };
 const QUIZ_SOURCE = "Problems come from the worksheets you tick in step 1, or the assistant makes some up.";
-const OFFLINE_HINT = "Check the assistant's Terminal window is still open, then try again.";
 
 // Bumped on every render, so a GET that was in flight during a newer change can't roll the UI back.
 let version = 0;

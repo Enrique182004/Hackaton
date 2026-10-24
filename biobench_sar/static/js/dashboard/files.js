@@ -1,10 +1,9 @@
-import { $, el, request, setNote } from "./api.js";
+import { $, OFFLINE_HINT, el, request, setNote } from "./api.js";
 import { logEvent } from "./log.js";
 import { onProfileChange, words } from "./profile.js";
 import { setBadge, suggestStep } from "./tabs.js";
 
 const UPLOAD_TIMEOUT_MS = 300000;
-const OFFLINE_HINT = "Check the assistant's Terminal window is still open, then try again.";
 const PHOTO = "Photo (text read from the image)";
 const KINDS = {
   pdf: "PDF document",

@@ -1,4 +1,6 @@
 const TIMEOUT_MS = 4000;
+// The tail of every "couldn't reach the server" note.
+export const OFFLINE_HINT = "Check the assistant's Terminal window is still open, then try again.";
 
 export class ApiError extends Error {
   constructor(message, status, body) {
