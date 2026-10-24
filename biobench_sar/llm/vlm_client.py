@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
@@ -29,7 +29,13 @@ TEMPERATURE = 0.2
 MODE_TEMPERATURE = {"practice": 0.6}
 PROFILES = ("biology", "math")
 MODES = ("help", "practice", "quiz")
+# "learn" is a task kind, not a session mode: it can interrupt any mode, so it gets its own prompt.
+PROMPT_KINDS = (*MODES, "learn")
+LEARN_STAGES = ("offer", "example", "own")
+OFFER_QUESTION = "Do you have an exercise in mind, or should I make one up for you?"
 DEFAULT_QUIZ_TOTAL = 10
+MAX_TURNS = 3
+MAX_TURN_CHARS = 240
 
 SYSTEM_PROMPT = """You are an expert environmental-biology research assistant, shown as an animated avatar \
 projected on a whiteboard. You support a thesis on identifying Acanthamoeba in Laguna de Bustillos and on the \
@@ -73,7 +79,9 @@ shown as an animated avatar projected on a whiteboard. The student writes with a
 
 spoken_text is read aloud by a text-to-speech voice: at most 3 short sentences, simple words, no markdown.
 CRITICAL: write ALL math in words, numbers too. NEVER use symbols like ^ / * = + - < > or digits in spoken_text.
-Say "two thirds" not 2/3, "x squared" not x^2, "three x plus five equals twelve" not 3x+5=12, "negative four" not -4.
+Say "two thirds" not 2/3, "x squared" not x^2, "three x plus five equals twelve" not 3x+5=12, "negative four" not -4, \
+"two times y" not 2*y, "the square root of nine" not sqrt(9).
+Use "Conversation so far" to understand short follow-ups like "I did it" or "what now?".
 
 Respond with ONLY a JSON object:
 {"spoken_text": str, "animation_state": "idle|walking|pointing|celebrating|error", "target_x": int, "target_y": int}
@@ -86,7 +94,8 @@ MATH_HELP = """MODE: step-by-step help.
 - If the latest step has a mistake, say gently what to fix.
 - animation_state "pointing"; target = center of the ink region with the part of the equation to work on.
 - End by asking the student to write the next step.
-- If nothing is written yet, ask the student to write the problem: "idle", target = screen center.
+- If the board is empty, answer a general question briefly in plain words, or ask the student to write the \
+problem: "idle", target = screen center.
 
 Examples (JSON only):
 Board (ink center 700,400): 2x + 3 = 11. Query: "Help me."
@@ -127,12 +136,37 @@ Quiz stage: check. Problem 1 of 5: x + 4 = 10. Expected answer: x = 6. Next prob
 Quiz stage: check. Problem 1 of 5: x + 4 = 10. Expected answer: x = 6. Next problem: 2x = 14. Board (ink center 800,600): x = 6
 {"spoken_text": "Correct, great job! Problem two. Two x equals fourteen.", "animation_state": "celebrating", "target_x": 800, "target_y": 600}"""
 
+MATH_LEARN = f"""TASK: the student wants to learn a topic. The board may be empty. The message gives the topic \
+and the stage. Use plain words for a middle or high school student.
+- Stage offer: one or two plain sentences that introduce the idea of the topic, then ask exactly: \
+"{OFFER_QUESTION}" Do not solve anything yet.
+- Stage example: dictate ONE easy starter problem on the topic in words, then invite the student to write it on the \
+board and try the first step. Do not solve it.
+- Stage own: ask the student to write their exercise on the board and then ask you for help.
+- Always "idle", target = screen center.
+
+Examples (JSON only, 1920x1080 screen):
+Learn stage: offer. Topic: equations. Query: "Teach me equations."
+{{"spoken_text": "An equation is like a balance: both sides are equal. We solve it by doing the same thing to both \
+sides until the letter is alone. {OFFER_QUESTION}", "animation_state": "idle", "target_x": 960, "target_y": 540}}
+Learn stage: example. Topic: adding fractions. Query: "Make one up."
+{{"spoken_text": "Let's start easy. One fourth plus two fourths. Write it on the board and try adding the top \
+numbers.", "animation_state": "idle", "target_x": 960, "target_y": 540}}
+Learn stage: own. Topic: fractions. Query: "I have one."
+{{"spoken_text": "Great! Write your exercise on the board, then ask me for help.", "animation_state": "idle", \
+"target_x": 960, "target_y": 540}}"""
+
 MATH_PROMPTS = {
-    mode: f"{MATH_BASE}\n\n{rules}"
-    for mode, rules in (("help", MATH_HELP), ("practice", MATH_PRACTICE), ("quiz", MATH_QUIZ))
+    kind: f"{MATH_BASE}\n\n{rules}"
+    for kind, rules in (("help", MATH_HELP), ("practice", MATH_PRACTICE), ("quiz", MATH_QUIZ), ("learn", MATH_LEARN))
 }
 
-MODE_LABELS = {"help": "help (step-by-step)", "practice": "practice (similar problem)", "quiz": "quiz"}
+MODE_LABELS = {
+    "help": "help (step-by-step)",
+    "practice": "practice (similar problem)",
+    "quiz": "quiz",
+    "learn": "learn a topic",
+}
 
 
 def normalize_profile(profile: str | None) -> str:
@@ -144,16 +178,21 @@ def normalize_mode(mode: str | None) -> str:
     return mode if mode in MODES else "help"
 
 
+def _task_kind(task: Mapping[str, Any] | None) -> str | None:
+    kind = task.get("kind") if isinstance(task, Mapping) else None
+    return kind if kind in PROMPT_KINDS else None
+
+
 def resolve_mode(mode: str | None, task: Mapping[str, Any] | None) -> str:
     """The task's kind is more specific than the session mode, so it wins when they disagree."""
-    kind = task.get("kind") if isinstance(task, Mapping) else None
-    return kind if kind in MODES else normalize_mode(mode)
+    return _task_kind(task) or normalize_mode(mode)
 
 
 def system_prompt(profile: str, mode: str) -> str:
     if normalize_profile(profile) == "biology":
         return SYSTEM_PROMPT
-    return MATH_PROMPTS[normalize_mode(mode)]
+    kind = str(mode or "").strip().lower()
+    return MATH_PROMPTS[kind if kind in PROMPT_KINDS else "help"]
 
 
 def _ink_text(ink_regions: list[InkRegion]) -> str:
@@ -199,7 +238,7 @@ def quiz_task_text(task: Mapping[str, Any] | None) -> str:
             f"{head}no worksheet problem is available, so make up one yourself (problem one is the easiest, each "
             "next problem a little harder). Read it out in words. Do not solve it."
         )
-    lines = [head + (problem or "the problem written on the board (you made it up earlier).")]
+    lines = [head + (problem or "the problem you made up earlier (see the conversation and the board).")]
     if answer:
         lines.append(f"Expected answer: {answer}. The student's answer is correct ONLY if its value is the same.")
     else:
@@ -214,6 +253,40 @@ def quiz_task_text(task: Mapping[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
+def learn_stage(task: Mapping[str, Any] | None) -> str:
+    stage = (task or {}).get("stage")
+    return stage if stage in LEARN_STAGES else "offer"
+
+
+def learn_task_text(task: Mapping[str, Any] | None) -> str:
+    stage = learn_stage(task)
+    topic = _clean((task or {}).get("topic")) or "this math topic"
+    todo = {
+        "offer": f'Introduce the idea of {topic} in one or two plain sentences, then ask: "{OFFER_QUESTION}"',
+        "example": f"The student wants you to make one up: dictate ONE easy starter problem on {topic} in words "
+        "and invite them to write it and try the first step. Do not solve it.",
+        "own": "The student has their own exercise: ask them to write it on the board and then ask you for help.",
+    }[stage]
+    return f"Learn stage: {stage}. Topic: {topic}\n{todo}"
+
+
+def _short(value: Any) -> str:
+    text = " ".join(str(value or "").split())
+    return text if len(text) <= MAX_TURN_CHARS else text[: MAX_TURN_CHARS - 3].rstrip() + "..."
+
+
+def turns_text(recent_turns: Sequence[Mapping[str, Any]] | None, speaker: str = "Student") -> str | None:
+    """The last few exchanges, oldest first, so follow-ups like "make one up" or "I did it" make sense."""
+    lines: list[str] = []
+    for turn in list(recent_turns or [])[-MAX_TURNS:]:
+        if not isinstance(turn, Mapping):
+            continue
+        question, answer = _short(turn.get("q")), _short(turn.get("a"))
+        lines += [f"{speaker}: {question}"] if question else []
+        lines += [f"You: {answer}"] if answer else []
+    return "Conversation so far (oldest first):\n" + "\n".join(lines) if lines else None
+
+
 def build_prompt(
     query: str,
     context: list[RetrievedChunk],
@@ -223,17 +296,23 @@ def build_prompt(
     profile: str = "biology",
     mode: str = "help",
     task: Mapping[str, Any] | None = None,
+    recent_turns: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     width, height = projector_size
     size = f"Projector size: {width}x{height} pixels (origin top-left)."
     if normalize_profile(profile) == "biology":
+        history = turns_text(recent_turns, speaker="User")
         parts = [f"User query: {query}", size, _ink_text(ink_regions), _context_text(context)]
-        return "\n\n".join([*parts, "Answer with the JSON object only."])
+        return "\n\n".join([*([history] if history else []), *parts, "Answer with the JSON object only."])
     mode = resolve_mode(mode, task)
     parts = [f"Mode: {MODE_LABELS[mode]}."]
     if mode == "quiz":
         parts.append(quiz_task_text(task))
+    elif mode == "learn":
+        parts.append(learn_task_text(task))
+    history = turns_text(recent_turns)
     parts += [
+        *([history] if history else []),
         f"Student said: {query}",
         f"{size} Screen center: ({width // 2}, {height // 2}).",
         _ink_text(ink_regions),
@@ -243,10 +322,23 @@ def build_prompt(
     return "\n\n".join(parts)
 
 
+def apply_task_rules(action: AvatarAction, task: Mapping[str, Any] | None) -> AvatarAction:
+    """A 3B model sometimes drops the offer question or picks a drawing state; learn turns always need both right."""
+    if _task_kind(task) != "learn" or action.animation_state == "error":
+        return action  # "error" here is a failed call, whose message must stay as it is
+    spoken = action.spoken_text
+    if learn_stage(task) == "offer" and "make one up" not in spoken.lower():
+        spoken = OFFER_QUESTION if spoken.strip() in ("", "...") else f"{spoken.rstrip()} {OFFER_QUESTION}"
+    return replace(action, spoken_text=spoken, animation_state="idle")
+
+
 def _math_to_speech() -> Callable[[str], str] | None:
     try:
         from biobench_sar.llm.mathspeak import to_speech
     except ImportError:
+        return None
+    except Exception as exc:  # a broken module must not break evaluate, which never raises
+        logger.warning("mathspeak import failed, speaking the raw text: %s", exc)
         return None
     return to_speech
 
@@ -329,9 +421,12 @@ class VLMClient:
         *,
         mode: str = "help",
         task: Mapping[str, Any] | None = None,
+        recent_turns: Sequence[Mapping[str, Any]] | None = None,
     ) -> AvatarAction:
-        action = self._evaluate(query, image_jpeg, context, ink_regions, projector_size, mode, task)
-        return speakable(action) if self.profile == "math" else action
+        action = self._evaluate(query, image_jpeg, context, ink_regions, projector_size, mode, task, recent_turns)
+        if self.profile != "math":
+            return action
+        return speakable(apply_task_rules(action, task))
 
     def _evaluate(
         self,
@@ -340,15 +435,24 @@ class VLMClient:
         context: list[RetrievedChunk],
         ink_regions: list[InkRegion],
         projector_size: tuple[int, int],
-        mode: str,
-        task: Mapping[str, Any] | None,
+        mode: str = "help",
+        task: Mapping[str, Any] | None = None,
+        recent_turns: Sequence[Mapping[str, Any]] | None = None,
     ) -> AvatarAction:
+        """The raw model answer, before the math post-processing in evaluate."""
         try:
             if self.backend == "mock":
                 return self._mock(query, context, ink_regions, projector_size)
             mode = resolve_mode(mode, task)
             prompt = build_prompt(
-                query, context, ink_regions, projector_size, profile=self.profile, mode=mode, task=task
+                query,
+                context,
+                ink_regions,
+                projector_size,
+                profile=self.profile,
+                mode=mode,
+                task=task,
+                recent_turns=recent_turns,
             )
             system = system_prompt(self.profile, mode)
             temperature = MODE_TEMPERATURE.get(mode, TEMPERATURE) if self.profile == "math" else TEMPERATURE

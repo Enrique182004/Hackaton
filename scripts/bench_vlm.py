@@ -1,7 +1,7 @@
 """Benchmark VLMClient.evaluate against a real Ollama backend.
 
 Usage: python scripts/bench_vlm.py [-n 3] [--model qwen2.5vl:3b] [--url http://localhost:11434]
-       python scripts/bench_vlm.py --scenarios [--runs 5] [--profile biology|math] [--only H,P]
+       python scripts/bench_vlm.py --scenarios [--runs 5] [--profile biology|math] [--only H,P] [--raw]
 """
 
 from __future__ import annotations
@@ -57,11 +57,17 @@ MATH_CONTEXT = [
 
 EQUATION = "3x + 5 = 20"
 SPOKEN_EQUATION = "three x plus five equals twenty"
-# The solved value said as a result, not "five" as a constant of the equation ("plus five").
+# The solved value said as a result ("x equals five", "fifteen divided by three is five"), not the constant in
+# "plus five" or "subtract five".
 _LEAK_RE = re.compile(
-    r"\b(?:x\s*(?:=|equals|is(?:\s+equal\s+to)?)|answer\s+is|solution\s+is)\s*(?:5|five)\b", re.IGNORECASE
+    r"(?:=|\b(?:is|equals|equal\s+to|be|get|gives(?:\s+you)?))\s*(?:5|five)\b(?!\s+from)", re.IGNORECASE
 )
-_SYMBOL_RE = re.compile(r"[\^/*=]")
+_NOTATION_RE = re.compile(r"[\^/*=+<>]|\d")
+_FRACTION_RE = re.compile(
+    r"\d\s*/\s*\d|\b(?:half|halves|thirds?|fourths?|quarters?|fifths?|sixths?|sevenths?|eighths?|ninths?|tenths?|"
+    r"over)\b",
+    re.IGNORECASE,
+)
 QUIZ_TASK = {
     "kind": "quiz",
     "stage": "check",
@@ -71,14 +77,21 @@ QUIZ_TASK = {
     "answer": "x = 5",
     "next_problem": "2x - 4 = 10",
 }
+LEARN_TOPIC = "solving fractions"
+LEARN_QUERY = "I want to learn how to solve fractions."
+OFFER_TURN = {
+    "q": LEARN_QUERY,
+    "a": "A fraction is a part of a whole. Do you have an exercise in mind, or should I make one up for you?",
+}
 
 
 def leaks_answer(spoken: str) -> bool:
     return bool(_LEAK_RE.search(spoken))
 
 
-def has_symbols(spoken: str) -> bool:
-    return bool(_SYMBOL_RE.search(spoken))
+def has_notation(spoken: str) -> bool:
+    """Symbols or digits the TTS voice would read badly; the prompt asks for words only."""
+    return bool(_NOTATION_RE.search(spoken))
 
 
 def dictates_new_equation(spoken: str) -> bool:
@@ -93,6 +106,15 @@ def reads_next_problem(spoken: str) -> bool:
     return bool(re.search(r"\b(?:two|2)\s*x\s*(?:minus|-)\s*(?:four|4)\b", spoken, re.IGNORECASE))
 
 
+def asks_offer(spoken: str) -> bool:
+    text = spoken.lower()
+    return "exercise" in text and "make one up" in text and "?" in text
+
+
+def dictates_fraction(spoken: str) -> bool:
+    return bool(_FRACTION_RE.search(spoken))
+
+
 class Scenario(NamedTuple):
     name: str
     query: str
@@ -102,6 +124,7 @@ class Scenario(NamedTuple):
     task: dict[str, Any] | None = None
     context: list[RetrievedChunk] = CONTEXT
     check: Callable[[str], str | None] = lambda _spoken: None  # returns a failure reason or None
+    turns: list[dict[str, str]] | None = None
 
 
 def make_flowchart(steps: list[str]) -> tuple[bytes, list[InkRegion]]:
@@ -157,6 +180,14 @@ def _next_problem(spoken: str) -> str | None:
     return None if reads_next_problem(spoken) else "next problem not read"
 
 
+def _offer(spoken: str) -> str | None:
+    return None if asks_offer(spoken) else "did not ask: exercise in mind or make one up"
+
+
+def _fraction(spoken: str) -> str | None:
+    return None if dictates_fraction(spoken) else "no fraction problem dictated"
+
+
 BIO_SCENARIOS = {
     "A": Scenario("missing sterile step", SCENARIO_QUERY, lambda: make_flowchart(STEPS), "error"),
     "B": Scenario("complete procedure", SCENARIO_QUERY, lambda: make_flowchart(STERILE_STEPS), "celebrating"),
@@ -200,6 +231,25 @@ MATH_SCENARIOS = {
         context=[],
         check=_no_leak,
     ),
+    "LO": Scenario(
+        "learn offer, empty board",
+        LEARN_QUERY,
+        lambda: make_board([]),
+        "idle",
+        task={"kind": "learn", "topic": LEARN_TOPIC, "stage": "offer"},
+        context=[],
+        check=_offer,
+    ),
+    "LE": Scenario(
+        "learn example after 'make one up'",
+        "Make one up for me.",
+        lambda: make_board([]),
+        "idle",
+        task={"kind": "learn", "topic": LEARN_TOPIC, "stage": "example"},
+        context=[],
+        check=_fraction,
+        turns=[OFFER_TURN],
+    ),
 }
 SCENARIOS = {"biology": BIO_SCENARIOS, "math": MATH_SCENARIOS}
 
@@ -210,29 +260,40 @@ def judge(scenario: Scenario, action: AvatarAction) -> list[str]:
     return problems + ([reason] if reason else [])
 
 
-def run_scenarios(client: VLMClient, runs: int, profile: str, only: list[str] | None = None) -> None:
+def run_scenarios(
+    client: VLMClient, runs: int, profile: str, only: list[str] | None = None, *, raw: bool = False
+) -> None:
+    # raw skips evaluate's math post-processing (offer-question guard, mathspeak) to grade the model alone.
+    ask = client._evaluate if raw else client.evaluate
     for key, scenario in SCENARIOS[profile].items():
         if only and key not in only:
             continue
         jpeg, regions = scenario.board()
         counts: Counter[str] = Counter()
-        passed, symbols, times = 0, 0, []
+        passed, notation, times = 0, 0, []
         for i in range(runs):
             t = time.perf_counter()
-            a = client.evaluate(
-                scenario.query, jpeg, scenario.context, regions, SIZE, mode=scenario.mode, task=scenario.task
+            a = ask(
+                scenario.query,
+                jpeg,
+                scenario.context,
+                regions,
+                SIZE,
+                mode=scenario.mode,
+                task=scenario.task,
+                recent_turns=scenario.turns,
             )
             times.append(time.perf_counter() - t)
             counts[a.animation_state] += 1
             fails = judge(scenario, a)
             passed += not fails
-            symbols += has_symbols(a.spoken_text)
+            notation += has_notation(a.spoken_text)
             verdict = "ok" if not fails else "FAIL: " + ", ".join(fails)
             print(
                 f"  [{key}] run {i + 1}: {times[-1]:.1f}s {a.animation_state} ({a.target_x},{a.target_y}) "
                 f"{verdict} {a.spoken_text!r}"
             )
-        sym = f", symbols in {symbols}/{runs}" if profile == "math" else ""
+        sym = f", symbols/digits in {notation}/{runs}" if profile == "math" else ""
         print(
             f"case {key} ({scenario.name}): expect {scenario.expected}: {dict(counts)} -> {passed}/{runs} pass"
             f"{sym}, median {statistics.median(times):.1f}s"
@@ -249,6 +310,7 @@ def main() -> None:
     ap.add_argument("--scenarios", action="store_true", help="run the profile's pass/fail scenarios")
     ap.add_argument("--only", help="comma-separated scenario keys, e.g. H,QC")
     ap.add_argument("--runs", type=int, default=5, help="runs per scenario")
+    ap.add_argument("--raw", action="store_true", help="grade the model without evaluate's math post-processing")
     args = ap.parse_args()
     if args.cold:
         import requests
@@ -261,7 +323,7 @@ def main() -> None:
     client.warmup()
     print(f"warmup: {time.perf_counter() - t0:.1f}s")
     if args.scenarios:
-        run_scenarios(client, args.runs, args.profile, args.only.split(",") if args.only else None)
+        run_scenarios(client, args.runs, args.profile, args.only.split(",") if args.only else None, raw=args.raw)
         return
     if args.profile == "math":
         scenario = MATH_SCENARIOS["H"]
