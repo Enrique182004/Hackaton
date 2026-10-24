@@ -100,6 +100,16 @@ class VisionLoop:
             return None
         return calibration.warp_frame(frame) if calibration is not None else frame.copy()
 
+    def latest_frame_and_calibration(self) -> tuple[np.ndarray | None, Calibration | None]:
+        """The fresh raw frame (a copy) and the calibration it was taken under, read under one lock.
+
+        A crop rendered from the raw frame must use the homography the ink regions were found with; read apart,
+        a recalibration in between would put the crop in the wrong place.
+        """
+        with self._lock:
+            frame = self._fresh_frame()
+            return (None if frame is None else frame.copy()), self._calibration
+
     def set_calibration(self, calibration: Calibration | None) -> None:
         with self._lock:
             self._calibration = calibration

@@ -76,6 +76,7 @@ def build_services(settings: Settings, on_query: Any, on_state: Any, should_list
         on_state=on_state,
         should_listen=should_listen,
         silence_rms=settings.silence_rms,
+        language=settings.language,
     )
     tts = TTSEngine(settings.tts_backend, settings.tts_voice, settings.tts_dir)
     return Services(vision=vision, store=store, vlm=vlm, audio=audio, tts=tts)

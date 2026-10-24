@@ -5,9 +5,15 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from biobench_sar.lang import normalize_language
+
 PACKAGE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("SAR_DATA_DIR", PACKAGE_DIR.parent / "data"))
 PROFILES = ("math", "biology")
+# Math boards are many small symbols (digits, signs, exponents): more regions survive the cut than a flowchart's.
+INK_MAX_REGIONS = {"math": 20, "biology": 10}
+# The classroom kit's Epson WXGA projector (16:10); SAR_PROJECTOR_WIDTH / SAR_PROJECTOR_HEIGHT override it.
+PROJECTOR_SIZE = (1280, 800)
 
 
 def _env_int(name: str, default: int) -> int:
@@ -28,6 +34,17 @@ def _env_nonneg_float(name: str, default: float) -> float:
     except ValueError:
         return default
     return value if math.isfinite(value) and value >= 0 else default
+
+
+def _env_nonneg_int(name: str, default: int) -> int:
+    value = _env_int(name, default)
+    return value if value >= 0 else default
+
+
+def _env_optional_pos_int(name: str) -> int:
+    """The variable as a positive int, or 0 when it is unset or invalid (the caller picks the default)."""
+    value = _env_int(name, 0)
+    return value if value > 0 else 0
 
 
 def _env_ink_c(name: str, default: int) -> int:
@@ -59,8 +76,8 @@ class Settings:
     camera_index: int = field(default_factory=lambda: _env_int("SAR_CAMERA_INDEX", 0))
     camera_width: int = field(default_factory=lambda: _env_int("SAR_CAMERA_WIDTH", 1280))
     camera_height: int = field(default_factory=lambda: _env_int("SAR_CAMERA_HEIGHT", 720))
-    projector_width: int = field(default_factory=lambda: _env_int("SAR_PROJECTOR_WIDTH", 1920))
-    projector_height: int = field(default_factory=lambda: _env_int("SAR_PROJECTOR_HEIGHT", 1080))
+    projector_width: int = field(default_factory=lambda: _env_pos_int("SAR_PROJECTOR_WIDTH", PROJECTOR_SIZE[0]))
+    projector_height: int = field(default_factory=lambda: _env_pos_int("SAR_PROJECTOR_HEIGHT", PROJECTOR_SIZE[1]))
     checker_cols: int = field(default_factory=lambda: _env_int("SAR_CHECKER_COLS", 9))
     checker_rows: int = field(default_factory=lambda: _env_int("SAR_CHECKER_ROWS", 6))
     calibration_file: Path = field(
@@ -96,14 +113,25 @@ class Settings:
     # edge | pyttsx3 | say | none
     tts_backend: str = field(default_factory=lambda: os.environ.get("SAR_TTS_BACKEND", "edge"))
     tts_voice: str = field(default_factory=lambda: os.environ.get("SAR_TTS_VOICE", "en-US-AriaNeural"))
+    # auto (reply in the language the student uses) | en | es
+    language: str = field(default_factory=lambda: normalize_language(os.environ.get("SAR_LANGUAGE")))
     ink_min_area: int = field(default_factory=lambda: _env_pos_int("SAR_INK_MIN_AREA", 150))
     ink_block_size: int = field(default_factory=lambda: _env_block_size("SAR_INK_BLOCK_SIZE", 31))
     ink_c: int = field(default_factory=lambda: _env_ink_c("SAR_INK_C", 15))
-    ink_max_regions: int = field(default_factory=lambda: _env_pos_int("SAR_INK_MAX_REGIONS", 10))
+    # 0 = the profile's default (INK_MAX_REGIONS); an explicit SAR_INK_MAX_REGIONS always wins.
+    ink_max_regions: int = field(default_factory=lambda: _env_optional_pos_int("SAR_INK_MAX_REGIONS"))
+    # Specks this close to a symbol (decimal points, minus signs, exponents) join its region; 0 turns it off.
+    ink_small_merge_px: int = field(default_factory=lambda: _env_nonneg_int("SAR_INK_SMALL_MERGE_PX", 24))
     host: str = field(default_factory=lambda: os.environ.get("SAR_HOST", "127.0.0.1"))
     # 5050, not Flask's 5000: macOS AirPlay Receiver listens on 5000.
     port: int = field(default_factory=lambda: _env_int("SAR_PORT", 5050))
     seed_knowledge: bool = field(default_factory=lambda: os.environ.get("SAR_SEED_KNOWLEDGE", "1") != "0")
+
+    def __post_init__(self) -> None:
+        if self.ink_max_regions <= 0:
+            object.__setattr__(self, "ink_max_regions", INK_MAX_REGIONS.get(self.profile, INK_MAX_REGIONS["math"]))
+        if self.language not in ("auto", "en", "es"):
+            object.__setattr__(self, "language", normalize_language(self.language))
 
     @property
     def ink_kwargs(self) -> dict[str, int]:
@@ -113,6 +141,7 @@ class Settings:
             "max_regions": self.ink_max_regions,
             "block_size": self.ink_block_size,
             "c": self.ink_c,
+            "small_merge_px": self.ink_small_merge_px,
         }
 
     @property

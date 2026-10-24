@@ -92,6 +92,38 @@ def test_warped_uses_calibration() -> None:
         loop.stop()
 
 
+def test_latest_frame_and_calibration_is_one_consistent_read() -> None:
+    calibration = Calibration.identity((64, 48), (128, 96))
+    loop = VisionLoop(capture_factory=lambda i: FakeCapture(), calibration=calibration)
+    assert loop.latest_frame_and_calibration() == (None, calibration), "no frame yet, the calibration still known"
+    loop.start()
+    try:
+        assert _wait(lambda: loop.latest_frame_and_calibration()[0] is not None)
+        frame, got = loop.latest_frame_and_calibration()
+        assert frame is not None and frame.shape == (48, 64, 3), "the raw camera frame, not the warped one"
+        assert got is calibration
+        frame[:] = 7
+        again, _ = loop.latest_frame_and_calibration()
+        assert again is not None and again is not frame, "a copy: the caller may draw on it"
+        loop.set_calibration(None)
+        assert loop.latest_frame_and_calibration()[1] is None
+    finally:
+        loop.stop()
+
+
+def test_latest_frame_and_calibration_holds_the_lock() -> None:
+    """Read under the same lock set_calibration takes: a recalibration can't land between frame and matrix."""
+    loop = VisionLoop(capture_factory=lambda i: FakeCapture())
+    loop._frame, loop._frame_time = np.zeros((4, 4, 3), np.uint8), time.monotonic()
+    done = threading.Event()
+    with loop._lock:
+        reader = threading.Thread(target=lambda: (loop.latest_frame_and_calibration(), done.set()))
+        reader.start()
+        assert not done.wait(0.1), "blocked while the lock is held"
+    assert done.wait(2)
+    reader.join(2)
+
+
 def test_reconnects_after_read_failure() -> None:
     caps: list[FakeCapture] = []
 
