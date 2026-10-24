@@ -3,19 +3,23 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import shutil
 import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from biobench_sar.rag import ingestor
 from biobench_sar.rag.ingestor import (
     SUPPORTED_EXTENSIONS,
+    TESSERACT_HINT,
     Chunk,
     UnsupportedFileType,
     chunk_paragraphs,
+    find_tesseract,
     ingest_file,
+    page_paragraphs,
+    tesseract_candidates,
 )
 from biobench_sar.rag.vector_store import VectorStore
 
@@ -116,15 +120,161 @@ def test_pdf(tmp_path: Path) -> None:
     assert chunks[1].metadata["page"] == 2
 
 
-@pytest.mark.skipif(
-    shutil.which("tesseract") is None and not Path("/opt/homebrew/bin/tesseract").exists(), reason="tesseract missing"
-)
-def test_image_ocr(tmp_path: Path) -> None:
+def _two_paragraph_pdf(path: Path) -> tuple[str, str]:
+    import pymupdf
+
+    one = "Paragraph one. " + "Acanthamoeba cysts resist drying and chlorine. " * 12
+    two = "Paragraph two. " + "Trophozoites feed on bacteria in lake sediment. " * 12
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_textbox(pymupdf.Rect(72, 72, 520, 330), one, fontsize=10)  # wrapped over several lines
+    page.insert_textbox(pymupdf.Rect(72, 400, 520, 700), two, fontsize=10)
+    doc.save(str(path))
+    assert "\n\n" not in doc[0].get_text(), "get_text() has no blank line between the paragraphs"
+    return one, two
+
+
+def test_pdf_is_chunked_by_paragraph(tmp_path: Path) -> None:
+    # Each paragraph is ~600 chars, so two don't fit one 1000-char chunk: page text cut at 1000 chars would end
+    # the first chunk in the middle of paragraph two.
+    f = tmp_path / "two.pdf"
+    _two_paragraph_pdf(f)
+    chunks = ingest_file(f)
+    assert len(chunks) == 2
+    assert chunks[0].text.startswith("Paragraph one.") and "Paragraph two" not in chunks[0].text
+    assert chunks[1].text.startswith("Paragraph two.") and chunks[1].text.rstrip().endswith("sediment.")
+    assert all(len(c.text) <= 1000 and c.metadata["page"] == 1 for c in chunks)
+
+
+def test_short_pdf_paragraphs_still_pack_into_one_chunk(tmp_path: Path) -> None:
+    import pymupdf
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Sample at dawn.")
+    page.insert_text((72, 300), "Keep plates at 30 C.")
+    f = tmp_path / "short.pdf"
+    doc.save(str(f))
+    assert [c.text for c in ingest_file(f)] == ["Sample at dawn.\n\nKeep plates at 30 C."]
+
+
+class _Page:
+    def __init__(self, blocks: list[tuple[Any, ...]]) -> None:
+        self.blocks = blocks
+
+    def get_text(self, kind: str) -> list[tuple[Any, ...]]:
+        assert kind == "blocks"
+        return self.blocks
+
+
+def test_page_paragraphs_skips_images_and_empty_blocks() -> None:
+    page = _Page(
+        [
+            (0, 0, 9, 9, "Title line\n", 0, 0),
+            (0, 0, 9, 9, "<image: DeviceRGB, width: 8, height: 8, bpc: 8>", 1, 1),
+            (0, 0, 9, 9, "  \n", 2, 0),
+            (0, 0, 9, 9, "Line one\nline two\n", 3, 0),
+        ]
+    )
+    assert page_paragraphs(page) == "Title line\n\nLine one\nline two"
+
+
+def test_pdf_answer_lines_are_still_stripped_per_line(tmp_path: Path) -> None:
+    import pymupdf
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "1. Solve 2x + 3 = 11")
+    page.insert_text((72, 90), "Answer: x = 4")
+    page.insert_text((72, 300), "2. Solve x - 5 = 2")
+    f = tmp_path / "worksheet.pdf"
+    doc.save(str(f))
+    text = "\n".join(c.text for c in ingest_file(f, strip_answers=True))
+    assert "2x + 3 = 11" in text and "x - 5 = 2" in text and "x = 4" not in text
+
+
+def test_windows_install_folders_are_searched() -> None:
+    environ = {
+        "ProgramFiles": r"D:\Apps",
+        "ProgramFiles(x86)": r"D:\Apps (x86)",
+        "LOCALAPPDATA": r"C:\Users\ana\AppData\Local",
+    }
+    candidates = tesseract_candidates("win32", environ)
+    assert candidates[0] == r"D:\Apps\Tesseract-OCR\tesseract.exe"
+    for exe in (
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        r"C:\Users\ana\AppData\Local\Programs\Tesseract-OCR\tesseract.exe",  # "install just for me"
+    ):
+        assert exe in candidates
+    assert len(candidates) == len({c.lower() for c in candidates}), "no folder twice"
+
+
+def test_the_ub_mannheim_install_is_found_without_path() -> None:
+    exe = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    environ = {"ProgramFiles": r"C:\Program Files", "LOCALAPPDATA": r"C:\Users\ana\AppData\Local"}
+    found = find_tesseract(which=lambda name: None, is_file=lambda p: p == exe, platform="win32", environ=environ)
+    assert found == exe
+    per_user = r"C:\Users\ana\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+    found = find_tesseract(which=lambda name: None, is_file=lambda p: p == per_user, platform="win32", environ=environ)
+    assert found == per_user
+
+
+def test_homebrew_is_found_when_finder_gives_a_short_path() -> None:
+    # An app opened from Finder gets PATH=/usr/bin:/bin:/usr/sbin:/sbin, without /opt/homebrew/bin.
+    for exe in ("/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract"):
+        assert find_tesseract(which=lambda name: None, is_file=lambda p, e=exe: p == e, platform="darwin") == exe
+
+
+def test_path_wins_and_a_configured_path_wins_over_path() -> None:
+    def which(name: str) -> str:
+        return "/custom/bin/tesseract"
+
+    assert find_tesseract(which=which, is_file=lambda p: True, platform="darwin") == "/custom/bin/tesseract"
+    assert (
+        find_tesseract(configured="/opt/tess/tesseract", which=which, is_file=lambda p: True) == "/opt/tess/tesseract"
+    )
+    gone = find_tesseract(configured="/old/tesseract", which=which, is_file=lambda p: p != "/old/tesseract")
+    assert gone == "/custom/bin/tesseract"
+
+
+def test_no_tesseract_anywhere_is_none() -> None:
+    assert find_tesseract(which=lambda name: None, is_file=lambda p: False, platform="win32", environ={}) is None
+    assert find_tesseract(which=lambda name: None, is_file=lambda p: False, platform="darwin") is None
+
+
+def test_configure_tesseract_points_pytesseract_at_the_found_program(monkeypatch: pytest.MonkeyPatch) -> None:
     import pytesseract
+
+    monkeypatch.setattr(pytesseract.pytesseract, "tesseract_cmd", "tesseract")
+    monkeypatch.setattr(ingestor.shutil, "which", lambda name: None)
+    monkeypatch.setattr(ingestor.os.path, "isfile", lambda p: p == "/opt/homebrew/bin/tesseract")
+    monkeypatch.setattr(ingestor.sys, "platform", "darwin")
+    assert ingestor.configure_tesseract() == "/opt/homebrew/bin/tesseract"
+    assert pytesseract.pytesseract.tesseract_cmd == "/opt/homebrew/bin/tesseract"
+
+
+def test_an_image_without_tesseract_explains_how_to_install_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from PIL import Image
+
+    f = tmp_path / "board.png"
+    Image.new("RGB", (10, 10), "white").save(f)
+    monkeypatch.setattr(ingestor, "configure_tesseract", lambda: None)
+    with pytest.raises(RuntimeError) as raised:
+        ingest_file(f)
+    assert str(raised.value) == TESSERACT_HINT
+    for advice in (
+        "winget install UB-Mannheim.TesseractOCR",
+        "brew install tesseract",
+        r"C:\Program Files\Tesseract-OCR",
+    ):
+        assert advice in TESSERACT_HINT
+
+
+@pytest.mark.skipif(ingestor.configure_tesseract() is None, reason="tesseract missing")
+def test_image_ocr(tmp_path: Path) -> None:
     from PIL import Image, ImageDraw, ImageFont
 
-    if not shutil.which("tesseract"):
-        pytesseract.pytesseract.tesseract_cmd = "/opt/homebrew/bin/tesseract"
     img = Image.new("RGB", (900, 160), "white")
     try:
         font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 64)

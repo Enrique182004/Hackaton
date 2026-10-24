@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Any
 
 from biobench_sar.rag.quiz_bank import is_answer_column, strip_document_answers
 
@@ -12,9 +15,13 @@ SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
     {".pdf", ".txt", ".md", ".csv", ".docx", ".pptx", ".png", ".jpg", ".jpeg"}
 )
 TESSERACT_HINT = (
-    "Tesseract binary not found. Install it: macOS `brew install tesseract`, "
-    "Ubuntu `sudo apt install tesseract-ocr`, Windows https://github.com/UB-Mannheim/tesseract/wiki"
+    "Tesseract OCR, which reads the text in images, was not found. Install it, then upload the image again: "
+    "Windows `winget install UB-Mannheim.TesseractOCR` (or https://github.com/UB-Mannheim/tesseract/wiki), "
+    "macOS `brew install tesseract`, Ubuntu `sudo apt install tesseract-ocr`. Besides PATH, the assistant looks in "
+    "C:\\Program Files\\Tesseract-OCR, %LOCALAPPDATA%\\Programs\\Tesseract-OCR, /opt/homebrew/bin and /usr/local/bin."
 )
+# Homebrew (Apple silicon, then Intel), MacPorts and the distro package.
+_POSIX_TESSERACT_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin")
 
 
 # A whole document's texts (pages, slides or the one text) -> the same texts cleaned, before chunking.
@@ -82,11 +89,22 @@ def _cleaned(parts: list[str], clean: Cleaner | None) -> list[str]:
     return clean(parts) if clean is not None else parts
 
 
+def page_paragraphs(page: Any) -> str:
+    """A PDF page's text with a blank line between its text blocks, the paragraphs PyMuPDF finds from the layout.
+
+    page.get_text() puts only single newlines between paragraphs, so chunk_paragraphs would see one paragraph per
+    page. A block keeps its own line breaks, which answer stripping reads line by line.
+    """
+    blocks = page.get_text("blocks")
+    # (x0, y0, x1, y1, text, block_no, block_type); type 1 is an image, whose "text" only describes it.
+    return "\n\n".join(text for b in blocks if b[6] == 0 and (text := b[4].strip()))
+
+
 def _ingest_pdf(path: Path, clean: Cleaner | None = None) -> list[Chunk]:
     import pymupdf
 
     with pymupdf.open(str(path)) as doc:
-        pages = [page.get_text() for page in doc]
+        pages = [page_paragraphs(page) for page in doc]
     out: list[Chunk] = []
     for i, text in enumerate(_cleaned(pages, clean), start=1):
         out += _mk(chunk_paragraphs(text), path.name, "pdf", page=i)
@@ -148,6 +166,58 @@ def _ingest_pptx(path: Path, clean: Cleaner | None = None) -> list[Chunk]:
     return out
 
 
+def tesseract_candidates(platform: str | None = None, environ: Mapping[str, str] | None = None) -> list[str]:
+    """Where installers put tesseract, for when PATH doesn't say: the UB-Mannheim Windows installer (for everyone
+    or just this user) never adds itself to PATH, and an app started from Finder gets a PATH without Homebrew."""
+    platform = sys.platform if platform is None else platform
+    environ = os.environ if environ is None else environ
+    if platform != "win32":
+        return [str(PurePosixPath(folder, "tesseract")) for folder in _POSIX_TESSERACT_DIRS]
+    roots = [environ.get(key) for key in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)")]
+    folders = [PureWindowsPath(root, "Tesseract-OCR") for root in roots if root]
+    folders += [
+        PureWindowsPath(r"C:\Program Files\Tesseract-OCR"),
+        PureWindowsPath(r"C:\Program Files (x86)\Tesseract-OCR"),
+    ]
+    local = environ.get("LOCALAPPDATA")
+    if local:
+        folders += [PureWindowsPath(local, "Programs", "Tesseract-OCR"), PureWindowsPath(local, "Tesseract-OCR")]
+    found: list[str] = []
+    for folder in folders:
+        exe = str(folder / "tesseract.exe")
+        if exe.lower() not in (f.lower() for f in found):
+            found.append(exe)
+    return found
+
+
+def find_tesseract(
+    *,
+    configured: str = "tesseract",
+    which: Callable[[str], str | None] = shutil.which,
+    is_file: Callable[[str], bool] = os.path.isfile,
+    platform: str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> str | None:
+    """The tesseract program to run: `configured` (pytesseract's tesseract_cmd) when it is a full path that exists,
+    else the one on PATH, else the first install folder that has it; None when it isn't installed."""
+    if configured != "tesseract" and is_file(configured):
+        return configured
+    on_path = which("tesseract")
+    if on_path:
+        return on_path
+    return next((exe for exe in tesseract_candidates(platform, environ) if is_file(exe)), None)
+
+
+def configure_tesseract() -> str | None:
+    """Point pytesseract at the tesseract find_tesseract() finds (it only runs plain `tesseract` from PATH)."""
+    import pytesseract
+
+    exe = find_tesseract(configured=str(pytesseract.pytesseract.tesseract_cmd))
+    if exe is not None:
+        pytesseract.pytesseract.tesseract_cmd = exe
+    return exe
+
+
 def _ingest_image(path: Path, clean: Cleaner | None = None) -> list[Chunk]:
     import pytesseract
     from PIL import Image
@@ -179,6 +249,6 @@ def ingest_file(path: str | Path, *, strip_answers: bool = False) -> list[Chunk]
         return _ingest_docx(p, clean)
     if ext == ".pptx":
         return _ingest_pptx(p, clean)
-    if shutil.which("tesseract") is None and not Path("/opt/homebrew/bin/tesseract").exists():
+    if configure_tesseract() is None:
         raise RuntimeError(TESSERACT_HINT)
     return _ingest_image(p, clean)
