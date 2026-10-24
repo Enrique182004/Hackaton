@@ -111,7 +111,7 @@ def dictates_new_equation(spoken: str) -> bool:
 
 
 def reads_next_problem(spoken: str) -> bool:
-    return bool(re.search(r"\b(?:two|2)\s*x\s*(?:minus|-)\s*(?:four|4)\b", spoken, re.IGNORECASE))
+    return bool(re.search(r"\b(?:two|2)\s*(?:times\s+)?x\s*(?:minus|-)\s*(?:four|4)\b", spoken, re.IGNORECASE))
 
 
 def asks_offer(spoken: str) -> bool:

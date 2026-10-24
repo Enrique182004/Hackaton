@@ -711,6 +711,10 @@ def test_bench_math_heuristics(monkeypatch: pytest.MonkeyPatch) -> None:
     assert b.dictates_new_equation("Try this. Four x plus seven equals nineteen.")
     assert not b.dictates_new_equation("Three x plus five equals twenty. Solve it.")
     assert b.reads_next_problem("Correct! Problem two. Two x minus four equals ten.")
+    assert b.reads_next_problem("Problem two. Two times x minus four equals ten.") and b.reads_next_problem(
+        "2x - 4 = 10"
+    )
+    assert not b.reads_next_problem("Correct, great job!")
     assert b.asks_offer(OFFER_QUESTION) and not b.asks_offer("Fractions are parts of a whole.")
     assert b.dictates_fraction("Try one half plus one fourth.") and not b.dictates_fraction("Try x plus two.")
     assert b.has_notation("x^2 = 4") and b.has_notation("x plus 2") and not b.has_notation("x squared")
