@@ -150,7 +150,7 @@ console.log(qr.createDataURL(8, 32));
 
 # ---- service worker -------------------------------------------------------------------------
 SW_HARNESS = r"""
-const ORIGIN = "http://192.168.1.20:5050";
+const ORIGIN = "http://127.0.0.1:5050";
 const stores = new Map();
 const keyOf = (req) => (typeof req === "string" ? new URL(req, ORIGIN).href : req.url);
 const caches = {
@@ -167,14 +167,18 @@ const caches = {
       },
     };
   },
+  async has(name) { return stores.has(name); },
   async keys() { return [...stores.keys()]; },
   async delete(name) { return stores.delete(name); },
 };
 const listeners = {};
 const fetched = [];
+let unregistered = 0;
 let network = async () => { throw new TypeError("offline"); };
-const reply = (body, { type = "basic", redirected = false, status = 200, headers = {} } = {}) => {
-  const res = new Response(body, { status, headers: { "Content-Type": "text/html", ...headers } });
+// lan: false is a server with LAN mode off, which leaves out the X-SAR-LAN mark.
+const reply = (body, { type = "basic", redirected = false, status = 200, headers = {}, lan = true } = {}) => {
+  const marked = lan ? { "X-SAR-LAN": "1" } : {};
+  const res = new Response(body, { status, headers: { "Content-Type": "text/html", ...marked, ...headers } });
   Object.defineProperty(res, "type", { value: type });
   Object.defineProperty(res, "redirected", { value: redirected });
   return res;
@@ -184,13 +188,13 @@ const self = {
   addEventListener: (type, fn) => { listeners[type] = fn; },
   skipWaiting: async () => {},
   clients: { claim: async () => {} },
+  registration: { unregister: async () => { unregistered += 1; return true; } },
 };
 vm.runInNewContext(readFileSync(SW, "utf8"), {
-  self, caches, Response, Headers, URL, Promise, console,
+  self, caches, Response, Headers, URL, Promise, console, setTimeout,
   fetch: (req, init) => { fetched.push(typeof req === "string" ? req : req.url); return network(req, init); },
-  setTimeout: (fn, ms) => setTimeout(fn, ms / 100),  // the 4 s navigation timeout becomes 40 ms
 });
-const CACHE = "sar-shell-v1";
+const CACHE = "sar-shell-" + /const CACHE_VERSION = "([^"]+)"/.exec(readFileSync(SW, "utf8"))[1];
 
 async function dispatch(path, { mode = "cors", method = "GET", headers = {}, origin = ORIGIN } = {}) {
   const waits = [];
@@ -215,6 +219,11 @@ const stored = async (path) => {
   return hit ? await hit.clone().text() : undefined;
 };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+async function install() {
+  const waits = [];
+  listeners.install({ waitUntil: (p) => waits.push(p) });
+  await Promise.all(waits);
+}
 """
 
 
@@ -228,6 +237,7 @@ network = async () => reply("x");
 for (const [path, opts] of [
   ["/socket.io/?EIO=4&transport=polling", {}],
   ["/socket.io/?EIO=4&transport=websocket", {}],
+  ["/socket.io", {}],
   ["/join?pin=123456", { mode: "navigate" }],
   ["/join", { mode: "navigate", method: "POST" }],
   ["/api/query", { method: "POST" }],
@@ -250,6 +260,36 @@ assert.equal(stores.get(CACHE), undefined);
 
 
 @needs_node
+def test_service_worker_never_touches_the_api(tmp_path: Path) -> None:
+    # /api/lan carries the PIN: it must never reach CacheStorage, and nothing stale may stand in for live data.
+    run_node(
+        tmp_path,
+        SW_HARNESS
+        + r"""
+const json = (body) => reply(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
+network = async () => json({ enabled: true, pin: "042917" });
+for (const [path, opts] of [
+  ["/api/lan", {}],
+  ["/api/lan/pin", {}],
+  ["/api/status", {}],
+  ["/api/history", {}],
+  ["/api/documents", {}],
+  ["/api", {}],
+  ["/api/status", { mode: "navigate" }],
+]) {
+  const { handled } = await dispatch(path, opts);
+  assert.equal(handled, false, path);
+}
+await install();
+for (const [name, store] of stores) {
+  for (const key of store.keys()) assert.doesNotMatch(new URL(key).pathname, /^\/api/, `${name} holds ${key}`);
+}
+assert.doesNotMatch(readFileSync(SW, "utf8"), /X-SAR-From-Cache/);
+""",
+    )
+
+
+@needs_node
 def test_service_worker_pages_are_network_first_with_a_cached_fallback(tmp_path: Path) -> None:
     run_node(
         tmp_path,
@@ -265,21 +305,14 @@ network = async () => reply("dashboard v2");
 r = await dispatch("/dashboard", nav);
 assert.equal(await r.response.text(), "dashboard v2", "fresh page wins when the laptop answers");
 
+network = async () => { await wait(150); return reply("dashboard v3"); };
+r = await dispatch("/dashboard", nav);
+assert.equal(await r.response.text(), "dashboard v3", "a slow laptop is waited for, never replaced by the cache");
+
 network = async () => { throw new TypeError("offline"); };
 r = await dispatch("/dashboard", nav);
-assert.equal(await r.response.text(), "dashboard v2", "cached page when the laptop is unreachable");
+assert.equal(await r.response.text(), "dashboard v3", "cached page when the laptop is unreachable");
 
-network = async () => { await wait(200); return reply("dashboard v3"); };
-r = await dispatch("/dashboard", nav);
-assert.equal(await r.response.text(), "dashboard v2", "cached page when the network is slower than the timeout");
-await wait(250);
-assert.equal(await stored("/dashboard"), "dashboard v3", "the slow answer still refreshes the cache");
-
-network = async () => { await wait(100); return reply("projector"); };
-r = await dispatch("/", nav);
-assert.equal(await r.response.text(), "projector", "no cached copy: wait for the network");
-
-network = async () => { throw new TypeError("offline"); };
 r = await dispatch("/precharge", nav);
 assert.equal(r.response.status, 503);
 assert.match(await r.response.text(), /Can't reach the laptop/);
@@ -310,23 +343,25 @@ assert.equal(await stored("/static/js/gone.js"), undefined);
 network = async () => reply("opaque", { type: "opaque" });
 await dispatch("/static/js/x.js");
 assert.equal(await stored("/static/js/x.js"), undefined);
+assert.equal(unregistered, 0, "none of these mean LAN mode is off");
 """,
     )
 
 
 @needs_node
-def test_service_worker_static_files_are_stale_while_revalidate(tmp_path: Path) -> None:
+def test_service_worker_static_files_are_stale_while_revalidate_once_lan_mode_is_seen(tmp_path: Path) -> None:
     run_node(
         tmp_path,
         SW_HARNESS
         + r"""
 const path = "/static/css/dashboard.css";
+await (await caches.open(CACHE)).put(path, reply("css v0"));  // left over from an earlier run of this worker
 network = async () => reply("css v1");
 let r = await dispatch(path);
-assert.equal(await r.response.text(), "css v1");
+assert.equal(await r.response.text(), "css v1", "a fresh worker goes to the network first");
 network = async () => reply("css v2");
 r = await dispatch(path);
-assert.equal(await r.response.text(), "css v1", "the cached copy answers at once");
+assert.equal(await r.response.text(), "css v1", "after a LAN-mode answer the cached copy answers at once");
 assert.equal(await stored(path), "css v2", "and the fresh one is stored for next time");
 r = await dispatch(path);
 assert.equal(await r.response.text(), "css v2");
@@ -340,36 +375,45 @@ assert.ok(r.error, "nothing cached and no network: the request fails as it would
 
 
 @needs_node
-def test_service_worker_api_is_network_first_and_marks_stale_answers(tmp_path: Path) -> None:
+def test_service_worker_retires_itself_when_lan_mode_is_off(tmp_path: Path) -> None:
     run_node(
         tmp_path,
         SW_HARNESS
         + r"""
-const json = (body) => reply(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
-network = async () => json({ state: "ready" });
-let r = await dispatch("/api/status");
-assert.deepEqual(await r.response.json(), { state: "ready" });
-assert.equal(r.response.headers.get("X-SAR-From-Cache"), null);
+network = async () => reply("dashboard (LAN)");
+await dispatch("/dashboard", { mode: "navigate" });
+await dispatch("/static/css/dashboard.css");
+await caches.open("sar-shell-old");
+assert.equal(await stored("/dashboard"), "dashboard (LAN)");
 
-network = async () => json({ state: "thinking" });
-r = await dispatch("/api/status");
-assert.deepEqual(await r.response.json(), { state: "thinking" }, "live data always wins");
+// The same port, later, in an ordinary development run: no X-SAR-LAN mark.
+network = async () => reply("dashboard (dev, edited)", { lan: false });
+let r = await dispatch("/dashboard", { mode: "navigate" });
+assert.equal(await r.response.text(), "dashboard (dev, edited)");
+assert.equal(unregistered, 1);
+assert.deepEqual(await caches.keys(), [], "every sar-* cache is deleted");
 
-network = async () => { throw new TypeError("offline"); };
-r = await dispatch("/api/status");
-assert.deepEqual(await r.response.json(), { state: "thinking" });
-assert.equal(r.response.headers.get("X-SAR-From-Cache"), "1");
+for (const [path, opts] of [["/static/css/dashboard.css", {}], ["/dashboard", { mode: "navigate" }]]) {
+  const { handled } = await dispatch(path, opts);
+  assert.equal(handled, false, `${path}: a retired worker leaves everything to the network`);
+}
+assert.deepEqual(await caches.keys(), []);
+assert.equal(unregistered, 1);
+""",
+    )
 
-network = async () => json({ hits: [] });
-await dispatch("/api/search?q=fractions");
-assert.equal(await stored("/api/search?q=fractions"), undefined, "queries are not stored");
-network = async () => reply("not json");
-await dispatch("/api/ink");
-assert.equal(await stored("/api/ink"), undefined, "only JSON reads are stored");
 
-network = async () => { throw new TypeError("offline"); };
-r = await dispatch("/api/documents");
-assert.ok(r.error, "nothing stored: the request fails like it would without a worker");
+@needs_node
+def test_service_worker_never_stores_an_unmarked_static_file(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        SW_HARNESS
+        + r"""
+network = async () => reply("dev css", { lan: false });
+const r = await dispatch("/static/css/dashboard.css");
+assert.equal(await r.response.text(), "dev css");
+assert.equal(unregistered, 1);
+assert.deepEqual(await caches.keys(), []);
 """,
     )
 
@@ -385,22 +429,43 @@ network = async (path) => {
   if (path === "/dashboard") return reply("<form>PIN</form>", { redirected: true });
   return reply("body of " + path);
 };
-const waits = [];
-listeners.install({ waitUntil: (p) => waits.push(p) });
-await Promise.all(waits);
+await install();
 assert.ok(fetched.includes("/static/vendor/qrcode.min.js"));
 assert.equal(await stored("/static/css/dashboard.css"), "body of /static/css/dashboard.css");
 assert.equal(await stored("/static/js/dashboard/tutor.js"), undefined);
 assert.equal(await stored("/dashboard"), undefined, "a gated device must not precache the PIN form");
 
-await caches.open("sar-shell-v0");
+await caches.open("sar-shell-old");
 await caches.open("someone-else");
 const activations = [];
 listeners.activate({ waitUntil: (p) => activations.push(p) });
 await Promise.all(activations);
 assert.deepEqual((await caches.keys()).sort(), [CACHE, "someone-else"].sort());
+assert.equal(unregistered, 0);
 """,
     )
+
+
+@needs_node
+def test_service_worker_installed_against_a_server_without_lan_mode_retires(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        SW_HARNESS
+        + r"""
+network = async (path) => reply("body of " + path, { lan: false });
+await install();
+assert.equal(unregistered, 1);
+assert.equal(stores.get(CACHE), undefined);
+""",
+    )
+
+
+def test_service_worker_lan_mark_matches_lan_py() -> None:
+    import re
+
+    text = SW.read_text(encoding="utf-8")
+    header = re.search(r'const LAN_HEADER = "([^"]+)"', text)
+    assert header and header.group(1) == lan.LAN_MODE_HEADER
 
 
 def test_service_worker_shell_lists_files_that_exist() -> None:

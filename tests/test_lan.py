@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import socket
 import threading
 
@@ -11,13 +12,20 @@ from biobench_sar.lan import (
     COOKIE_NAME,
     TOKEN_TTL_S,
     JoinPin,
+    PhoneSessions,
+    SocketIOGate,
+    client_key,
     cookie_kwargs,
     is_allowed_host,
+    is_lan_mode,
     is_local_request,
+    is_loopback_bind,
     is_open_path,
     is_request_allowed,
     join_url,
     local_ip_addresses,
+    looks_like_navigation,
+    parse_hostnames,
     rank_addresses,
 )
 
@@ -62,7 +70,7 @@ def test_local_ip_addresses_falls_back_to_the_hostname(monkeypatch: pytest.Monke
     assert local_ip_addresses() == ["10.1.2.3"]
 
 
-def test_local_ip_addresses_on_this_machine_is_safe_and_sends_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_local_ip_addresses_on_this_machine_never_sends_on_a_socket(monkeypatch: pytest.MonkeyPatch) -> None:
     sent: list[object] = []
     real_socket = socket.socket
 
@@ -226,7 +234,95 @@ def test_cookie_kwargs_fit_flask_set_cookie() -> None:
     assert "Path=/" in header
 
 
+def test_is_request_allowed_accepts_configured_hostnames() -> None:
+    gate = JoinPin()
+    token = gate.redeem(gate.pin, "192.168.1.30")
+    phone = {"remote_addr": "192.168.1.30", "host": "my-laptop.local:5050", "path": "/dashboard", "token": token}
+    assert not is_request_allowed(gate, **phone)
+    assert is_request_allowed(gate, **phone, extra_names=("my-laptop.local",))
+    assert not is_request_allowed(gate, **{**phone, "token": None}, extra_names=("my-laptop.local",))
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"accept": "text/html,application/xhtml+xml,*/*;q=0.8"}, True),  # plain-HTTP QR scan: no Sec-Fetch-*
+        ({"accept": "TEXT/HTML"}, True),
+        ({"accept": "text/html", "sec_fetch_mode": "navigate", "sec_fetch_site": "none"}, True),
+        ({"accept": "text/html", "sec_fetch_mode": "navigate", "sec_fetch_site": "same-origin"}, True),
+        ({"accept": "image/avif,image/webp,image/*,*/*;q=0.8"}, False),  # <img src=/join?pin=...>
+        ({"accept": "*/*"}, False),  # fetch() or <script>
+        ({"accept": None}, False),
+        ({"accept": "text/html", "sec_fetch_mode": "no-cors"}, False),
+        ({"accept": "text/html", "sec_fetch_mode": "navigate", "sec_fetch_site": "cross-site"}, False),
+    ],
+)
+def test_looks_like_navigation(headers: dict[str, str | None], expected: bool) -> None:
+    kwargs = {"accept": None, "sec_fetch_mode": None, "sec_fetch_site": None, **headers}
+    assert looks_like_navigation(**kwargs) is expected
+
+
+# ---- settings ---------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("127.0.0.1", True),
+        ("127.0.1.1", True),
+        ("localhost", True),
+        ("LOCALHOST.", True),
+        ("::1", True),
+        ("[::1]", True),
+        ("::ffff:127.0.0.1", True),
+        ("0.0.0.0", False),
+        ("::", False),
+        ("", False),  # binds every interface
+        ("192.168.1.20", False),
+        ("my-laptop.local", False),
+        ("localhost.evil.example", False),
+        (None, False),
+    ],
+)
+def test_is_loopback_bind(host: str | None, expected: bool) -> None:
+    assert is_loopback_bind(host) is expected
+
+
+@pytest.mark.parametrize(
+    ("sar_lan", "bind_host", "expected"),
+    [
+        (False, "127.0.0.1", False),
+        (False, "localhost", False),
+        (False, "::1", False),
+        (True, "127.0.0.1", True),
+        (True, "0.0.0.0", True),
+        (False, "0.0.0.0", True),  # SAR_HOST alone opens the server to the network, so the PIN gate is on
+        (False, "192.168.1.20", True),
+        (False, "", True),
+    ],
+)
+def test_any_bind_other_devices_can_reach_turns_lan_mode_on(sar_lan: bool, bind_host: str, expected: bool) -> None:
+    assert is_lan_mode(sar_lan=sar_lan, bind_host=bind_host) is expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, ()),
+        ("", ()),
+        ("my-laptop.local", ("my-laptop.local",)),
+        (" My-Laptop.local. , lab-pc  my-laptop.local", ("my-laptop.local", "lab-pc")),
+        ("*.example, -bad.local, bad-.local, a..b, under_score.local, 10.0.0.7, ::1", ()),
+        ("x" * 64 + ".local", ()),
+    ],
+)
+def test_parse_hostnames(raw: str | None, expected: tuple[str, ...]) -> None:
+    assert parse_hostnames(raw) == expected
+
+
 # ---- the PIN ----------------------------------------------------------------------
+PHONE = "192.168.1.30"
+OTHER = "192.168.1.31"
+
+
 def test_pin_is_six_ascii_digits() -> None:
     pins = {JoinPin().pin for _ in range(50)}
     assert all(len(p) == 6 and p.isascii() and p.isdigit() for p in pins)
@@ -273,74 +369,182 @@ def test_verify_uses_a_constant_time_compare(monkeypatch: pytest.MonkeyPatch) ->
     assert calls and calls[0][1] == gate.pin.encode()
 
 
-def test_ten_wrong_tries_in_a_minute_lock_for_sixty_seconds() -> None:
+def test_ten_wrong_tries_in_a_minute_lock_that_device_for_sixty_seconds() -> None:
     clock = FakeClock()
     gate = JoinPin(clock=clock)
     for _ in range(9):
-        assert not gate.verify(wrong(gate.pin))
+        assert not gate.verify(wrong(gate.pin), PHONE)
         clock.advance(1)
-    assert gate.locked_for() == 0.0
-    assert gate.verify(gate.pin)  # a right PIN still works before the tenth miss
-    assert not gate.verify(wrong(gate.pin))
-    assert gate.locked_for() == pytest.approx(60.0)
-    assert not gate.verify(gate.pin)  # locked: even the right PIN is refused
+    assert gate.locked_for(PHONE) == 0.0
+    assert not gate.verify(wrong(gate.pin), PHONE)
+    assert gate.locked_for(PHONE) == pytest.approx(60.0)
+    assert not gate.verify(gate.pin, PHONE)  # locked: even the right PIN is refused
     clock.advance(59.9)
-    assert not gate.verify(gate.pin)
+    assert not gate.verify(gate.pin, PHONE)
     clock.advance(0.2)
-    assert gate.locked_for() == 0.0
-    assert gate.verify(gate.pin)
+    assert gate.locked_for(PHONE) == 0.0
+    assert gate.verify(gate.pin, PHONE)
+
+
+def test_a_right_pin_before_the_tenth_miss_joins_and_forgives_the_device() -> None:
+    clock = FakeClock()
+    gate = JoinPin(clock=clock)
+    for _ in range(9):
+        gate.verify(wrong(gate.pin), PHONE)
+    assert gate.verify(gate.pin, PHONE)
+    for _ in range(9):
+        gate.verify(wrong(gate.pin), PHONE)
+    assert gate.locked_for(PHONE) == 0.0, "the earlier misses no longer count"
+
+
+def test_one_device_locking_itself_out_leaves_the_others_free() -> None:
+    gate = JoinPin(clock=FakeClock())
+    for _ in range(10):
+        gate.verify(wrong(gate.pin), PHONE)
+    assert gate.locked_for(PHONE) > 0
+    assert gate.locked_for(OTHER) == 0.0
+    assert gate.verify(gate.pin, OTHER)
+    assert not gate.verify(gate.pin, PHONE)
+
+
+def test_each_further_lockout_doubles_up_to_an_hour() -> None:
+    clock = FakeClock()
+    gate = JoinPin(global_max_failures=1_000_000, clock=clock)
+    seen = []
+    for _ in range(9):
+        for _ in range(10):
+            gate.verify(wrong(gate.pin), PHONE)
+        seen.append(gate.locked_for(PHONE))
+        clock.advance(seen[-1])
+    assert seen == pytest.approx([60, 120, 240, 480, 960, 1920, 3600, 3600, 3600])
+
+
+def test_a_device_quiet_for_a_day_starts_over() -> None:
+    clock = FakeClock()
+    gate = JoinPin(clock=clock)
+    for _ in range(3):
+        for _ in range(10):
+            gate.verify(wrong(gate.pin), PHONE)
+        clock.advance(gate.locked_for(PHONE))
+    clock.advance(lan.FORGET_S)
+    for _ in range(10):
+        gate.verify(wrong(gate.pin), PHONE)
+    assert gate.locked_for(PHONE) == pytest.approx(60.0)
 
 
 def test_tries_during_a_lockout_do_not_extend_it() -> None:
     clock = FakeClock()
     gate = JoinPin(clock=clock)
     for _ in range(10):
-        gate.verify(wrong(gate.pin))
+        gate.verify(wrong(gate.pin), PHONE)
     for _ in range(50):
         clock.advance(1)
-        gate.verify(wrong(gate.pin))
+        gate.verify(wrong(gate.pin), PHONE)
     clock.advance(10.1)
-    assert gate.verify(gate.pin)
+    assert gate.verify(gate.pin, PHONE)
 
 
 def test_misses_spread_over_more_than_a_minute_never_lock() -> None:
     clock = FakeClock()
     gate = JoinPin(clock=clock)
     for _ in range(40):
-        assert not gate.verify(wrong(gate.pin))
+        assert not gate.verify(wrong(gate.pin), PHONE)
         clock.advance(7)  # about 8.6 misses per minute
-    assert gate.locked_for() == 0.0
-    assert gate.verify(gate.pin)
+    assert gate.locked_for(PHONE) == 0.0
+    assert gate.verify(gate.pin, PHONE)
 
 
-def test_rotate_clears_a_lockout() -> None:
+def test_the_server_wide_cap_stops_many_devices_guessing_together() -> None:
     clock = FakeClock()
     gate = JoinPin(clock=clock)
+    for n in range(lan.GLOBAL_MAX_FAILURES):
+        assert not gate.verify(wrong(gate.pin), f"10.0.{n // 200}.{n % 200 + 1}")  # one miss per address
+        clock.advance(10)
+    newcomer = "10.9.9.9"
+    remaining = lan.GLOBAL_WINDOW_S - 10 * lan.GLOBAL_MAX_FAILURES
+    assert gate.locked_for(newcomer) == pytest.approx(remaining)
+    assert not gate.verify(gate.pin, newcomer), "nobody may guess, not even with the right PIN"
+    clock.advance(remaining)
+    assert gate.locked_for(newcomer) == 0.0, "the oldest miss left the window: one more guess is allowed"
+    assert not gate.verify(wrong(gate.pin), newcomer)
+    assert gate.locked_for(newcomer) > 0
+
+
+def test_the_server_wide_cap_leaves_joined_devices_alone() -> None:
+    gate = JoinPin(global_max_failures=3, clock=FakeClock())
+    token = gate.redeem(gate.pin, PHONE)
+    for n in range(3):
+        gate.verify(wrong(gate.pin), f"10.0.0.{n + 1}")
+    assert gate.locked_for(OTHER) > 0
+    assert gate.is_valid_token(token)
+
+
+def test_rotate_resets_the_server_budget_but_not_a_device_lockout() -> None:
+    clock = FakeClock()
+    gate = JoinPin(global_max_failures=12, clock=clock)
+    for _ in range(10):
+        gate.verify(wrong(gate.pin), PHONE)
+    gate.verify(wrong(gate.pin), OTHER)
+    gate.verify(wrong(gate.pin), OTHER)
+    assert gate.locked_for(OTHER) > 0, "server-wide cap reached"
+    new = gate.rotate()
+    assert gate.locked_for(OTHER) == 0.0
+    assert gate.verify(new, OTHER)
+    assert gate.locked_for(PHONE) == pytest.approx(60.0), "a script that locked itself out stays locked out"
+    assert not gate.verify(new, PHONE)
+
+
+def test_unknown_peers_share_one_bucket() -> None:
+    gate = JoinPin(clock=FakeClock())
     for _ in range(10):
         gate.verify(wrong(gate.pin))
     assert gate.locked_for() > 0
-    new = gate.rotate()
-    assert gate.locked_for() == 0.0
-    assert gate.verify(new)
+    assert gate.locked_for("garbage") > 0
+    assert gate.locked_for(PHONE) == 0.0
+
+
+def test_tracked_devices_are_bounded() -> None:
+    gate = JoinPin(max_clients=4, clock=FakeClock())
+    for n in range(10):
+        gate.verify(wrong(gate.pin), f"10.0.0.{n + 1}")
+    assert len(gate._clients) == 4
+    assert list(gate._clients) == [f"10.0.0.{n}" for n in range(7, 11)]
+
+
+@pytest.mark.parametrize(
+    ("addr", "expected"),
+    [
+        ("192.168.1.30", "192.168.1.30"),
+        ("::ffff:192.168.1.30", "192.168.1.30"),
+        ("2001:db8:1:2:aaaa::1", "2001:db8:1:2::/64"),
+        ("[2001:db8:1:2:bbbb::9]", "2001:db8:1:2::/64"),  # privacy addresses of one phone share a bucket
+        ("fe80::1%en0", "fe80::/64"),
+        ("garbage", "?"),
+        (None, "?"),
+    ],
+)
+def test_client_key(addr: str | None, expected: str) -> None:
+    assert client_key(addr) == expected
 
 
 def test_concurrent_guesses_are_counted_exactly() -> None:
     clock = FakeClock()
-    gate = JoinPin(max_failures=1_000_000, clock=clock)
+    gate = JoinPin(max_failures=1_000_000, global_max_failures=1_000_000, clock=clock)
     bad = wrong(gate.pin)
     barrier = threading.Barrier(8)
 
-    def guess() -> None:
+    def guess(n: int) -> None:
         barrier.wait()
         for _ in range(500):
-            gate.verify(bad)
+            gate.verify(bad, f"10.0.0.{n % 2 + 1}")
 
-    threads = [threading.Thread(target=guess) for _ in range(8)]
+    threads = [threading.Thread(target=guess, args=(n,)) for n in range(8)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    assert len(gate._failures) == 4000
+    assert len(gate._global_failures) == 4000
+    assert [len(c.failures) for c in gate._clients.values()] == [2000, 2000]
 
 
 def test_concurrent_guesses_lock_once_and_stop_counting() -> None:
@@ -351,19 +555,22 @@ def test_concurrent_guesses_lock_once_and_stop_counting() -> None:
     def guess(offset: int) -> None:
         barrier.wait()
         for i in range(50):
-            gate.verify(f"{(int(pin) + 1 + offset * 50 + i) % 1_000_000:06d}")
+            gate.verify(f"{(int(pin) + 1 + offset * 50 + i) % 1_000_000:06d}", PHONE)
 
     threads = [threading.Thread(target=guess, args=(n,)) for n in range(8)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
-    assert gate.locked_for() == pytest.approx(60.0)
-    assert len(gate._failures) == 0  # cleared when the lockout began; refused guesses are not counted
-    assert not gate.verify(pin)
+    assert gate.locked_for(PHONE) == pytest.approx(60.0)
+    assert len(gate._global_failures) == 10, "refused guesses are not counted"
+    assert not gate.verify(pin, PHONE)
 
 
-@pytest.mark.parametrize("kwargs", [{"digits": 3}, {"max_failures": 0}, {"max_tokens": 0}])
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"digits": 3}, {"max_failures": 0}, {"max_tokens": 0}, {"global_max_failures": 0}, {"max_clients": 0}],
+)
 def test_bad_settings_are_refused(kwargs: dict[str, int]) -> None:
     with pytest.raises(ValueError):
         JoinPin(**kwargs)
@@ -378,7 +585,7 @@ def test_other_digit_counts() -> None:
 # ---- tokens -------------------------------------------------------------------------
 def test_tokens_are_random_and_valid_until_twelve_hours() -> None:
     clock = FakeClock()
-    gate = JoinPin(clock=clock)
+    gate = JoinPin(wall_clock=clock)
     a, b = gate.issue_token(), gate.issue_token()
     assert a != b
     assert len(a) >= 40
@@ -389,6 +596,15 @@ def test_tokens_are_random_and_valid_until_twelve_hours() -> None:
     clock.advance(1)
     assert not gate.is_valid_token(a)
     assert not gate.is_valid_token(b)
+
+
+def test_token_expiry_follows_the_wall_clock_through_a_laptop_sleep() -> None:
+    # time.monotonic stops while macOS and Linux sleep; time.time does not.
+    monotonic, wall = FakeClock(), FakeClock(1.7e9)
+    gate = JoinPin(clock=monotonic, wall_clock=wall)
+    token = gate.issue_token()
+    wall.advance(TOKEN_TTL_S)
+    assert not gate.is_valid_token(token)
 
 
 @pytest.mark.parametrize("token", [None, "", "x", "a" * 500, 42, b"bytes"])
@@ -407,8 +623,8 @@ def test_tokens_are_stored_hashed() -> None:
 
 def test_redeem() -> None:
     gate = JoinPin()
-    assert gate.redeem(wrong(gate.pin)) is None
-    token = gate.redeem(gate.pin)
+    assert gate.redeem(wrong(gate.pin), PHONE) is None
+    token = gate.redeem(gate.pin, PHONE)
     assert token is not None
     assert gate.is_valid_token(token)
 
@@ -421,16 +637,18 @@ def test_revoke_token_and_revoke_all() -> None:
     gate.revoke_token(None)
     assert not gate.is_valid_token(a)
     assert gate.is_valid_token(b)
+    pin = gate.pin
     gate.revoke_all()
     assert not gate.is_valid_token(b)
+    assert gate.pin == pin, "disconnecting every phone keeps the PIN"
 
 
-def test_rotate_keeps_joined_devices_unless_asked() -> None:
+def test_new_pin_signs_every_device_out_unless_asked_not_to() -> None:
     gate = JoinPin()
     token = gate.issue_token()
-    gate.rotate()
+    gate.rotate(revoke_tokens=False)
     assert gate.is_valid_token(token)
-    gate.rotate(revoke_tokens=True)
+    gate.rotate()
     assert not gate.is_valid_token(token)
 
 
@@ -442,7 +660,7 @@ def test_token_store_is_bounded_dropping_the_oldest() -> None:
 
 def test_expired_tokens_are_dropped_on_issue() -> None:
     clock = FakeClock()
-    gate = JoinPin(token_ttl_s=10, clock=clock)
+    gate = JoinPin(token_ttl_s=10, wall_clock=clock)
     for _ in range(5):
         gate.issue_token()
     clock.advance(11)
@@ -474,3 +692,83 @@ def test_concurrent_issue_and_check() -> None:
     assert invalid == []
     assert len(set(issued)) == 800
     assert len(gate._tokens) == 800
+
+
+# ---- Socket.IO ------------------------------------------------------------------------
+def test_phone_sessions() -> None:
+    sessions = PhoneSessions()
+    sessions.add("b")
+    sessions.add("a")
+    sessions.add("a")
+    sessions.discard("missing")
+    assert len(sessions) == 2
+    assert sessions.take_all() == ["a", "b"]
+    assert len(sessions) == 0
+    assert sessions.take_all() == []
+
+
+def _inner_app(environ: dict[str, object], start_response: object) -> list[bytes]:
+    start_response("200 OK", [("Content-Type", "text/plain")])  # type: ignore[operator]
+    return [b"inner"]
+
+
+def test_socketio_gate_refuses_before_python_socketio_sees_the_request() -> None:
+    from werkzeug.test import Client
+
+    gate = JoinPin()
+    token = gate.redeem(gate.pin, PHONE)
+    client = Client(SocketIOGate(_inner_app, gate, extra_names=["my-laptop.local"]))
+    phone = {"REMOTE_ADDR": PHONE}
+    lan_host = {"Host": "192.168.1.20:5050"}
+
+    refused = client.get("/socket.io/?EIO=4&transport=polling", environ_base=phone, headers=lan_host)
+    assert refused.status_code == 401
+    assert refused.headers["Cache-Control"] == "no-store"
+    assert json.loads(refused.get_data()) == {"error": "join with the PIN first"}
+    assert client.get("/socket.io", environ_base=phone, headers=lan_host).status_code == 401
+
+    client.set_cookie(COOKIE_NAME, token, domain="192.168.1.20")
+    allowed = client.get("/socket.io/?EIO=4&transport=polling", environ_base=phone, headers=lan_host)
+    assert allowed.status_code == 200
+    assert allowed.get_data() == b"inner"
+
+    rebound = client.get(
+        "/socket.io/?EIO=4", environ_base={"REMOTE_ADDR": "127.0.0.1"}, headers={"Host": "evil.example"}
+    )
+    assert rebound.status_code == 400
+    named = client.get("/socket.io/?EIO=4", environ_base=phone, headers={"Host": "my-laptop.local:5050"})
+    assert named.status_code == 401, "a configured name is a valid host, the device still needs the cookie"
+
+    gate.revoke_all()
+    assert client.get("/socket.io/?EIO=4&sid=abc", environ_base=phone, headers=lan_host).status_code == 401
+
+
+def test_socketio_gate_leaves_other_paths_and_the_laptop_alone() -> None:
+    from werkzeug.test import Client
+
+    client = Client(SocketIOGate(_inner_app, JoinPin()))
+    assert client.get("/dashboard", environ_base={"REMOTE_ADDR": PHONE}).get_data() == b"inner"
+    assert client.get("/socket.ioX", environ_base={"REMOTE_ADDR": PHONE}).get_data() == b"inner"
+    local = client.get("/socket.io/?EIO=4", environ_base={"REMOTE_ADDR": "127.0.0.1"}, headers={"Host": "127.0.0.1"})
+    assert local.get_data() == b"inner"
+
+
+def test_socketio_gate_in_front_of_flask_socketio_blocks_the_handshake() -> None:
+    from flask import Flask
+    from flask_socketio import SocketIO
+
+    gate = JoinPin()
+    app = Flask(__name__)
+    SocketIO(app, async_mode="threading", cors_allowed_origins=None, always_connect=True)
+    app.wsgi_app = SocketIOGate(app.wsgi_app, gate)  # type: ignore[method-assign]
+    client = app.test_client()
+    phone = {"environ_base": {"REMOTE_ADDR": PHONE}, "headers": {"Host": "192.168.1.20:5050"}}
+
+    refused = client.get("/socket.io/?EIO=4&transport=polling", **phone)
+    assert refused.status_code == 401
+    assert not refused.get_data().startswith(b"0{"), "no Engine.IO session was opened"
+
+    client.set_cookie(COOKIE_NAME, gate.redeem(gate.pin, PHONE), domain="192.168.1.20")
+    opened = client.get("/socket.io/?EIO=4&transport=polling", **phone)
+    assert opened.status_code == 200
+    assert opened.get_data().startswith(b"0{"), "the Engine.IO OPEN packet"
