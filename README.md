@@ -213,8 +213,9 @@ like worksheet problems.
   language. Over HTTP: `GET /api/language` and `PUT /api/language {"language": "auto"|"en"|"es"}`.
 - **Voice in.** Whisper decides between English and Spanish for each question. The wake word also answers to
   "asistente".
-- **Voice out.** The online Edge voices are `en-US-AriaNeural` and `es-MX-DaliaNeural` (Mexican Spanish).
-  Offline (`SAR_TTS_BACKEND=say` or `pyttsx3`, or when Edge can't reach the internet), the assistant picks an
+- **Voice out.** The assistant talks like a kid. The online Edge voices are `en-US-AnaNeural` (a child voice) and
+  `es-MX-DaliaNeural` (Mexican Spanish), pitched up (+30 Hz) and a little faster (+5 %) because Edge has no Mexican
+  child voice; any other voice set with `SAR_TTS_VOICE` plays as it is. Offline voices are adult voices. Offline (`SAR_TTS_BACKEND=say` or `pyttsx3`, or when Edge can't reach the internet), the assistant picks an
   installed Spanish voice, Mexican first. If Spanish comes out with an English voice, install one: on macOS,
   System Settings → Accessibility → Spoken Content → System voice → Manage Voices (e.g. *Paulina*); on Windows,
   Settings → Time & language → Language & region → add *Español (México)* with text-to-speech.
@@ -315,7 +316,7 @@ wins over the file. Desktop builds also look next to the app and in the data fol
 | `SAR_RECORD_SECONDS` | `5` | How long push-to-talk records |
 | `SAR_SILENCE_RMS` | `0.01` | Wake-word chunks quieter than this skip Whisper. Push-to-talk only skips digital silence |
 | `SAR_TTS_BACKEND` | `edge` | `edge` (online), `say` (macOS), `pyttsx3` (offline) or `none`. Falls back edge → say → pyttsx3 |
-| `SAR_TTS_VOICE` | `en-US-AriaNeural` | Edge voice for its own language. Spanish uses `es-MX-DaliaNeural` unless this names a Spanish voice |
+| `SAR_TTS_VOICE` | `en-US-AnaNeural` | Edge voice for its own language. Spanish uses `es-MX-DaliaNeural` (pitched up to sound like a kid) unless this names a Spanish voice |
 | **Server and phones** | | |
 | `SAR_HOST` | `127.0.0.1` (`0.0.0.0` with `SAR_LAN=1`) | Bind address. Anything other than `127.0.0.1`, `localhost` or `::1` turns the phone PIN gate on |
 | `SAR_PORT` | `5050` | Server port |

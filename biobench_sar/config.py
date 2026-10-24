@@ -146,7 +146,7 @@ class Settings:
     silence_rms: float = field(default_factory=lambda: _env_nonneg_float("SAR_SILENCE_RMS", 0.01))
     # edge | pyttsx3 | say | none
     tts_backend: str = field(default_factory=lambda: os.environ.get("SAR_TTS_BACKEND", "edge"))
-    tts_voice: str = field(default_factory=lambda: os.environ.get("SAR_TTS_VOICE", "en-US-AriaNeural"))
+    tts_voice: str = field(default_factory=lambda: os.environ.get("SAR_TTS_VOICE", "en-US-AnaNeural"))
     # auto (reply in the language the student uses) | en | es
     language: str = field(default_factory=lambda: normalize_language(os.environ.get("SAR_LANGUAGE")))
     ink_min_area: int = field(default_factory=lambda: _env_pos_int("SAR_INK_MIN_AREA", 150))

@@ -280,15 +280,17 @@ class AudioTrigger:
     last_language: str                                 # "en" / "es" of the query being delivered
 WAKE_ALIASES = {"assistant": ("asistente",)}
 class TTSEngine:
-    def __init__(self, backend: str = "edge", voice: str = "en-US-AriaNeural", out_dir: Path = ...,
+    def __init__(self, backend: str = "edge", voice: str = "en-US-AnaNeural", out_dir: Path = ...,
                  voices: dict[str, str] | None = None) -> None
     def speak(self, text: str, lang: str | None = None) -> str | None
-        # edge: writes mp3 to out_dir, returns file name for browser playback (en-US-AriaNeural / es-MX-DaliaNeural);
+        # edge: writes mp3 to out_dir, returns file name for browser playback (en-US-AnaNeural, a child voice /
+        # es-MX-DaliaNeural pitched +30Hz and +5% faster to sound like a kid: EDGE_PROSODY);
         # say/pyttsx3: plays locally (non-blocking) with the best installed voice for lang (es_MX first), returns None;
         # falls back edge → say → pyttsx3 → none
     def set_rate(self, factor: float) -> None  # voice speed (contract M), clamped to 0.5–2.0
-        # edge: rate="+25%" / "-25%"; say: "-r", round(175 × factor); pyttsx3: the engine's own rate × factor.
-        # At 1.0 nothing extra is passed, so the commands are the same as without it.
+        # edge: the voice's own EDGE_PROSODY rate × factor (Ana at 0.75: "-25%"; Dalia's "+5%" at 0.75: "-21%"),
+        # pitch unchanged; say: "-r", round(175 × factor); pyttsx3: the engine's own rate × factor.
+        # At 1.0 every call is the same as without it.
 ```
 
 ### G — `tutor.py`
