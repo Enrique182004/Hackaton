@@ -119,6 +119,13 @@ class FakeAudio:
     def __init__(self) -> None:
         self.on_query: Callable[[str], None] | None = None
         self.triggered = 0
+        self.language = "auto"
+        self.languages: list[str] = []  # every set_language call
+
+    def set_language(self, code: str) -> str:
+        self.language = code
+        self.languages.append(code)
+        return code
 
     def start(self) -> None: ...
     def stop(self) -> None: ...

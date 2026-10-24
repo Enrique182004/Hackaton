@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sys
@@ -998,3 +999,362 @@ def test_start_quiz_uses_ticked_files_and_pushes(h: Harness) -> None:
     assert _tutor_events(h) == [h.assistant.tutor.to_dict()]
     h.assistant.push_tutor()
     assert len(_tutor_events(h)) == 1, "unchanged state is not pushed again"
+
+
+# ---- reply language ---------------------------------------------------------------------------------------------
+
+
+class Audio:
+    """AudioTrigger's language surface: what Whisper heard last, and the forced decode language."""
+
+    def __init__(self, owner: Harness | None = None, last_language: str = "en") -> None:
+        self.last_language = last_language
+        self.language = "auto"
+        self.owner = owner
+        self.submitted: list[str] = []
+
+    def set_language(self, code: str) -> str:
+        self.language = code
+        return code
+
+    def submit_text(self, text: str) -> None:
+        self.submitted.append(text)
+        assert self.owner is not None
+        self.owner.assistant.handle_query(text)
+
+
+def _with_audio(h: Harness, last_language: str = "en") -> Audio:
+    audio = Audio(h, last_language)
+    h.assistant.services.audio = audio
+    return audio
+
+
+def _language_of_last_call(h: Harness) -> str:
+    return h.vlm.kwargs[-1]["language"]
+
+
+def test_typed_question_language_comes_from_the_text(h: Harness) -> None:
+    _with_audio(h, last_language="en")
+    h.assistant.submit_text("¿Me ayudas con esta ecuación, por favor?")
+    assert _language_of_last_call(h) == "es"
+    assert h.tts.langs[-1] == "es", "the Spanish voice says it"
+    h.assistant.submit_text("Can you help me with this equation?")
+    assert _language_of_last_call(h) == "en"
+
+
+def test_spoken_question_uses_the_language_whisper_heard(h: Harness) -> None:
+    audio = _with_audio(h, last_language="es")
+    h.assistant.handle_query("ok x")  # delivered by AudioTrigger: no typed flag
+    assert _language_of_last_call(h) == "es"
+    audio.last_language = "en"
+    h.assistant.handle_query("dos más tres")
+    assert _language_of_last_call(h) == "en", "Whisper's language wins over the words for speech"
+
+
+def test_ambiguous_typed_text_keeps_the_previous_reply_language(h: Harness) -> None:
+    _with_audio(h)
+    h.assistant.submit_text("Estoy atorado con la ecuación")
+    h.assistant.submit_text("ok")
+    assert _language_of_last_call(h) == "es"
+    h.assistant.submit_text("I am stuck on the equation")
+    h.assistant.submit_text("3x + 5 = 20")
+    assert _language_of_last_call(h) == "en"
+
+
+def test_without_language_info_auto_detects_from_text(h: Harness) -> None:
+    h.assistant.handle_query("¿Qué hago ahora con esta ecuación?")
+    assert _language_of_last_call(h) == "es"
+
+
+@pytest.mark.parametrize("setting", ["en", "es"])
+def test_forced_language_wins(monkeypatch: pytest.MonkeyPatch, setting: str) -> None:
+    monkeypatch.setenv("SAR_LANGUAGE", setting)
+    forced = Harness()
+    _with_audio(forced, last_language="en" if setting == "es" else "es")
+    forced.assistant.submit_text("¿Qué hago ahora?" if setting == "en" else "What do I do now?")
+    assert _language_of_last_call(forced) == setting
+    assert forced.assistant.language_body() == {"setting": setting, "current": setting}
+
+
+def test_set_language_validates_switches_whisper_and_emits(h: Harness) -> None:
+    audio = _with_audio(h)
+    with pytest.raises(ValueError):
+        h.assistant.set_language("fr")
+    assert h.assistant.set_language("es") == {"setting": "es", "current": "es"}
+    assert audio.language == "es" and h.payloads("language")[-1] == {"setting": "es", "current": "es"}
+    h.assistant.submit_text("What do I do now?")
+    assert _language_of_last_call(h) == "es"
+    assert h.assistant.set_language("auto") == {"setting": "auto", "current": "es"}, "auto follows the last reply"
+    assert audio.language == "auto"
+
+
+def test_current_language_change_is_pushed_only_in_auto(h: Harness) -> None:
+    _with_audio(h)
+    h.assistant.submit_text("Help me with this equation")
+    assert h.payloads("language") == [], "still English: nothing changed"
+    h.assistant.submit_text("Ayúdame con esta ecuación")
+    assert h.payloads("language") == [{"setting": "auto", "current": "es"}]
+    h.assistant.submit_text("Dame una pista")
+    assert len(h.payloads("language")) == 1
+
+
+def test_set_language_works_without_an_audio_service(h: Harness) -> None:
+    assert h.assistant.set_language("en") == {"setting": "en", "current": "en"}
+
+
+# ---- display text and spoken text -------------------------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class Spoken(AvatarAction):
+    display_text: str | None = None
+    failed: bool = False
+
+
+def test_display_text_and_spoken_text_reach_every_client(h: Harness) -> None:
+    h.vlm.action = Spoken("three x plus five equals twenty", "idle", 1, 2, display_text="3x + 5 = 20")
+    h.assistant.handle_query("read it")
+    avatar, speak = h.payloads("avatar_update")[-1], h.payloads("speak")[-1]
+    assert avatar["display_text"] == speak["display_text"] == "3x + 5 = 20"
+    assert avatar["spoken_text"] == speak["spoken_text"] == speak["text"] == "three x plus five equals twenty"
+    item = h.assistant.history()[0]
+    assert (item["display_text"], item["spoken_text"], item["language"]) == (
+        "3x + 5 = 20",
+        "three x plus five equals twenty",
+        "en",
+    )
+
+
+def test_display_text_falls_back_to_the_spoken_text(h: Harness) -> None:
+    h.assistant.handle_query("hi")
+    assert h.payloads("avatar_update")[-1]["display_text"] == "one two three four"
+    assert h.assistant.history()[0]["display_text"] == "one two three four"
+
+
+def test_pipeline_error_is_said_in_the_reply_language(h: Harness) -> None:
+    h.vlm.error = RuntimeError("boom")
+    h.assistant.handle_query("¿Qué hago con esta ecuación?")
+    avatar = h.payloads("avatar_update")[-1]
+    assert avatar["spoken_text"] == avatar["display_text"] == "Perdón, algo salió mal. Inténtalo de nuevo."
+    assert h.assistant.history()[0]["language"] == "es"
+
+
+def test_quiz_summary_is_spoken_through_mathspeak_and_shown_in_digits(h: Harness) -> None:
+    _bank(h, "a.md", *((f"x + {n} = {n + 1}", "x = 1", 1) for n in range(12)))
+    _ask(h, "quiz me")
+    for _ in range(DEFAULT_QUIZ_LENGTH):
+        _ask(h, "check", state="celebrating", spoken="Correct!", ink=True)
+    assert not h.assistant.tutor.quiz_active
+    speak = h.payloads("speak")[-1]
+    assert speak["spoken_text"] == "Correct! That was the last problem! You solved ten of ten on the first try."
+    assert speak["display_text"] == "Correct! That was the last problem! You solved 10 of 10 on the first try."
+    assert h.tts.langs[-1] == "en"
+
+
+def test_spanish_quiz_summary_and_no_answer_text(h: Harness) -> None:
+    _bank(h, "a.md", ("x + 1 = 13", "x = 12", 1))
+    _ask(h, "Hazme un quiz")
+    assert h.vlm.kwargs[-1]["language"] == "es"
+    _ask(h, "Revisa mi respuesta, por favor", state="celebrating", spoken="¡Correcto!")
+    assert h.payloads("speak")[-1]["display_text"].startswith("Todavía no veo una respuesta"), "nothing drawn"
+    _ask(h, "Revisa mi respuesta, por favor", state="celebrating", spoken="¡Correcto!", ink=True)
+    speak = h.payloads("speak")[-1]
+    assert speak["display_text"] == "¡Correcto! ¡Ese fue el último problema! Resolviste 1 de 1 al primer intento."
+    assert speak["spoken_text"] == "¡Correcto! ¡Ese fue el último problema! Resolviste uno de uno al primer intento."
+    assert speak["language"] == "es" and h.tts.langs[-1] == "es"
+
+
+# ---- Spanish tutor flows ----------------------------------------------------------------------------------------
+
+
+def test_spanish_learn_request_offer_and_make_one_up(h: Harness) -> None:
+    offer = _ask(h, "Quiero aprender a resolver fracciones")
+    assert offer["task"] == {"kind": "learn", "topic": "resolver fracciones", "stage": "offer"}
+    assert offer["language"] == "es"
+    example = _ask(h, "Invéntame uno")
+    assert example["task"] == {"kind": "learn", "topic": "resolver fracciones", "stage": "example"}
+    _ask(h, "Enséñame ecuaciones")
+    assert _ask(h, "Tengo uno")["task"]["stage"] == "own"
+
+
+def test_spanish_quiz_hint_repeat_and_stop(h: Harness) -> None:
+    _bank(h, "a.md", ("3x + 5 = 20", "x = 5", 1), ("x + 1 = 2", "x = 1", 1))
+    assert _ask(h, "Hazme un quiz")["task"]["stage"] == "dictate"
+    hint = _ask(h, "Estoy atorado, dame una pista", state="pointing", ink=True)["task"]
+    assert hint["stage"] == "hint" and h.assistant.tutor.quiz_active
+    assert _ask(h, "¿Me lo repites?", ink=True)["task"]["stage"] == "dictate"
+    assert _ask(h, "Revisa mi respuesta", state="celebrating", ink=True)["task"]["stage"] == "check"
+    assert h.assistant.tutor.quiz_number == 2
+    _ask(h, "Termina el quiz")
+    assert not h.assistant.tutor.quiz_active and h.assistant.tutor.mode == "help"
+
+
+def test_spanish_practice_request(h: Harness) -> None:
+    assert _ask(h, "Dame otro parecido", ink=True)["task"] == {"kind": "practice"}
+
+
+def test_spanish_how_to_next_to_ink_is_help_not_a_lesson(h: Harness) -> None:
+    assert _ask(h, "¿Cómo se suman fracciones?", ink=True)["task"] is None
+    assert _ask(h, "¿Cómo se suman fracciones?")["task"]["kind"] == "learn"
+
+
+# ---- glare and the ink crop -------------------------------------------------------------------------------------
+
+
+REGION_A = {"x": 10, "y": 10, "w": 20, "h": 10, "cx": 20, "cy": 15}
+REGION_B = {"x": 60, "y": 40, "w": 20, "h": 10, "cx": 70, "cy": 45}
+
+
+class RawVision:
+    """A vision service with the raw frame and its calibration, like VisionLoop."""
+
+    def __init__(self, frame: np.ndarray | None, calibration: Any = None) -> None:
+        self.frame, self.calibration = frame, calibration
+
+    def latest_frame_and_calibration(self) -> tuple[np.ndarray | None, Any]:
+        return (None if self.frame is None else self.frame.copy()), self.calibration
+
+    def latest_frame(self) -> np.ndarray | None:
+        return None if self.frame is None else self.frame.copy()
+
+    def latest_warped(self) -> np.ndarray | None:  # pragma: no cover - the pipeline reads both at once
+        raise AssertionError("raw frame and calibration are read together")
+
+
+def _glare(monkeypatch: pytest.MonkeyPatch, hotspots: list[tuple[int, int, int, int]]) -> list[np.ndarray]:
+    from biobench_sar.core import glare
+
+    seen: list[np.ndarray] = []
+
+    def fake(frame: np.ndarray, **_: Any) -> glare.GlareReport:
+        seen.append(frame)
+        return glare.GlareReport(0.05 if hotspots else 0.0, list(hotspots), bool(hotspots))
+
+    monkeypatch.setattr(glare, "measure_glare", fake)
+    return seen
+
+
+def test_ink_inside_a_glare_hotspot_is_dropped(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    from biobench_sar.core.homography import Calibration
+
+    vision = sys.modules["biobench_sar.core.vision_loop"]
+    monkeypatch.setattr(vision, "find_ink_regions", lambda frame, **kw: [dict(REGION_A), dict(REGION_B)])
+    seen = _glare(monkeypatch, [(100, 60, 40, 40)])  # camera pixels: x 100..140, y 60..100
+    raw = np.full((200, 200, 3), 128, np.uint8)
+    # The camera sees the board at twice the projector's resolution: camera (100, 60) is projector (50, 30).
+    h.assistant.services.vision = RawVision(raw, Calibration.identity((200, 200), (100, 100)))
+    h.assistant.handle_query("check this")
+    assert seen and seen[0].shape == (200, 200, 3), "measured on the raw camera frame"
+    assert h.vlm.seen[-1][2] == [REGION_A], "REGION_B's center (70, 45) sits in the hotspot (50..70, 30..50)"
+
+
+def test_glare_over_the_whole_board_is_an_overexposed_camera_not_a_hotspot(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vision = sys.modules["biobench_sar.core.vision_loop"]
+    monkeypatch.setattr(vision, "find_ink_regions", lambda frame, **kw: [dict(REGION_A)])
+    _glare(monkeypatch, [(0, 0, 100, 100)])
+    h.assistant.services.vision = RawVision(np.full((100, 100, 3), 255, np.uint8))
+    h.assistant.handle_query("check this")
+    assert h.vlm.seen[-1][2] == [REGION_A]
+
+
+def test_no_glare_keeps_every_region(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    vision = sys.modules["biobench_sar.core.vision_loop"]
+    monkeypatch.setattr(vision, "find_ink_regions", lambda frame, **kw: [dict(REGION_A), dict(REGION_B)])
+    _glare(monkeypatch, [])
+    h.assistant.services.vision = RawVision(np.full((100, 100, 3), 128, np.uint8))
+    h.assistant.handle_query("check this")
+    assert h.vlm.seen[-1][2] == [REGION_A, REGION_B]
+
+
+def test_glare_monitor_measures_at_most_every_interval() -> None:
+    from biobench_sar.assistant import GlareMonitor
+
+    now = [100.0]
+    frames: list[int] = []
+
+    def source() -> np.ndarray:
+        frames.append(1)
+        return np.full((60, 80, 3), 128, np.uint8)
+
+    monitor = GlareMonitor(interval_s=2.0, clock=lambda: now[0])
+    first = monitor.status(source)
+    assert first is not None and set(first) == {"fraction", "severe", "hotspots", "size"}
+    assert first["size"] == [80, 60] and first["hotspots"] == [] and first["severe"] is False
+    now[0] += 1.0
+    assert monitor.status(source) == first and len(frames) == 1, "cached"
+    now[0] += 1.5
+    monitor.status(source)
+    assert len(frames) == 2, "measured again after 2 s"
+    assert GlareMonitor(clock=lambda: 0.0).status(lambda: None) is None, "no camera"
+
+
+def test_glare_monitor_survives_a_broken_camera() -> None:
+    from biobench_sar.assistant import GlareMonitor
+
+    def broken() -> np.ndarray:
+        raise OSError("camera unplugged")
+
+    assert GlareMonitor().status(broken) is None
+
+
+def test_hotspots_map_through_the_calibration() -> None:
+    from biobench_sar.assistant import drop_glare_ink, hotspots_on_board
+    from biobench_sar.core.homography import Calibration
+
+    boxes = hotspots_on_board([(100, 60, 40, 40)], Calibration.identity((200, 200), (100, 100)))
+    assert [tuple(round(v) for v in box) for box in boxes] == [(50, 30, 20, 20)]
+    assert hotspots_on_board([(1, 2, 3, 4)], None) == [(1.0, 2.0, 3.0, 4.0)]
+    assert drop_glare_ink([REGION_A, {"x": 1}], [(0, 0, 50, 50)]) == [{"x": 1}], "a region without a center stays"
+
+
+def test_model_gets_the_high_res_ink_crop(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    from biobench_sar.core import ink_crop
+    from biobench_sar.core.homography import Calibration
+
+    region = {"x": 40, "y": 40, "w": 10, "h": 6, "cx": 45, "cy": 43}
+    vision = sys.modules["biobench_sar.core.vision_loop"]
+    monkeypatch.setattr(vision, "find_ink_regions", lambda frame, **kw: [dict(region)])
+    _glare(monkeypatch, [])
+    calls: list[tuple[Any, ...]] = []
+    crop = ink_crop.InkCrop(b"crop-jpeg", (0, 0, 100, 80), (200, 160), 2.0)
+
+    def fake_crop(raw: np.ndarray, calibration: Any, regions: Any, **kw: Any) -> ink_crop.InkCrop:
+        calls.append((raw.shape, calibration, regions))
+        return crop
+
+    monkeypatch.setattr(ink_crop, "crop_ink_view", fake_crop)
+    calibration = Calibration.identity((200, 160), (100, 80))
+    h.assistant.services.vision = RawVision(np.full((160, 200, 3), 128, np.uint8), calibration)
+    h.assistant.handle_query("what's this?")
+    assert h.vlm.seen[-1][1] == b"crop-jpeg" and h.vlm.kwargs[-1]["crop"] is crop
+    assert calls == [((160, 200, 3), calibration, [region])], "from the raw frame and its own calibration"
+
+
+def test_crop_falls_back_to_the_warped_frame_then_the_whole_board(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    from biobench_sar.core import ink_crop
+
+    vision = sys.modules["biobench_sar.core.vision_loop"]
+    monkeypatch.setattr(vision, "find_ink_regions", lambda frame, **kw: [dict(REGION_A)])
+    _glare(monkeypatch, [])
+    h.assistant.services.vision = RawVision(np.full((100, 100, 3), 128, np.uint8))  # no calibration
+    warped = ink_crop.InkCrop(b"warped-crop", (0, 0, 50, 50), (50, 50), 1.0)
+    monkeypatch.setattr(ink_crop, "crop_from_warped", lambda frame, regions, **kw: warped)
+    h.assistant.handle_query("what's this?")
+    assert h.vlm.seen[-1][1] == b"warped-crop" and h.vlm.kwargs[-1]["crop"] is warped
+
+    def broken(frame: np.ndarray, regions: Any, **kw: Any) -> None:
+        raise ValueError("bad region")
+
+    monkeypatch.setattr(ink_crop, "crop_from_warped", broken)
+    h.assistant.handle_query("and now?")
+    assert h.vlm.seen[-1][1] == b"jpeg" and "crop" not in h.vlm.kwargs[-1], "the whole board, never a crash"
+
+
+def test_empty_board_sends_the_whole_board_without_a_crop(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    vision = sys.modules["biobench_sar.core.vision_loop"]
+    monkeypatch.setattr(vision, "find_ink_regions", lambda frame, **kw: [])
+    h.assistant.services.vision = RawVision(np.full((100, 100, 3), 128, np.uint8))
+    h.assistant.handle_query("hello")
+    assert h.vlm.seen[-1][1] == b"jpeg" and "crop" not in h.vlm.kwargs[-1]
