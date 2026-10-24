@@ -35,7 +35,15 @@ it: see [Phones and tablets](#phones-and-tablets).
 
 Each platform takes about 8 minutes with warm caches. Every build is smoke-tested before it is uploaded: CI runs the built app with `--self-test` (see
 [Command line](#command-line)), which starts the real server with a mock model and checks the pages,
-Socket.IO, every lazily imported library, the bundled embedding model and Whisper's assets.
+Socket.IO, every lazily imported library, the bundled embedding model and Whisper's assets. Then it
+tests what teachers download, not just the build folder:
+
+- **Windows**: installs the `.exe` silently, checks it is a per-user install (uninstall entry under
+  `HKCU`, Start-menu shortcut, `sar.env.example` next to the app), runs `--self-test` on the installed
+  copy, then uninstalls it.
+- **macOS**: unpacks the `.zip`, checks the bundle id, the version and the camera / microphone usage
+  strings in `Info.plist`, verifies the code signature (`codesign --verify --deep --strict`) and runs
+  `--self-test` on the unpacked app.
 
 ## First run (for teachers)
 
