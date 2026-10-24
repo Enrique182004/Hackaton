@@ -32,6 +32,8 @@
   let bubbleTimer = null;
   let transcriptTimer = null;
   let connected = false;
+  let offlineTimer = null;
+  let offlineHintTimer = null;
 
   function setState(state) {
     if (!STATES.includes(state)) state = "idle";
@@ -64,13 +66,29 @@
     avatar.classList.toggle("bubble-left", mid + half > window.innerWidth);
   }
 
-  function showBubble(text, holdMs) {
+  // Single owner of bubbleTimer: every (re)arm clears the previous one so stale timers can't hide a newer bubble.
+  function armBubbleTimer(ms) {
     clearTimeout(bubbleTimer);
+    bubbleTimer = ms ? setTimeout(hideBubbleUnlessSpeaking, ms) : null;
+  }
+
+  function showBubble(text, holdMs) {
+    armBubbleTimer(0);
     if (!text) { bubble.classList.add("hidden"); return; }
     bubble.textContent = text;
     bubble.classList.remove("hidden");
     fitBubble();
-    if (holdMs) bubbleTimer = setTimeout(hideBubbleUnlessSpeaking, holdMs);
+    armBubbleTimer(holdMs);
+  }
+
+  // Clear `audio` before touching the element: src="" fires an "error" event on it, and the
+  // listeners ignore events from any element that is no longer the current one.
+  function releaseAudio() {
+    const a = audio;
+    audio = null;
+    if (!a) return;
+    a.pause();
+    a.src = "";
   }
 
   function hideBubbleUnlessSpeaking() {
@@ -98,27 +116,70 @@
   }
 
   function onSpeak(d) {
-    if (d.text) showBubble(d.text);
-    if (audio) { audio.pause(); audio = null; }
-    if (!d.url) { bubbleTimer = setTimeout(hideBubbleUnlessSpeaking, 4000); return; }
-    audio = new Audio(d.url);
-    const done = () => { bubbleTimer = setTimeout(hideBubbleUnlessSpeaking, 1200); };
-    audio.addEventListener("ended", done);
-    audio.addEventListener("error", done);
-    audio.play().catch(done); // autoplay may be blocked until the first key press
+    releaseAudio();
+    if (d.text) showBubble(d.text); else armBubbleTimer(0);
+    if (!d.url) { armBubbleTimer(4000); return; }
+    const a = new Audio(d.url);
+    audio = a;
+    const done = () => {
+      if (audio !== a) return; // superseded by a newer speak or a resync
+      releaseAudio();
+      armBubbleTimer(1200);
+    };
+    a.addEventListener("ended", done);
+    a.addEventListener("error", done);
+    a.play().catch(done); // autoplay may be blocked until the first key press
   }
 
   function onStatus(d) {
     const s = d.state || "idle";
+    clearTimeout(offlineHintTimer);
     statusEl.dataset.state = s;
     statusLabel.textContent = d.detail ? s + " - " + d.detail : s;
   }
 
+  function clearTranscript() {
+    clearTimeout(transcriptTimer);
+    transcriptEl.textContent = "";
+    transcriptEl.classList.add("hidden");
+  }
+
   function onTranscript(d) {
+    clearTimeout(transcriptTimer);
     transcriptEl.textContent = d.text || "";
     transcriptEl.classList.toggle("hidden", !d.text);
-    clearTimeout(transcriptTimer);
     transcriptTimer = setTimeout(() => transcriptEl.classList.add("hidden"), 5000);
+  }
+
+  // Black is invisible on the projector, so "offline" is a bright amber frame plus a status-corner label.
+  function setOffline(text) {
+    clearTimeout(offlineTimer);
+    clearTimeout(offlineHintTimer);
+    body.classList.add("offline");
+    statusEl.dataset.state = "offline";
+    statusLabel.textContent = text || "offline";
+  }
+
+  function hintOffline() {
+    setOffline("offline - not sent");
+    offlineHintTimer = setTimeout(() => {
+      if (!connected) statusLabel.textContent = "offline";
+    }, 2000);
+  }
+
+  // A reconnect may follow missed events (e.g. hide_calibration), so drop all transient UI and
+  // wait for the server's status push on connect.
+  function resync() {
+    body.classList.remove("offline");
+    hideCalibration();
+    clearTranscript();
+    releaseAudio();
+    armBubbleTimer(0);
+    bubble.classList.add("hidden");
+    clearTimeout(moveTimer);
+    pendingState = "idle";
+    setState("idle");
+    onStatus({ state: "idle" });
   }
 
   function showCalibration(d) {
@@ -154,9 +215,14 @@
   // Socket.IO may fail to load (offline venue); the page still renders and keys are no-ops.
   const socket = typeof io === "function" ? io() : null;
   if (socket) {
-    socket.on("connect", () => { connected = true; setConn("connected"); });
-    socket.on("disconnect", () => { connected = false; setConn("disconnected"); });
-    socket.on("connect_error", (e) => { connected = false; setConn("error: " + (e && e.message)); });
+    socket.on("connect", () => { connected = true; setConn("connected"); resync(); });
+    socket.on("disconnect", () => { connected = false; setConn("disconnected"); setOffline(); });
+    socket.on("connect_error", (e) => {
+      connected = false;
+      setConn("error: " + (e && e.message));
+      setOffline();
+    });
+    // Server-emitted "interaction" events are for the dashboard; the projector deliberately has no handler.
     const handlers = {
       avatar_update: onAvatarUpdate, speak: onSpeak, status: onStatus, transcript: onTranscript,
       show_calibration: showCalibration, hide_calibration: hideCalibration,
@@ -169,11 +235,18 @@
     });
   } else {
     setConn("socket.io client not loaded");
+    setOffline();
   }
 
+  // Never emit while disconnected: socket.io would buffer and replay stale presses/queries on reconnect.
   function emit(name, payload) {
-    if (socket) socket.emit(name, payload || {});
+    if (!socket || !connected) { hintOffline(); return false; }
+    socket.emit(name, payload || {});
+    return true;
   }
+
+  // Grace period so the initial handshake doesn't flash the offline frame.
+  if (socket) offlineTimer = setTimeout(() => { if (!connected) setOffline(); }, 1500);
 
   function openTextInput() {
     textOverlay.classList.remove("hidden");
@@ -189,8 +262,10 @@
   textInput.addEventListener("keydown", (e) => {
     e.stopPropagation(); // keep hotkeys (Space, C, T) from firing while typing
     if (e.key === "Enter") {
+      if (e.isComposing) return;
       const text = textInput.value.trim();
-      if (text) emit("text_query", { text });
+      // Keep the overlay (and the typed text) open if offline so the question isn't lost.
+      if (text && !emit("text_query", { text })) return;
       closeTextInput();
     } else if (e.key === "Escape") {
       closeTextInput();
@@ -198,9 +273,11 @@
   });
 
   document.addEventListener("keydown", (e) => {
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
-    const k = e.key.toLowerCase();
-    if (e.code === "Space") { e.preventDefault(); if (!e.repeat) emit("trigger_listen"); }
+    if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+    if (document.activeElement === textInput) return;
+    const k = typeof e.key === "string" ? e.key.toLowerCase() : "";
+    if (e.code === "Space" || k === " ") { e.preventDefault(); if (!e.repeat) emit("trigger_listen"); }
+    else if (e.repeat) return;
     else if (k === "t") { e.preventDefault(); openTextInput(); }
     else if (k === "c") {
       debugEl.classList.toggle("hidden");

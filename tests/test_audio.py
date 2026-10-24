@@ -7,7 +7,8 @@ import numpy as np
 
 from biobench_sar.core.audio_trigger import AudioTrigger
 
-AUDIO = np.zeros(1600, dtype=np.float32)
+AUDIO = (np.random.default_rng(0).standard_normal(1600) * 0.1).astype(np.float32)
+SILENCE = np.zeros(1600, dtype=np.float32)
 
 
 def _wait(ev: threading.Event) -> None:
@@ -184,3 +185,157 @@ def test_wake_word_heard_while_avatar_speaks_is_ignored() -> None:
     threading.Event().wait(0.6)
     t.stop()
     assert queries == []
+
+
+def _until(cond, timeout: float = 3.0) -> bool:  # noqa: ANN001
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if cond():
+            return True
+        time.sleep(0.01)
+    return cond()
+
+
+def test_wake_followup_empty_emits_idle() -> None:
+    states: list[str] = []
+    calls: list[float] = []
+    it = iter(["assistant", ""])
+    t = AudioTrigger(
+        lambda q: None,
+        mode="wake",
+        on_state=states.append,
+        recorder=lambda s: (calls.append(s), AUDIO)[1],
+        transcriber=lambda a: next(it, ""),
+    )
+    t.start()
+    assert _until(lambda: states[-1:] == ["idle"])
+    t.stop()
+    assert states[:2] == ["listening", "idle"]
+
+
+def test_wake_followup_exception_emits_idle() -> None:
+    states: list[str] = []
+    n = {"i": 0}
+
+    def tr(a: np.ndarray) -> str:
+        n["i"] += 1
+        if n["i"] == 1:
+            return "assistant"
+        raise RuntimeError("whisper died")
+
+    t = AudioTrigger(lambda q: None, mode="wake", on_state=states.append, recorder=lambda s: AUDIO, transcriber=tr)
+    t.start()
+    assert _until(lambda: states[-1:] == ["idle"])
+    t.stop()
+    assert states[:2] == ["listening", "idle"]
+
+
+def test_push_trigger_returns_bool() -> None:
+    gate = threading.Event()
+    done = threading.Event()
+
+    def rec(s: float) -> np.ndarray:
+        gate.wait(3)
+        return AUDIO
+
+    t = AudioTrigger(lambda q: done.set(), recorder=rec, transcriber=lambda a: "hi")
+    assert t.trigger() is True
+    assert _until(lambda: t._push_state == "recording")
+    assert t.trigger() is False
+    gate.set()
+    _wait(done)
+    assert _until(lambda: t._push_state == "idle")
+    gate.clear()
+    gate.set()
+    assert t.trigger() is True
+
+
+def test_wake_push_wins_over_background_chunk() -> None:
+    chunk_started = threading.Event()
+    release_chunk = threading.Event()
+    calls: list[float] = []
+    queries: list[str] = []
+    done = threading.Event()
+
+    def rec(s: float) -> np.ndarray:
+        calls.append(s)
+        if s == 3.0 and not chunk_started.is_set():
+            chunk_started.set()
+            release_chunk.wait(3)
+        return AUDIO
+
+    texts = {3.0: "assistant ignored background", 5.0: "push question"}
+    last = {"s": 0.0}
+
+    def rec2(s: float) -> np.ndarray:
+        last["s"] = s
+        return rec(s)
+
+    t = AudioTrigger(
+        lambda q: (queries.append(q), done.set()),
+        mode="wake",
+        record_seconds=5.0,
+        wake_chunk_seconds=3.0,
+        recorder=rec2,
+        transcriber=lambda a: texts[last["s"]],
+    )
+    t.start()
+    _wait(chunk_started)
+    assert t.trigger() is True  # wake loop is mid-chunk
+    release_chunk.set()
+    _wait(done)
+    t.stop()
+    assert queries[0] == "push question"  # background chunk was dropped, push recorded right after
+    assert 5.0 in calls
+
+
+def test_wake_push_while_push_recording_returns_false() -> None:
+    in_push = threading.Event()
+    gate = threading.Event()
+
+    def rec(s: float) -> np.ndarray:
+        if s == 5.0:
+            in_push.set()
+            gate.wait(3)
+        return AUDIO
+
+    t = AudioTrigger(
+        lambda q: None, mode="wake", record_seconds=5.0, recorder=rec, transcriber=lambda a: "nothing here"
+    )
+    t.start()
+    assert t.trigger() is True
+    _wait(in_push)
+    assert t.trigger() is False
+    gate.set()
+    t.stop()
+
+
+def test_silence_guard_skips_transcription() -> None:
+    transcribed: list[int] = []
+    chunks = {"n": 0}
+
+    def rec(s: float) -> np.ndarray:
+        chunks["n"] += 1
+        return SILENCE if chunks["n"] <= 2 else AUDIO
+
+    def tr(a: np.ndarray) -> str:
+        transcribed.append(1)
+        return "assistant what is this"
+
+    queries: list[str] = []
+    seen_at_query: list[int] = []
+    t = AudioTrigger(lambda q: (queries.append(q), seen_at_query.append(len(transcribed))), mode="wake", recorder=rec, transcriber=tr)
+    t.start()
+    assert _until(lambda: bool(queries))
+    t.stop()
+    assert seen_at_query[0] == 1  # the two silent chunks never reached Whisper
+    assert chunks["n"] >= 3
+
+
+def test_silence_rms_is_configurable() -> None:
+    quiet = np.full(1600, 0.005, dtype=np.float32)
+    seen: list[int] = []
+    t = AudioTrigger(lambda q: None, transcriber=lambda a: (seen.append(1), "x")[1], silence_rms=0.001)
+    assert t._heard(quiet) == "x"
+    t2 = AudioTrigger(lambda q: None, transcriber=lambda a: (seen.append(1), "x")[1])
+    assert t2._heard(quiet) == "" and len(seen) == 1

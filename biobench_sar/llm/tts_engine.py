@@ -5,6 +5,7 @@ import logging
 import queue
 import subprocess
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -14,6 +15,7 @@ log = logging.getLogger(__name__)
 
 MAX_FILES = 50
 EDGE_TIMEOUT_S = 8.0
+EDGE_RETRY_AFTER_S = 60.0
 ORDER = ["edge", "say", "pyttsx3", "none"]
 
 
@@ -27,6 +29,7 @@ class TTSEngine:
         self._q: queue.Queue[str | None] | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._edge_failed_at: float | None = None
 
     def speak(self, text: str) -> str | None:
         text = (text or "").strip()
@@ -35,6 +38,8 @@ class TTSEngine:
         for name in ORDER[ORDER.index(self.backend):]:
             try:
                 if name == "edge":
+                    if self._edge_cooling_down():
+                        continue
                     return self._edge(text)
                 if name == "say" and self._say(text):
                     return None
@@ -58,14 +63,23 @@ class TTSEngine:
             self._q = None
             self._thread = None
 
+    def _edge_cooling_down(self) -> bool:
+        failed_at = self._edge_failed_at
+        return failed_at is not None and time.monotonic() - failed_at < EDGE_RETRY_AFTER_S
+
     def _edge(self, text: str) -> str:
         import edge_tts
 
         name = f"{uuid.uuid4().hex}.mp3"
+        path = self.out_dir / name
         # Offline venues: fail fast so the say/pyttsx3 fallback speaks instead of hanging the pipeline.
-        asyncio.run(
-            asyncio.wait_for(edge_tts.Communicate(text, self.voice).save(str(self.out_dir / name)), EDGE_TIMEOUT_S)
-        )
+        try:
+            asyncio.run(asyncio.wait_for(edge_tts.Communicate(text, self.voice).save(str(path)), EDGE_TIMEOUT_S))
+        except BaseException:
+            self._edge_failed_at = time.monotonic()
+            path.unlink(missing_ok=True)
+            raise
+        self._edge_failed_at = None
         self._cleanup()
         return name
 
