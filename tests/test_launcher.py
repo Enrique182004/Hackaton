@@ -599,12 +599,12 @@ def test_full_self_test_with_real_services(folders: dict[str, Path]) -> None:
 
 
 def test_flags() -> None:
-    args = launcher.parse_args(["--no-browser", "--port", "6000", "-psn_0_12345"])
-    assert args.no_browser and args.port == 6000 and not args.self_test
+    args = launcher.parse_args(["--no-browser", "--port", "6001", "-psn_0_12345"])
+    assert args.no_browser and args.port == 6001 and not args.self_test
     assert launcher.parse_args(["--self-test"]).self_test
 
 
-@pytest.mark.parametrize("port", ["0", "70000", "http"])
+@pytest.mark.parametrize("port", ["0", "70000", "http", "5061"])
 def test_bad_port_is_rejected(port: str) -> None:
     with pytest.raises(SystemExit):
         launcher.parse_args(["--port", port])
@@ -711,6 +711,37 @@ def test_a_busy_port_stops_with_plain_advice(monkeypatch: pytest.MonkeyPatch, al
     assert alerts and f"Port {port} is already in use" in alerts[0]
     # The real bind error, not the advice again: the errno tells a helper what happened.
     assert "Technical detail: OSError: [Errno" in text
+
+
+def test_a_port_browsers_block_stops_with_plain_advice(monkeypatch: pytest.MonkeyPatch, alerts: list[str]) -> None:
+    monkeypatch.setenv("SAR_PORT", "5061")
+    monkeypatch.setenv("SAR_VLM_BACKEND", "mock")
+    monkeypatch.setattr(launcher, "open_browser_when_ready", lambda *a, **k: pytest.fail("the page could never load"))
+    monkeypatch.setattr(app_module, "main", lambda: pytest.fail("the app must not start on a blocked port"))
+    lines: list[str] = []
+    assert launcher.run_guarded(lambda: launcher.run_app(out=lines.append), out=lines.append) == 1
+    text = "\n".join(lines)
+    assert f"{launcher.APP_NAME} could not start." in text
+    assert "Port 5061 can't be used" in text and "SAR_PORT=5050" in text
+    assert "Change SAR_PORT in the environment variables (not in a sar.env)" in text
+    assert alerts and "Port 5061 can't be used" in alerts[0]
+    assert "Technical detail: ValueError: port 5061 is on the browsers' list of unsafe ports" in text
+
+
+def test_blocked_port_advice_names_the_sar_env_that_set_it(
+    folders: dict[str, Path], monkeypatch: pytest.MonkeyPatch, alerts: list[str]
+) -> None:
+    # Editing the data folder's file would change nothing: the one next to the app wins.
+    winner, loser = folders["exe"] / "sar.env", folders["data"] / "sar.env"
+    winner.write_text("SAR_PORT=6000\nSAR_VLM_BACKEND=mock\n")
+    loser.write_text("SAR_PORT=5050\n")
+    loaded = launcher.prepare_environment(frozen=False)
+    monkeypatch.setattr(app_module, "main", lambda: pytest.fail("the app must not start on a blocked port"))
+    lines: list[str] = []
+    run = lambda: launcher.run_app(open_browser=False, out=lines.append, env_files=loaded)  # noqa: E731
+    assert launcher.run_guarded(run, out=lines.append) == 1
+    assert f"Change SAR_PORT in the settings file {winner} to another number" in "\n".join(lines)
+    assert str(loser) not in alerts[0]
 
 
 def test_an_old_lan_address_is_not_called_a_busy_port(monkeypatch: pytest.MonkeyPatch) -> None:

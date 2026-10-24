@@ -68,8 +68,8 @@ tests what teachers download, not just the build folder:
    `ollama pull qwen2.5vl:3b` (~3 GB).
 4. Start **SAR Whiteboard Assistant** from the Start menu. A console window shows the addresses and any
    error (keep it open; closing it stops the assistant), and the dashboard opens in the browser. If it
-   can't start (a typo in `sar.env`, a busy port, a damaged install), the window stays open with the
-   reason in plain words and the path of a log file to send on; press Enter to close it.
+   can't start (a typo in `sar.env`, a busy port or one browsers refuse, a damaged install), the window
+   stays open with the reason in plain words and the path of a log file to send on; press Enter to close it.
 5. Open `http://127.0.0.1:5050/` full screen on the projector (drag the browser window to the projector
    display, press F11).
 6. If the camera or microphone stays dark: *Settings → Privacy & security → Camera* (and *Microphone*) →
@@ -87,8 +87,9 @@ tests what teachers download, not just the build folder:
 3. Install Ollama from <https://ollama.com/download> and run `ollama pull qwen2.5vl:3b` in Terminal (~3 GB).
 4. Open the app. Allow the **camera** and **microphone** when macOS asks. There is no window: the
    dashboard opens in the browser and the app shows in the Dock. If something is missing (Ollama) or it
-   can't start (a typo in `sar.env`, a busy port, a damaged install), a dialog says so in plain words; the
-   full log is in `~/Library/Application Support/SAR Whiteboard Assistant/logs/sar.log`.
+   can't start (a typo in `sar.env`, a busy port or one browsers refuse, a damaged install), a dialog
+   says so in plain words; the full log is in
+   `~/Library/Application Support/SAR Whiteboard Assistant/logs/sar.log`.
 5. To stop it: right-click its Dock icon → **Quit** (hold Option for **Force Quit** if it doesn't react).
    To watch the log live instead, start it from Terminal:
    `"/Applications/SAR Whiteboard Assistant.app/Contents/MacOS/SAR Whiteboard Assistant"` (Ctrl+C stops it).
@@ -152,7 +153,7 @@ The built app (`SAR Whiteboard Assistant.exe`, or `….app/Contents/MacOS/SAR Wh
 | Flag | Effect |
 | --- | --- |
 | `--no-browser` | Don't open the dashboard in the default browser |
-| `--port N` | Serve on port N (default `SAR_PORT`, else 5050) |
+| `--port N` | Serve on port N (default `SAR_PORT`, else 5050). Ports browsers refuse to open, such as 5060, 5061 and 6000, are rejected |
 | `--self-test` | Start on a free port with `SAR_VLM_BACKEND=mock`, `SAR_TTS_BACKEND=none`, `SAR_LISTEN_MODE=push` and a throw-away data folder (no camera, microphone or Ollama needed); check `/api/status`, `/dashboard`, `/`, static files, the Socket.IO handshake, UTF-8 mode (a build must have it on), imports, embeddings, Whisper assets and quiz grading (sympy solves an equation); print `SELF-TEST OK` and exit 0, or the failures and exit 1, within 120 s |
 | `--version` | Print the version |
 
