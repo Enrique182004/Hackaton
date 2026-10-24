@@ -7,9 +7,11 @@ grounded in a local RAG knowledge base.
 **Spec:** [docs/sar_whiteboard_assistant_prompt.md](docs/sar_whiteboard_assistant_prompt.md). This is the single source of truth for the build.
 
 ## For agents
-Start with `CLAUDE.md`, then read the spec. Build one module at a time.
+Start with `AGENTS.md` / `CLAUDE.md`, then read the spec. Humans: see `CONTRIBUTING.md`. Build one module at a time.
 
 ## Files
+- `AGENTS.md`: entry point for any AI agent.
+- `CONTRIBUTING.md`: onboarding and workflow for collaborators.
 - `CLAUDE.md`: project focus, stack, rules, skill routing and gates.
 - `docs/sar_whiteboard_assistant_prompt.md`: full system spec.
 - `SETUP.md`: setup checklist to run before the event.
