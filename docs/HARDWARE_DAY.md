@@ -78,6 +78,9 @@ Budget about 45 minutes, and do part A the day before.
     - Camera gives 1280x720 → it is on a hub, or it is another camera. Plug it in directly.
     - The 1080p camera is not index 1 → set `SAR_CAMERA_INDEX` in `sar.env` to the index that showed
       1920x1080, then restart the assistant.
+    - On a Mac, the first run asks whether Terminal may use the camera and the microphone: click **OK**.
+      Only the camera's first try can bring up that question, so if you missed it, allow it in System
+      Settings as below.
     - Microphone FAIL on a Mac → allow the microphone for Terminal (or the app) in System Settings →
       Privacy & Security → Microphone. Do the same for Camera.
     - Camera or microphone dark on Windows → *Settings → Privacy & security → Camera* (and *Microphone*) →

@@ -83,6 +83,9 @@ Calcula unos 45 minutos y haz la parte A un día antes.
     - La cámara da 1280x720 → está en un hub o es otra cámara. Conéctala directo.
     - La cámara de 1080p no es el índice 1 → pon en `SAR_CAMERA_INDEX` de `sar.env` el índice que mostró
       1920x1080 y reinicia el asistente.
+    - En una Mac, la primera vez te pregunta si Terminal puede usar la cámara y el micrófono: haz clic en
+      **OK**. Solo el primer intento de usar la cámara muestra esa pregunta; si no la viste, permítelo en
+      Ajustes del Sistema como se explica abajo.
     - `microphone FAIL` en una Mac → permite el micrófono para Terminal (o para la app) en Ajustes del
       Sistema → Privacidad y seguridad → Micrófono. Haz lo mismo con la Cámara.
     - Cámara o micrófono sin imagen ni sonido en Windows → Configuración → Privacidad y seguridad → Cámara (y
