@@ -78,7 +78,7 @@ _ES_WORDS = _word_set(
     faltan sirve significa queda pasa doy das pon ponme inventame examiname escoge elige creo parece atorado
     atorada ando ver espera esperame ocupo agarro practicar practicando preguntame cualquiera tuyo mio mia mios
     propio
-    nel sip simon neta chale aja porfis plis nomas onda tantito orita xq
+    nel nop sip simon neta chale aja porfis plis nomas onda tantito orita xq dale mames practiquemos atorao
     paso pasos problema problemas ecuacion ecuaciones fraccion fracciones ejercicio ejercicios respuesta
     respuestas pregunta preguntas numero numeros resultado raiz cuadrado cubo tarea examen prueba pizarron pizarra
     hoja ejemplo tema clase lado parte igual mitad medio tercio tercios cuarto cuartos vez veces punto signo valor
@@ -86,6 +86,7 @@ _ES_WORDS = _word_set(
     evaluacion
     cero uno dos tres cuatro cinco seis siete ocho nueve diez doce trece catorce quince veinte treinta cuarenta
     cincuenta cien mil
+    da dio sobra sobran cuesta cuestan mide miden pesos centavos metros kilos litros
     hola gracias oye mande porfa vale orale andale chido listo lista claro adios
     """
 )
@@ -102,7 +103,7 @@ _EN_WORDS = _word_set(
     exercise practice test exam learn teach explain understand mean add subtract multiply divide plus minus times
     equals equal divided square root half third quarter another more one two three four five six seven eight nine
     eleven twelve twenty hundred thousand zero like same other else much many some any all every each first last
-    write draw board back way side value whole because
+    write draw board back way side value whole because neither either
     """
 )
 _SPANISH_PUNCT = re.compile(r"[¿¡]")
@@ -213,68 +214,205 @@ def _alone(pattern: re.Pattern[str], plain: str) -> bool:
     return any(pattern.fullmatch(clause) for clause in plain.split(" , "))
 
 
-# What comes right before a command that makes it not one: negated ("no quiero un quiz"), asked about
-# ("¿cuándo termina el quiz?") or a purpose clause ("falta poco para terminar el quiz").
+# What comes right before a command that makes it not one: negated ("no quiero un quiz" / "no quiero que me
+# hagas un examen"), asked about ("¿cuándo termina el quiz?") or a purpose clause ("falta poco para terminar el quiz").
 _NOT_A_COMMAND = re.compile(
     r"(?:\b(?:no|nunca|ni|tampoco)\s+"
     r"(?:(?:quiero|queria|quisiera|queremos|puedo|podemos|puedes|necesito|debo|debemos|voy\s+a|vamos\s+a|"
-    r"tengo\s+que|hay\s+que|me\s+gusta|me\s+gustaria)\s+)?"
+    r"tengo\s+que|hay\s+que|me\s+gusta|me\s+gustaria)\s+(?:que\s+)?)?"
     r"|\b(?:cuando|como|donde|cuanto|cuanta|cuantos|cuantas|cual|cuales|quien|porque|por\s+que|para\s+que|"
     r"que\s+hora|para|antes\s+de|despues\s+de|hasta|sin|al|se)\s+)$"
 )
-# "¿por qué no me haces un quiz?" suggests one rather than refusing it.
+# "¿por qué no me haces un quiz?" suggests one; "por que no quiero hacer un quiz" (no accent: "porque") refuses it.
 _SUGGESTION_ES = re.compile(r"\bpor\s+que\s+no\s+$")
+_WANT_ES = re.compile(r"(?:quiero|queremos|quisiera|queria|necesito|ocupo|puedo|podemos|debo|me\s+gusta)\b")
 # Longer than any _NOT_A_COMMAND prefix, so looking back no further than this gives the same answer, in linear time.
 _LOOKBACK = 48
+_CLOSING_FILLER_ES = (
+    r"(?:ya|porfa|porfis|plis|pls|please|por\s+favor|gracias|profe|maestra|maestro|ahora|ahorita|pues|de\s+una\s+vez)"
+)
+# The clause ends here, maybe after a "porfa": "ya me cansé" / "ya me cansé, porfa", not "ya me cansé de estudiar".
+_CLAUSE_END_ES = rf"(?=(?:\s+{_CLOSING_FILLER_ES})*\s*(?:,|$))"
+# "luego luego" is Mexican for "right away", so neither "luego" of it puts anything off.
+_LATER_WORD_ES = (
+    r"(?:despues|(?<!\bluego )luego(?!\s+luego\b)|al\s+rato|mas\s+tarde|otro\s+dia|"
+    r"(?<!\bde )(?<!\bpara )(?:pasado\s+)?manana)"
+)
+# "después me haces un quiz" / "mañana vamos a practicar" put it off: not a mode change now. "y luego hazme un
+# quiz" says what comes next, so it still asks for one.
+_LATER_ES = re.compile(
+    r"\b(?:(?<!\by )despues|(?<!\by )(?<!\bluego )(?P<then>luego)|al\s+rato|mas\s+tarde|otro\s+dia|"
+    r"(?<!\bde )(?<!\bpara )(?:pasado\s+)?manana)\s+$"
+)
+_LATER_AFTER_ES = re.compile(rf"[^,]{{0,{_LOOKBACK}}}?\s{_LATER_WORD_ES}{_CLAUSE_END_ES}")
+# A bare "luego" before an order is "then": "luego dame otro ejercicio"; "luego me haces un quiz" is "later".
+_ORDER_ES = re.compile(
+    r"(?:hazme|haznos|haz|dame|danos|ponme|ponnos|pon|pasame|pasanos|mandame|echame|avientame|aventame|aplicame|"
+    r"preparame|examiname|examinanos|evaluame|evaluanos|preguntame|preguntanos|tomame|empecemos|empieza|comienza|"
+    r"comencemos|inicia|iniciemos|hagamos|arranca|arranquemos|vamos|vamonos|pasemos|practiquemos|sigamos)\b"
+)
 
 
 def _negated(plain: str, start: int) -> bool:
     window = max(0, start - _LOOKBACK)
-    return bool(_NOT_A_COMMAND.search(plain, window, start)) and not _SUGGESTION_ES.search(plain, window, start)
+    if not _NOT_A_COMMAND.search(plain, window, start):
+        return False
+    return not (_SUGGESTION_ES.search(plain, window, start) and not _WANT_ES.match(plain, start))
 
 
 def _commanded(patterns: tuple[re.Pattern[str], ...], plain: str) -> bool:
     return any(not _negated(plain, m.start()) for p in patterns for m in p.finditer(plain))
 
 
+def _put_off(plain: str, found: re.Match[str]) -> bool:
+    """ "después me haces un quiz" / "hazme un quiz luego", but not "luego luego" nor "y luego hazme un quiz"."""
+    start = found.start()
+    before = _LATER_ES.search(plain, max(0, start - _LOOKBACK), start)
+    if before and not (before.group("then") and _ORDER_ES.match(plain, start)):
+        return True
+    return bool(_LATER_AFTER_ES.match(plain, found.end()))
+
+
+_Unless = Callable[[str, re.Match[str]], bool]
+
+
+def _requested(patterns: tuple[re.Pattern[str], ...], plain: str, unless: _Unless | None = None) -> bool:
+    """Commanded now: not negated, not put off ("luego"), and not ruled out by `unless` ("hay otro así en la hoja")."""
+    for pattern in patterns:
+        for found in pattern.finditer(plain):
+            if _negated(plain, found.start()) or _put_off(plain, found):
+                continue
+            if unless is None or not unless(plain, found):
+                return True
+    return False
+
+
 # ---- Spanish intents: mode -----------------------------------------------------
-_QUIZ_WORD = r"(?:quiz|quizz|prueba|examen|examencito|evaluacion|cuestionario)"
+_QUIZ_WORD = r"(?:quiz|quizz|quizzito|quizito|prueba|pruebita|examen|examencito|evaluacion|evaluacioncita|cuestionario)"
 # "prueba" and "evaluación" are feminine: "termina la prueba", "para esta evaluación", "párale a la prueba".
 _ARTICLE = r"(?:el|la|este|esta|ese|esa|mi|del)"
 _THE_QUIZ = rf"(?:ya\s+)?(?:(?:de|con|a|al)\s+)?(?:{_ARTICLE}\s+)?{_QUIZ_WORD}\b"
-# In Mexican math class "hacer la prueba" is also checking an answer: "hagamos la prueba con x = 2".
+# In Mexican math class "hacer la prueba" is also checking an answer: "hagamos la prueba con x = 2", "la prueba
+# del nueve", and a bare "¿hacemos la prueba?" right after solving. With "haz / hagamos / hacemos / vamos a hacer"
+# it is a quiz only when a topic follows ("hagamos la prueba de fracciones"). "hazme / dame / empecemos la prueba"
+# are quizzes.
 _CHECKING = (
-    r"\s+(?:con|a|al|de\s+(?:la|el|esta|este|esa|ese|tu|mi)|sustituyendo|para\s+(?:ver|comprobar|checar|saber))\b"
+    r"\s+(?:con|a|al|del|de\s+(?:la|el|esta|este|esa|ese|tu|mi)|sustituyendo|para\s+(?:ver|comprobar|checar|saber))\b"
 )
-_QUIZ_ASKED = rf"(?:quiz|quizz|prueba(?!(?<=\bla prueba){_CHECKING})|examen|examencito|evaluacion|cuestionario)\b"
+_CHECK_VERBS = ("haz", "hagamos", "hacemos", "vamos a hacer")
+_AFTER_CHECK_VERB = "|".join(rf"(?<=\b{verb} la )" for verb in _CHECK_VERBS)
+_PRUEBA = (
+    rf"(?!(?<=\bla )prueb(?:a|ita){_CHECKING})"
+    rf"(?!(?:{_AFTER_CHECK_VERB})prueb(?:a|ita)(?!\s+de\s))"
+    r"prueb(?:a|ita)"
+)
+_QUIZ_ASKED = rf"(?:quiz|quizz|quizzito|quizito|{_PRUEBA}|examen|examencito|evaluacion|evaluacioncita|cuestionario)\b"
 _A_QUIZ = rf"(?:un|una|el|la|este|esta|otro|otra)\s+(?:\w+\s+)?{_QUIZ_ASKED}"
 
-_OPENING_FILLER_ES = r"(?:ya|oye|mejor|bueno|ok|okay|ahora|pues|porfa|por\s+favor|profe|maestra|maestro|no|va|sale)"
-_CLOSING_FILLER_ES = r"(?:ya|porfa|porfis|plis|por\s+favor|profe|maestra|maestro|ahora|ahorita|pues|de\s+una\s+vez)"
-_WHEN_ES = r"(?:manana|hoy|ayer|lunes|martes|miercoles|jueves|viernes|sabado|domingo|el|la|los|las|esta|este)"
-# "para" / "termina" / "acaba" are also "for" / "it ends": only commands when they open the sentence and say
-# nothing else. "para el examen, ¿qué temas vienen?" is "for the exam", so a bare "para" must end the turn.
+# A bare "si" opens only before a comma: "sí, termina el quiz"; "si termina el quiz ..." is "if the quiz ends".
+_OPENING_FILLER_ES = (
+    r"(?:ya|oye|mejor|bueno|ok|okay|okey|ahora|pues|porfa|porfis|plis|por\s+favor|profe|maestra|maestro|va|sale|"
+    r"dale|orale|andale|sip|entonces|ay|y\s+ya|a\s+ver|nomas|ya\s+estuvo)"
+)
+# "no, para el examen" / "sí, para el examen" answer "¿para qué estudias?", so after them a bare "para el quiz"
+# needs a reason to quit; "no, termina el quiz" still quits.
+_ANSWER_FILLER_ES = r"(?:no|si\s+,)"
+_OPENED_ES = rf"^(?:(?:{_OPENING_FILLER_ES}|{_ANSWER_FILLER_ES})\s+(?:,\s+)?)*"
+# Whisper writes "Sí termina el quiz" with no comma; the accent says "yes", where "si termina el quiz" is "if".
+_YES_ES = re.compile(r"sí\s+(?!,)")
+_NUMBER_ES = r"(?:\d+|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce)"
+_AT_TIME_ES = rf"(?:a\s+las?\s+{_NUMBER_ES}|en\s+(?:\w+\s+){{0,2}}(?:horas?|minutos?|mins?|segundos?|rato|ratito))"
+_DAY_ES = (
+    r"(?:manana|hoy|ayer|antier|lunes|martes|miercoles|jueves|viernes|sabado|domingo|semana|proxim[oa]|tarde|"
+    r"noche|temprano|pronto)"
+)
+# Which quiz "el quiz de hoy" is, said of the one running, is no schedule; "el quiz de hoy a las tres" is.
+_SCHEDULE_DAY_ES = (
+    r"(?:manana|ayer|antier|lunes|martes|miercoles|jueves|viernes|sabado|domingo|semana|proxim[oa]|tarde|noche)"
+)
+# The day starts the student's next clause, commas dropped: "termina el quiz mañana sigo", "... hoy ya no quiero".
+_NEXT_CLAUSE_ES = (
+    r"(?!\s+(?:(?:le|lo|la)\s+)?(?:sigo|seguimos|continuo|continuamos|acabo|acabamos|termino|terminamos)\b|"
+    r"\s+(?:ya\s+)?no\s+(?:puedo|quiero|podemos|queremos)\b)"
+)
+# A time right after the quiz word says when it ends, so it is no command: "termina el quiz de mañana a las tres",
+# "... el viernes", "... luego". After a comma it is a new clause: "termina el quiz, mañana sigo" quits, and so do
+# a topic ("termina el quiz de la tabla del 7") and "termina el quiz hasta aquí".
+_NOT_NOW_ES = (
+    rf"\s+(?:{_AT_TIME_ES}|cuando|hasta(?!\s+(?:aqui|aca|ahi)\b)|de\s+hoy\s+{_AT_TIME_ES}|"
+    rf"(?:{_LATER_WORD_ES}|{_DAY_ES}|(?:de|del|el|la|este|esta|en\s+la|de\s+(?:la|el|esta|este))\s+{_SCHEDULE_DAY_ES})"
+    rf"\b{_NEXT_CLAUSE_ES})\b"
+)
+# Spoken like the command, these ask about the quiz: "¿termina el quiz si fallo una?", "¿... solo o le pico
+# algo?", "¿... con la pregunta 5?".
+_ASKS_HOW_IT_ENDS_ES = (
+    rf"\s+(?:si\s+(?!{_CLOSING_FILLER_ES}\b)\w|solo\b(?!\s+(?:por|eso|ya)\b)|"
+    r"con\s+(?:la|el)\s+(?:pregunta|ejercicio|problema|numero)\b)"
+)
+# "ya me cansé de las preguntas" quits; "ya me cansé de estudiar" is how studying for the exam went.
+_TIRED_OF_ES = rf"(?:\s+(?:de|del|con)\s+(?:(?:{_ARTICLE}|las|tantas)\s+)?(?:{_QUIZ_WORD}|preguntas|esto|eso)\b)?"
+# Why a student quits, said right after a bare "para el quiz": "ya me cansé", "que ya no quiero", "ya entendí".
+# Each must end its clause: "para el examen ya no quiero sacar seis", "... ya terminé el tema 3" and "... ya estoy
+# cansado de estudiar" are "for the exam". Without "ya", "no quiero" / "terminé" / "me voy" are also "for the exam".
+_QUIT_REASON_ES = (
+    r"(?:(?:porque|que|pues|y|es\s+que)\s+)?(?:"
+    rf"(?:ya\s+no\s+(?:quiero|queremos|puedo)|no\s+(?:quiero|queremos))(?:\s+mas)?(?:{_CLAUSE_END_ES}|"
+    r"\s+(?:seguir|continuar)\b)"
+    r"|(?:no\s+puedo\s+mas|(?:ya\s+)?no\s+aguanto(?:\s+mas)?|ya\s+(?:estuvo|termine|acabe|entendi|le\s+entendi)|"
+    rf"(?:ya\s+)?me\s+(?:canse|aburri|harte|fastidie){_TIRED_OF_ES}|(?:ya\s+)?(?:me\s+dio|tengo)\s+sueno|"
+    r"(?:ya\s+)?(?:estoy|ando)\s+(?:muy\s+)?(?:cansad|aburrid|hart)[oa]s?|(?:ya\s+)?me\s+voy|basta|"
+    rf"(?:ya\s+)?fue\s+suficiente){_CLAUSE_END_ES})"
+)
+_PARA_THE_QUIZ_ES = rf"(?:para\s+(?:,\s+)?)?para\s+{_THE_QUIZ}(?:\s+(?:,\s+)?(?:{_CLOSING_FILLER_ES}|y\s+ya))*"
+# "para" / "termina" / "acaba" are also "for" / "it ends": only commands when they open the sentence. A bare
+# "para el quiz" may then only be followed by fillers or a reason to quit, since "para el examen, ¿qué temas
+# vienen?" is "for the exam"; "termina el quiz ..." may say anything except when it ends.
 _STOP_OPENING_ES = re.compile(
-    rf"^(?:{_OPENING_FILLER_ES}\s+(?:,\s+)?)*(?:"
-    rf"para\s+{_THE_QUIZ}(?:\s+(?:,\s+)?{_CLOSING_FILLER_ES})*$"
+    rf"^(?:{_OPENING_FILLER_ES}\s+(?:,\s+)?)*{_PARA_THE_QUIZ_ES}$"
+    rf"|{_OPENED_ES}(?:{_PARA_THE_QUIZ_ES}\s+(?:,\s+)?{_QUIT_REASON_ES}"
     rf"|(?:parale|parele|termina|terminale|acaba|acabale|acaba\s+con|termina\s+con)\s+{_THE_QUIZ}"
-    rf"(?:\s+de\s+(?!{_WHEN_ES}\b)\w+)?(?:\s+{_CLOSING_FILLER_ES})*(?:\s+,|$))"
+    rf"(?!{_NOT_NOW_ES}|{_ASKS_HOW_IT_ENDS_ES}))"
+)
+# "¿cómo salgo del examen?" / "¿cómo se sale del quiz?" ask to quit; "¿cómo salgo del examen con buena
+# calificación?" asks how to pass. Not "terminar": "¿cómo le hago para terminar el quiz?" may be asking how to
+# finish it.
+_HOW_TO_QUIT_ES = re.compile(
+    r"\bcomo\s+(?:le\s+)?(?:(?:hago|hacemos|puedo|podemos|se\s+puede)\s+(?:para\s+)?)?"
+    r"(?:salgo|salimos|me\s+salgo|nos\s+salimos|se\s+sale|salir|salirme|salirnos|parar|paro|cancelar|cancelo|dejar|"
+    rf"dejo|quitar|quito|cerrar|cierro)\s+{_THE_QUIZ}(?!\s+(?:con|bien|mal|aprobad[oa]|pasad[oa])\b)"
 )
 _STOP_ES = _compile(
     rf"\b(?:terminemos|paremos|detengamos|cancelemos|salgamos|acabemos|dejemos|finalicemos|cerremos|quitemos)\s+{_THE_QUIZ}",
     rf"\b(?:terminar|parar|detener|cancelar|salir|salirme|acabar|dejar|finalizar|cerrar|quitar)\s+{_THE_QUIZ}",
-    rf"\b(?:cancela|deten|detente|quita|cierra|finaliza|sal|salte)\s+{_THE_QUIZ}",
+    rf"\b(?:cancela|deten|detente|quita|cierra|finaliza|sal|salte|sacame|sacanos|me\s+salgo)\s+{_THE_QUIZ}",
+    # "mejor dejamos el examen para mañana" / "ya dejamos el examen"; "ya dejamos el examen en la mesa" says where
+    # it was left.
+    rf"\b(?:mejor|ya|ahi)\s+dejamos\s+{_THE_QUIZ}(?:{_CLAUSE_END_ES}|\s+(?:para|por\s+hoy|ahi|aqui|hasta\s+aqui)\b)",
+    rf"\bdejamos\s+{_THE_QUIZ}\s+(?:para\s+(?:otro|otra|despues|luego|manana|el|la)|ahi|aqui|hasta\s+aqui|por\s+hoy)\b",
     rf"\bya\s+no\s+(?:quiero|queremos|quiere)\s+(?:(?:hacer|seguir|con|{_ARTICLE}|un|una|otro|otra|mas)\s+)*"
     rf"{_QUIZ_WORD}\b",
     rf"\bno\s+(?:quiero|queremos)\s+(?:seguir|continuar)\s+(?:con\s+)?{_THE_QUIZ}",
+    # "mejor ya no le sigo al quiz"; a bare "no le sigo" may be "I don't follow you".
+    rf"\bno\s+le\s+(?:sigo|seguimos)\s+{_THE_QUIZ}",
+    rf"\bya\s+no\s+le\s+(?:sigo|seguimos){_CLAUSE_END_ES}",
+    rf"\bya\s+no\s+(?:quiero|queremos)\s+(?:contestar|responder)(?:\s+(?:mas|nada))?(?:\s+preguntas)?{_CLAUSE_END_ES}",
     r"\bno\s+mas\s+(?:quiz(?:z|zes|es)?|examen(?:es)?|pruebas?|evaluacion(?:es)?|cuestionarios?)\b",
+    r"\b(?:ya\s+)?no\s+(?:quiero\s+|queremos\s+)?mas\s+preguntas\b",
     rf"\b(?:basta|suficiente|ya\s+estuvo|(?:ya\s+)?me\s+(?:canse|aburri|harte))\s+"
-    rf"(?:(?:de|con)\s+(?:{_ARTICLE}\s+)?|del\s+){_QUIZ_WORD}\b",
+    rf"(?:(?:de|con)\s+(?:(?:{_ARTICLE}|las|tantas)\s+)?|del\s+)(?:{_QUIZ_WORD}|preguntas)\b",
+    # "eso es suficiente prueba" is "that's proof enough": a bare "suficiente prueba" only quits "por hoy".
+    r"\bsuficiente\s+(?:quiz|quizz|examen|evaluacion|cuestionario)\b(?!\s+(?:de|para)\b)",
+    r"\bsuficiente\s+prueba\s+por\s+hoy\b",
+    rf"\bme\s+(?:aburrio|canso|harto|fastidio)\s+{_THE_QUIZ}(?!{_NOT_NOW_ES})",
 )
 _QUIZ_ES = _compile(
     r"\b(?:examiname|evaluame|examinanos|evaluanos|preguntame|preguntanos|tomame\s+la\s+leccion)\b",
     r"\bponme\s+a\s+prueba\b",
-    r"\b(?:hazme|haznos|dame|danos|ponme|ponnos|aplicame|preparame|haz|pon|prepara|mandame|echame|pasame)\s+" + _A_QUIZ,
+    r"\b(?:me|nos)\s+(?:tomas|tomarias|puedes\s+tomar|podrias\s+tomar)\s+la\s+leccion\b",
+    r"\b(?:quiero|queremos|quisiera|me\s+gustaria|necesito)\s+que\s+(?:me|nos)\s+(?:preguntes|hagas\s+preguntas|"
+    r"examines|evalues|tomes\s+la\s+leccion)\b",
+    r"\b(?:hazme|haznos|dame|danos|ponme|ponnos|aplicame|preparame|haz|pon|prepara|mandame|echame|pasame|avientame|"
+    r"aventame)\s+" + _A_QUIZ,
     r"\b(?:me|nos)\s+(?:haces|hagas|harias|puedes\s+hacer|podrias\s+hacer|pones|podrias\s+poner|das|aplicas|"
     r"mandas)\s+" + _A_QUIZ,
     r"\b(?:quiero|queremos|quisiera|queria|me\s+gustaria|necesito|ocupo)\s+(?:hacer\s+|tomar\s+|presentar\s+|"
@@ -289,57 +427,130 @@ _QUIZ_ES = _compile(
     r"\b(?:hazme|haznos|ponme|dame|me\s+haces|nos\s+haces|me\s+puedes\s+hacer|puedes\s+hacerme)\s+"
     r"(?:(?:una|unas|algunas|otra|otras|mas|dos|tres|cuatro|cinco|diez)\s+)?pregunt(?:a|as|ita|itas)\b",
 )
+_HARDER = (
+    r"mas\s+(?:dificil|facil|complicad[oa]|retador[a]?|sencill[oa]|dificilito|dificilita|facilito|facilita|"
+    r"pesad[oa]|corto|largo|rapido)"
+)
 _QUIZ_ALONE_ES = re.compile(
     rf"(?:{_FILLER_ES}\s+)*(?:otro|otra|un|una)\s+{_QUIZ_ASKED}"
-    rf"(?:\s+(?:mas|rapido|rapidito|cortito|facil|de\s+\w+))?(?:\s+{_FILLER_ES})*"
+    rf"(?:\s+(?:pero\s+)?(?:{_HARDER}|mas|rapido|rapidito|cortito|facil|dificil|de\s+\w+))?(?:\s+{_FILLER_ES})*"
 )
 _LIKE_THIS = r"(?:parecid[oa]s?|similar(?:es)?|asi|como\s+(?:este|esta|estos|estas|ese|esa|esto|eso|el\s+anterior|la\s+anterior))"
-# "otro igual a este" asks for one; "otro igual a cinco" is dictation.
-_SAME = r"(?:igual(?!\s+a\s+(?!(?:este|esta|ese|esa|esto|eso)\b))|igualit[oa])"
+# Which earlier item "igual a la ..." points at: "la anterior", "la tres" (worksheet item 3), "la que hicimos".
+_ITEM_REF = (
+    r"(?:anterior(?:es)?|de\s+(?:antes|arriba|abajo|atras)|que|primer[oa]|segund[oa]|tercer[oa]|cuart[oa]|"
+    r"quint[oa]|ultim[oa]|otr[oa]|\d+|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\b"
+)
+_ITEMS_REF = r"(?:anteriores|de\s+(?:antes|arriba|abajo|atras)|que)\b"
+# "otro igual a este" / "otra igual a la anterior" ask for one; "otro igual a cinco", "a la mitad", "a la tercera
+# parte" and "a los dos" (both) are dictation.
+_SAME = (
+    r"(?:igual(?!\s+a\s+(?!(?:este|esta|ese|esa|esto|eso)\b|"
+    rf"(?:la|lo)\s+{_ITEM_REF}(?!\s+parte\b)|(?:las|los)\s+{_ITEMS_REF}))|igualit[oa])"
+)
 _EXERCISE = r"(?:problema|ejercicio|ejemplo|pregunta|ecuacion|fraccion|operacion)"
 # Not "pregunta" ("otra pregunta" mid-quiz is the next question) nor "ejemplo" (a lesson asking for one more).
 _PRACTICE_ITEM = r"(?:ejercicio|problema|ecuacion|operacion)"
+_GIVE_ME = (
+    r"(?:dame|danos|ponme|ponnos|pon|hazme|mandame|pasame|echame|avientame|quiero|queremos|necesito|ocupo|"
+    r"quisiera|me\s+(?:das|pones|pasas|mandas))"
+)
+# "hay otro problema así en la hoja" / "es otra fracción igual" describe the worksheet; they ask for nothing.
+_STATEMENT_ES = re.compile(r"\b(?:(?P<there>hay|habia)|es|son|era|eran|fue|tengo)\s+$")
+_ENDS_HERE_ES = re.compile(_CLAUSE_END_ES)
+
+
+def _describes(plain: str, found: re.Match[str]) -> bool:
+    """ "hay otro así en la hoja" tells what is there; "¿hay otro así?", with nothing after it, asks for one."""
+    statement = _STATEMENT_ES.search(plain, max(0, found.start() - _LOOKBACK), found.start())
+    if not statement:
+        return False
+    return not (statement.group("there") and _ENDS_HERE_ES.match(plain, found.end()))
+
+
+# "otra" / "una" alone are "pregunta": mid-quiz "dame otra más fácil" is the next question, so only "otro" /
+# "uno" (problema, ejercicio) or a named item asks for practice.
+_HARDER_ONE = rf"(?:(?:otro|uno)\s+(?:{_PRACTICE_ITEM}\s+)?|(?:otra|una)\s+{_PRACTICE_ITEM}\s+){_HARDER}"
 _PRACTICE_ES = _compile(
-    # "uno igual" is left out: "dos más uno igual a tres" is dictation, not a request.
-    rf"\b(?:otro|otra)\s+(?:mas\s+)?(?:{_EXERCISE}\s+)?(?:mas\s+)?(?:{_LIKE_THIS}|{_SAME})\b",
+    # "uno igual" is left out: "dos más uno igual a tres" is dictation, not a request. So is "el otro igual"
+    # ("un lado mide 5 y el otro igual"): the article makes it a description.
+    rf"\b(?<!\bel )(?<!\bla )(?<!\blos )(?<!\blas )(?:otro|otra)\s+(?:mas\s+)?(?:{_EXERCISE}\s+)?(?:mas\s+)?"
+    rf"(?:{_LIKE_THIS}|{_SAME})\b",
     rf"\b(?:uno|una)\s+(?:mas\s+)?{_LIKE_THIS}\b",
     rf"\b(?:un|una)\s+{_EXERCISE}\s+{_LIKE_THIS}\b",
     rf"\b{_EXERCISE}s\s+(?:mas\s+)?{_LIKE_THIS}\b",
     r"\bmas\s+practica\b",
-    r"\b(?:practicar|practiquemos)\s+(?:mas|otro|otra|un\s+poco)\b",
-    r"\bquiero\s+practicar\b",
+    rf"\b(?:practicar|practiquemos)\s+(?:mas(?!\s+tarde\b)|otro(?!\s+dia\b)|otra|un\s+poco)\b(?!{_NOT_NOW_ES})",
+    rf"\bquiero\s+practicar\b(?!{_NOT_NOW_ES})",
+    rf"\bpractiquemos\b(?!{_NOT_NOW_ES})",
+    # Only opening its clause: "mañana vamos a practicar", "en la clase vamos a practicar" and a word problem's "si
+    # vamos a practicar 2 horas diarias" say what will happen.
+    rf"(?:^|(?<=, ))(?:(?:{_FILLER_ES}|ahora\s+si)\s+)*vamos\s+a\s+practicar\b(?!{_NOT_NOW_ES})",
     r"\b(?:seguir|sigamos|sigo|continuar|continuemos)\s+practicando\b",
     r"\bmodo\s+(?:de\s+)?practica\b",
     r"\b(?:problemas|ejercicios)\s+de\s+practica\b",
-    r"\b(?:dame|danos|ponme|ponnos|pon|hazme|mandame|pasame|echame|avientame|quiero|queremos|necesito|ocupo|"
-    r"quisiera|me\s+(?:das|pones|pasas|mandas))\s+(?:hacer\s+|resolver\s+)?(?:otro|otra|otros|otras|mas)\s+"
-    rf"{_PRACTICE_ITEM}s?\b",
+    rf"\b(?:otro|otra)\s+(?:{_PRACTICE_ITEM}\s+)?de\s+practica\b",
+    rf"\b{_GIVE_ME}\s+(?:hacer\s+|resolver\s+)?(?:otro|otra|otros|otras|mas)\s+{_PRACTICE_ITEM}s?\b",
+    rf"\b{_GIVE_ME}\s+{_HARDER_ONE}\b",
+    r"\b(?:dame|danos|ponme|ponnos|pasame|mandame|echame|avientame)\s+(?:(?:unos|unas|algunos|algunas|varios|"
+    r"varias)\s+)?(?:ejercicios|problemas|ecuaciones|operaciones)\b",
+    # A bare "sigamos con otro" / "vamos con otro problema" is left out: mid-quiz it means "next", and practice
+    # mode would end the quiz. "sigamos con otro parecido" / "... de práctica" match above.
 )
 # "hay más ejercicios en la hoja" is about the worksheet, so a bare "más ejercicios" must be the whole request.
 _PRACTICE_ALONE_ES = re.compile(
-    rf"(?:{_FILLER_ES}\s+)*(?:(?:otro|otra)\s+{_PRACTICE_ITEM}(?:\s+mas)?|mas\s+{_PRACTICE_ITEM}s)"
-    rf"(?:\s+de\s+\w+)?(?:\s+{_FILLER_ES})*"
+    rf"(?:{_FILLER_ES}\s+)*(?:(?:otro|otra)\s+{_PRACTICE_ITEM}(?:\s+mas)?(?:\s+de\s+\w+)?|mas\s+{_PRACTICE_ITEM}s"
+    rf"(?:\s+de\s+\w+)?|{_HARDER_ONE}|(?:hay\s+que\s+)?"
+    r"practicar(?:\s+(?:mas|mucho|un\s+poco(?:\s+mas)?|otro\s+rato))?)"
+    rf"(?:\s+{_FILLER_ES})*"
 )
 _HELP_ES = _compile(
-    r"\bayud(?:a|ame|arme|as|en|enme|ita|eme)\b",
+    # "yo puedo sin ayuda" turns it down.
+    r"\b(?<!\bsin )ayud(?:a|ame|arme|as|en|enme|ita|itas|adita|aditas|eme)\b",
     r"\bauxilio\b",
     r"\b(?:siguiente|proximo)\s+paso\b",
-    r"\bque\s+(?:sigue|hago|debo\s+hacer|tengo\s+que\s+hacer|hay\s+que\s+hacer|mas\s+hago|le\s+hago)\b",
+    # "q" / "k" are how students type "qué": "q hago", "k sigue".
+    r"\b(?:que|q|k)\s+(?:sigue|hago|debo\s+hacer|tengo\s+que\s+hacer|hay\s+que\s+hacer|mas\s+hago|le\s+hago)\b",
     r"\bcomo\s+le\s+(?:hago|hacemos)\b",
     r"\by\s+ahora\s+(?:que|como)\b",
     r"\bno\s+(?:le\s+|lo\s+|la\s+)?(?:entiendo|entendi|comprendo|comprendi|capto|cacho|agarro|hallo)\b",
+    r"\bno\s+(?:le\s+|lo\s+|la\s+)?estoy\s+(?:entendiendo|comprendiendo|captando|cachando)\b",
+    r"\bsigo\s+sin\s+(?:entender|comprender|saber)\b",
     r"\bno\s+le\s+se\b",
-    r"\bno\s+me\s+(?:sale|salen|salio|queda\s+claro)\b",
+    r"\bno\s+me\s+(?:sale|salen|salio|queda\s+claro|acuerdo)\b",
     r"\bno\s+se\s+(?:como|que\s+hacer|que\s+sigue|que\s+hago|por\s+donde)\b",
-    r"\bme\s+(?:atore|atasque|trabe|perdi|confundi|revolvi)\b",
+    # "no sé hacerlo" / "no sé resolverlo"; "no se hace así" (it isn't done that way) and "no se sacaron bien los
+    # valores" (they weren't worked out right) have no infinitive.
+    r"\bno\s+se\s+(?:hacer|resolver|despejar|sacar)(?:lo|la|los|las|le|les)?\b",
+    # "¿cómo se hace?" on its own; "¿cómo se hace una gráfica?" is a lesson request.
+    # Not "¡así es como se hace!", which is the student showing off.
+    r"(?<!\bes )(?<!\basi )\bcomo\s+se\s+hace(?:\s+(?:esto|eso|este|esta|ese|esa|aqui))?(?=\s*(?:,|$))",
+    r"\bme\s+(?:atore|atasque|trabe|perdi|confundi|revolvi|bloque\w*)\b",
+    r"\b(?:estoy|toy|ando|me\s+quede|quede)\s+en\s+blanco\b",
     r"\b(?:h?echame|h?echanos|me\s+h?echas|nos\s+h?echas)\s+(?:la|una)\s+mano(?:ita)?\b",
     r"\bpista\b",
 )
-_VERY_ES = r"(?:(?:bien|muy|super|todo|bastante|medio)\s+)?"
-# A bare "atorado" is stuck, like English "stuck"; a bare "perdido" is not ("encuentra el número perdido").
+_HELP_CLAUSE_ES = re.compile(
+    rf"(?:{_FILLER_ES}\s+)*(?:me\s+(?:explicas|explica|explicarias|puedes\s+explicar|podrias\s+explicar)|explicame)"
+    r"(?:\s+(?:otra\s+vez|de\s+nuevo|porfa|porfis|plis|por\s+favor|profe|maestra|maestro))*"
+)
+_VERY_ES = (
+    r"(?:(?:bien|muy|super|re|todo|bastante|demasiado|medio|tan|algo|un\s+poco|un\s+poquito|como|todavia|aun|ya)"
+    r"\s+){0,2}"
+)
+# Whisper may write the spoken "atorao".
+_STUCK_WORD = r"(?:(?:atorad|atascad|trabad|confundid)[oa]s?|atorao|atascao|trabao)"
 _STUCK_ES = re.compile(
     rf"\b(?:(?:estoy|toy|stoy|ando|andamos|estamos|me\s+quede|me\s+siento|sigo|quede)\s+{_VERY_ES}"
-    rf"(?:(?:atorad|atascad|trabad|perdid|confundid)[oa]s?|stuck)|{_VERY_ES}(?:atorad|atascad|trabad|confundid)[oa]s?)\b"
+    rf"(?:{_STUCK_WORD}|perdid[oa]s?|stuck)"
+    # "este problema me tiene atorado" / "me dejaste más confundido"
+    rf"|(?:me|nos)\s+(?:tiene|tienes|tienen|dejo|dejaste|dejan|estas\s+dejando)\s+(?:mas\s+)?{_VERY_ES}{_STUCK_WORD})\b"
+)
+# A bare "atorado" is stuck, like English "stuck", but only as the whole clause: "el problema no está atorado"
+# and "la variable está confundida con y" are about something else. A bare "perdido" is not ("el número perdido").
+_STUCK_ALONE_ES = re.compile(
+    rf"(?:(?:{_FILLER_ES}|otra\s+vez|de\s+nuevo|neta|de\s+plano)\s+)*{_VERY_ES}{_STUCK_WORD}"
+    rf"(?:\s+(?:con|en)\s+.*|\s+(?:aqui|aca|otra\s+vez|de\s+nuevo))?(?:\s+{_FILLER_ES})*"
 )
 _NOT_STUCK_ES = re.compile(r"\b(?:no|nunca|tampoco)\s+$")
 _HELP_ALONE_ES = re.compile(r"^y\s+(?:ahora|luego|despues|entonces)(?:\s+que)?$")
@@ -347,33 +558,34 @@ _NO_HELP_ES = re.compile(r"\bno\s+(?:necesito|ocupo|quiero)\s+(?:tu\s+|mas\s+|na
 
 
 def _stuck(plain: str) -> bool:
-    """ "ando atorado" / "atorada", but not "ya no estoy atorado"."""
-    return any(
+    """ "ando atorado" / "atorada", but not "ya no estoy atorado" nor "no estoy tan atorado"."""
+    return _alone(_STUCK_ALONE_ES, plain) or any(
         not _NOT_STUCK_ES.search(plain, max(0, m.start() - _LOOKBACK), m.start()) for m in _STUCK_ES.finditer(plain)
     )
 
 
-def _is_quiz_stop(plain: str) -> bool:
-    return bool(_STOP_OPENING_ES.search(plain)) or _commanded(_STOP_ES, plain)
+def _is_quiz_stop(plain: str, accented: str) -> bool:
+    opening = "si , " + plain[3:] if _YES_ES.match(accented) else plain
+    return bool(_STOP_OPENING_ES.search(opening)) or bool(_HOW_TO_QUIT_ES.search(plain)) or _commanded(_STOP_ES, plain)
 
 
 def is_quiz_stop_es(text: str) -> bool:
     """An explicit "termina el quiz": "ayuda" / "estoy atorado" during a quiz asks for a hint, not to quit."""
-    return _is_quiz_stop(_normalize(text)[0])
+    return _is_quiz_stop(*_normalize(text))
 
 
 def detect_mode_es(text: str) -> str | None:
     """The mode ("help" | "practice" | "quiz") a student's Spanish asks for, or None to stay in the current one."""
-    plain = _normalize(text)[0]
-    if _is_quiz_stop(plain):
+    plain, accented = _normalize(text)
+    if _is_quiz_stop(plain, accented):
         return "help"
-    if _commanded(_QUIZ_ES, plain) or _alone(_QUIZ_ALONE_ES, plain):
+    if _requested(_QUIZ_ES, plain) or _alone(_QUIZ_ALONE_ES, plain):
         return "quiz"
-    if _commanded(_PRACTICE_ES, plain) or _alone(_PRACTICE_ALONE_ES, plain):
+    if _requested(_PRACTICE_ES, plain, unless=_describes) or _alone(_PRACTICE_ALONE_ES, plain):
         return "practice"
     if _NO_HELP_ES.search(plain):
         return None
-    if _any(_HELP_ES, plain) or _stuck(plain) or _HELP_ALONE_ES.search(_flat(plain)):
+    if _any(_HELP_ES, plain) or _stuck(plain) or _alone(_HELP_CLAUSE_ES, plain) or _HELP_ALONE_ES.search(_flat(plain)):
         return "help"
     return None
 
@@ -481,9 +693,12 @@ _FILLER_WORDS = 6
 _VAGUE_TOPIC_ES = _word_set(
     """
     mas todo toda todos todas algo mucho muchas muchos cosa cosas otra otro nada ayer hoy manana nuevo nueva
-    de lo que bien mejor
+    de lo que bien mejor el la los las del en clase clases tema temas vimos visto hicimos
     """
 )
+_THEN_WORDS = _word_set("luego despues")
+_ALSO_WORDS = _word_set("tambien ademas")
+_ASKING_WORDS = _word_set("me nos quiero quisiera necesito")
 
 
 def _words(plain: str, accented: str, found: re.Match[str], group: str) -> tuple[list[str], list[str]]:
@@ -508,7 +723,24 @@ def _trim(
     return plain[start:end], accented[start:end]
 
 
+def _first_request(plain: list[str], accented: list[str]) -> tuple[list[str], list[str]]:
+    """ "fracciones y luego me haces un quiz" -> "fracciones": what follows "y luego" is another request.
+
+    "y también" starts one only before a verb ("y también hazme un quiz"); "fracciones y también decimales" is
+    one topic.
+    """
+    for index in range(len(plain) - 1):
+        if plain[index] != "y":
+            continue
+        then = plain[index + 1]
+        after = plain[index + 2] if index + 2 < len(plain) else ""
+        if then in _THEN_WORDS or (then in _ALSO_WORDS and (after in _ASKING_WORDS or _ORDER_ES.fullmatch(after))):
+            return plain[:index], accented[:index]
+    return plain, accented
+
+
 def _finish(plain: list[str], accented: list[str], verb: str | None = None) -> str | None:
+    plain, accented = _first_request(plain, accented)
     plain, accented = _trim(plain, accented, _TRAILING_FILLER_ES, leading=False)
     plain, accented = plain[:MAX_TOPIC_WORDS], accented[:MAX_TOPIC_WORDS]
     if not plain or _VAGUE_TOPIC_ES.issuperset(plain) or _DEIXIS_ES.search(" ".join(plain)):
@@ -572,29 +804,52 @@ def detect_learn_request_es(text: str) -> str | None:
 
 
 # ---- Spanish intents: "¿tienes un ejercicio o invento uno?" ----------------------
-# A bare "uno"/"una" only counts at the end or before a few fillers: "tengo una duda" is not an exercise.
+# A bare "uno"/"una" only counts at the end or before a few fillers: "tengo una duda" is not an exercise, and
+# neither is "tengo una bien buena pregunta", so "bien" / "fácil" must lead to the end or another filler.
 _ONE_OWN = (
-    r"(?:uno|una)(?=\s*(?:,|$)|\s+(?:aqui|aca|ya|listo|lista|en|de|que|mio|mia|propio|propia|pero|y|bien|facil|"
-    r"dificil)\b)"
+    r"(?:uno|una)(?=(?:\s+(?:bien|muy|super|facil|dificil|facilito|facilita|dificilito|dificilita|sencillo|"
+    r"sencilla|complicado|complicada|largo|larga|corto|corta|padre|bueno|buena))*(?:\s*(?:,|$)|\s+(?:aqui|aca|ya|"
+    r"listo|lista|en|de|que|mio|mia|propio|propia|pero|y)\b))"
 )
 _ONE_ASKED = (
-    r"(?:uno|una|otro|otra)(?=\s*(?:,|$)|\s+(?:tu|ya|por|porfa|porfis|plis|de|para|facil|dificil|nuevo|nueva|que|"
-    r"mas|cualquiera|rapido)\b)"
+    r"(?:uno|una|otro|otra)(?=\s*(?:,|$)|\s+(?:tu|ya|por|porfa|porfis|plis|de|con|para|facil|dificil|nuevo|nueva|"
+    r"que|mas|cualquiera|rapido)\b)"
 )
 _MINE = r"(?:el|la|los|las)\s+mi[oa]s?\b"
-_OFFER_DECLINE_ES = _compile(r"\bno\s+(?:tengo|traigo|tenemos)\b", r"\bno\s+se\s+me\s+ocurre\b")
+_OFFER_DECLINE_ES = _compile(
+    r"\bno\s+(?:tengo|traigo|tenemos)\b",
+    r"\bno\s+se\s+me\s+ocurre\b",
+    r"\bno\s+(?:lo|la|los|las)\s+(?:tengo|traigo)(?=\s*(?:,|$)|\s+(?:aqui|aca|conmigo|ahorita|a\s+la\s+mano)\b)",
+)
 _OFFER_OWN_ES = _compile(
     rf"\b(?:tengo|traigo)\s+(?:{_ONE_OWN}|mis?\s+(?:propi[oa]s?|ejercicios?|problemas?|tarea|ecuacion(?:es)?|ejemplos?)\b|"
     rf"un\s+(?:ejercicio|problema|ejemplo)\b|una\s+(?:ecuacion|fraccion|operacion)\b|tarea\b|{_MINE})",
     r"\b(?:lo\s+|la\s+)?(?:voy|vamos)\s+a\s+(?:escribir|poner|dibujar|anotar|usar)(?:lo|la)?\b",
     r"\b(?:dejame|deja\s+me|dejeme)\s+(?:escribir|poner|dibujar|anotar|mostrar|ensenar)\w*",
-    r"\b(?:yo\s+)?(?:lo\s+|la\s+|uno\s+)?(?:escribo|pongo|dibujo|anoto|invento)\b",
-    r"\b(?:yo\s+(?:lo\s+|la\s+|uno\s+)?hago|lo\s+hago\s+yo|hago\s+uno\s+yo)\b",
     rf"\b{_MINE}",
     r"\bmis?\s+propi[oa]s?\b",
-    r"\bde\s+mi\s+tarea\b",
+    r"\bde\s+(?:la|mi)\s+tarea\b",
+    r"\bde\s+mi\s+(?:libro|cuaderno|guia|hoja)\b",
+    r"\b(?:uno|una|el|la)\s+(?:del\s+(?:libro|cuaderno)|de\s+la\s+(?:pagina|hoja|guia))\b",
+    # Not "yo te digo una cosa".
+    rf"\byo\s+te\s+(?:doy|digo|dicto|paso|pongo|escribo|invento)\s+{_ONE_OWN}",
+    r"\bya\s+(?:lo|la)\s+(?:escribi|puse|anote|dibuje)\b",
+    r"\bahi\s+te\s+va\b",
 )
-_OFFER_OWN_ALONE_ES = re.compile(r"^(?:(?:si|sip|simon|claro|aja)\s+)*(?:yo\s+)?(?:si\s+)?tengo$")
+# "yo lo escribo" / "lo hago yo" / "te lo dicto" offer one; "no lo hago yo" and "yo lo hago mal" do not.
+_OFFER_OWN_DO_ES = _compile(
+    r"\b(?:yo\s+)?(?:lo\s+|la\s+|uno\s+)?(?:escribo|pongo|dibujo|anoto|invento)\b(?!\s+mal\b)",
+    r"\b(?:yo\s+(?:lo\s+|la\s+|uno\s+)?hago|lo\s+hago\s+yo|hago\s+uno\s+yo)\b(?!\s+mal\b)",
+    r"\b(?:yo\s+)?te\s+(?:lo|la)\s+(?:dicto|digo|paso|escribo|leo)\b",
+)
+_REFUSED_ES = re.compile(r"\b(?:no|nunca|tampoco)\s+(?:(?:yo|lo|la|uno)\s+)*$")
+# "no yo lo hago" is "no, yo lo hago" with its comma dropped: a bare opening "no" right before "yo" answers.
+_ANSWERED_NO_ES = re.compile(r"(?:^|,\s)no\s+$")
+# "no lo tengo aquí, pero te lo dicto": what comes after "pero" decides.
+_BUT_ES = re.compile(r"\bpero\s+")
+_OFFER_OWN_ALONE_ES = re.compile(
+    r"^(?:(?:(?:si|sip|simon|claro|aja)\s+)*(?:yo\s+)?(?:si\s+)?(?:tengo|traigo)|(?:no\s+)?(?:mejor\s+yo|yo\s+mejor))$"
+)
 _OFFER_GENERATE_ES = _compile(
     r"\binventa(?:me|te|nos|lo|melo)?\b",
     r"\b(?:dame|danos|hazme|haznos|ponme|ponnos|escribeme|creame|haz|pon|crea|escribe|mandame|echame|avientame|"
@@ -613,19 +868,49 @@ _OFFER_GENERATE_ES = _compile(
 )
 _OFFER_GENERATE_ALONE_ES = re.compile(
     r"^(?:no|nop|nope|nel|nel\s+pastel|no\s+gracias|pues\s+no|la\s+verdad\s+no|no\s+no|(?:no\s+)?(?:ninguno|ninguna|nada)|"
-    r"cualquiera|mejor\s+tu|tu)(?:\s+(?:porfa|porfis|plis|por\s+favor|gracias))*$"
+    r"cualquiera|(?:(?:no|nel|pues)\s+)?(?:mejor\s+tu|tu))(?:\s+(?:porfa|porfis|plis|por\s+favor|gracias))*$"
 )
+# "uno fácil" / "sí, uno de fracciones": the kind of exercise to invent, as the whole clause.
+_OFFER_ONE_ALONE_ES = re.compile(
+    rf"(?:(?:si|sip|simon|ok|okay|va|sale|dale|bueno|pues|mejor)\s+)*(?:uno|una|otro|otra)(?:\s+(?:{_HARDER}|facil|"
+    r"dificil|facilito|facilita|nuevo|nueva|rapido|sencillo|sencilla|cortito|cortita|de\s+\d+\s+\w+|"
+    # "uno de tarea" / "uno de mi libro" may be the student's own.
+    r"(?:de|con)\s+(?!(?:tarea|mi|mis|la|las|los|el)\b)\w+))+"
+    r"(?:\s+(?:porfa|porfis|plis|por\s+favor|gracias))*"
+)
+
+
+def _offered(plain: str) -> bool:
+    for pattern in _OFFER_OWN_DO_ES:
+        for found in pattern.finditer(plain):
+            start = found.start()
+            window = max(0, start - _LOOKBACK)
+            if not _REFUSED_ES.search(plain, window, start):
+                return True
+            if plain.startswith("yo ", start) and _ANSWERED_NO_ES.search(plain, window, start):
+                return True
+    return False
+
+
+def _own_after_but(plain: str) -> bool:
+    found = _BUT_ES.search(plain)
+    if not found:
+        return False
+    rest = plain[found.end() :]
+    return _any(_OFFER_OWN_ES, rest) or _offered(rest)
 
 
 def detect_offer_reply_es(text: str) -> str | None:
     """Answer to "¿Tienes un ejercicio en mente o invento uno?": "generate", "own" or None."""
     plain = _normalize(text)[0]
     flat = _flat(plain)
+    if _own_after_but(plain):
+        return "own"
     if _any(_OFFER_DECLINE_ES, plain):
         return "generate"
-    if _any(_OFFER_OWN_ES, plain) or _OFFER_OWN_ALONE_ES.search(flat):
+    if _any(_OFFER_OWN_ES, plain) or _offered(plain) or _OFFER_OWN_ALONE_ES.search(flat):
         return "own"
-    if _any(_OFFER_GENERATE_ES, plain) or _OFFER_GENERATE_ALONE_ES.search(flat):
+    if _any(_OFFER_GENERATE_ES, plain) or _OFFER_GENERATE_ALONE_ES.search(flat) or _alone(_OFFER_ONE_ALONE_ES, plain):
         return "generate"
     return None
 
@@ -680,7 +965,11 @@ _INTENTS = ("mode", "learn_topic", "offer_reply")
 
 
 def detect_all(text: str, default: str = "en") -> dict[str, str | None]:
-    """{"language", "mode", "learn_topic", "offer_reply"}; each intent is read in the detected language first."""
+    """{"language", "mode", "learn_topic", "offer_reply"}; each intent is read in the detected language first.
+
+    Only the first MAX_INPUT_CHARS characters are read, by the English detectors too: a request after that is
+    not seen.
+    """
     text = (text or "")[:MAX_INPUT_CHARS]
     language = detect_language(text, default)
     english = _english_detectors()
