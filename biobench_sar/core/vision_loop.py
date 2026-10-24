@@ -271,13 +271,15 @@ def find_ink_regions(
         rest[np.isin(labels, touching[touching > 0])] = 0
     contours, _ = cv2.findContours(rest, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     reach = max(int(small_merge_px), 0)
-    # Dilated blobs measure ~170-290 px² for a decimal point, ~260-390 for a minus sign and ~420 for a
-    # superscript, all above a 50-150 noise floor; anything under reach² is a mark, not a symbol.
+    # Areas are taken after the dilation above: a decimal point measures ~170-290 px², a minus sign
+    # ~260-390, a superscript ~420. They clear min_area, so alone they become the smallest regions and the
+    # first cut by max_regions; anything under reach² is instead a mark of the symbol beside it.
     mark_area = max(min_area, reach * reach)
     symbols: list[tuple[int, int, int, int]] = []  # (x0, y0, x1, y1)
     marks: list[tuple[int, int, int, int]] = []
     for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)  # bbox area >= contour area, so this is the old test
+        # A bbox is never smaller than its contour, so the bbox alone decides "contour or bbox >= area".
+        x, y, w, h = cv2.boundingRect(contour)
         (symbols if w * h >= mark_area else marks).append((x, y, x + w, y + h))
     symbols, marks = _absorb_marks(symbols, marks, reach)
     for x0, y0, x1, y1 in symbols + marks:
