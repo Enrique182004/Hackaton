@@ -1,3 +1,5 @@
+import { bindText, t } from "../i18n.js";
+
 const TIMEOUT_MS = 4000;
 
 export class ApiError extends Error {
@@ -37,8 +39,9 @@ export function el(tag, props = {}, ...children) {
   return node;
 }
 
+// `text` may be a function of the current language, so the note switches language with the page.
 export function setNote(node, text, tone = "") {
-  node.textContent = text;
+  bindText(node, text);
   node.dataset.tone = tone;
 }
 
@@ -69,8 +72,8 @@ export function every(ms, fn, { backoffMs = ms * 4 } = {}) {
 
 export function formatDuration(seconds) {
   if (seconds == null) return "–";
-  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 60) return t("dur.s", { s: Math.round(seconds) });
   const m = Math.floor(seconds / 60);
-  if (m < 60) return `${m}m ${Math.round(seconds % 60)}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
+  if (m < 60) return t("dur.ms", { m, s: Math.round(seconds % 60) });
+  return t("dur.hm", { h: Math.floor(m / 60), m: m % 60 });
 }

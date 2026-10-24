@@ -1,5 +1,6 @@
 // Just enough DOM, fetch and socket.io for the vanilla static/js pages to boot under node.
-// Elements exist only for ids the real template declares, so an id typo in the JS fails the test.
+// Elements exist only for what the real template declares (its ids and its data-i18n texts, with their tags and
+// data-* attributes), so an id typo in the JS fails the test.
 
 class FakeClassList {
   #names = new Set();
@@ -14,6 +15,8 @@ class FakeClassList {
 }
 
 export class FakeElement {
+  #text = "";
+
   constructor(tag) {
     this.tagName = tag.toUpperCase();
     this.id = "";
@@ -43,6 +46,14 @@ export class FakeElement {
 
   get lastChild() { return this.children.at(-1) ?? null; }
 
+  // As in a browser, setting the text replaces whatever was inside.
+  get textContent() { return this.#text; }
+  set textContent(value) {
+    for (const c of this.children) if (c instanceof FakeElement) c.parentNode = null;
+    this.children = [];
+    this.#text = value == null ? "" : String(value);
+  }
+
   #adopt(node, atFront) {
     if (node instanceof FakeElement) {
       node.remove();
@@ -57,6 +68,7 @@ export class FakeElement {
   replaceChildren(...nodes) {
     for (const c of [...this.children]) if (c instanceof FakeElement) c.remove();
     this.children = [];
+    this.#text = "";
     this.append(...nodes);
   }
   remove() {
@@ -97,6 +109,14 @@ export class FakeElement {
     return Promise.all((this.listeners[type] || []).map((fn) => fn(event)));
   }
 
+  *descendants() {
+    for (const c of this.children) {
+      if (!(c instanceof FakeElement)) continue;
+      yield c;
+      yield* c.descendants();
+    }
+  }
+
   find(id) {
     for (const c of this.children) {
       if (!(c instanceof FakeElement)) continue;
@@ -108,12 +128,16 @@ export class FakeElement {
   }
 }
 
-export function installDom(ids, { bodyData = {} } = {}) {
+// `nodes` are ids, or {id, tag, data, hidden} as test_frontend.template_nodes reads them from the template.
+export function installDom(nodes, { bodyData = {} } = {}) {
   const body = new FakeElement("body");
   Object.assign(body.dataset, bodyData);
-  for (const id of ids) {
-    const node = new FakeElement("div");
+  for (const spec of nodes) {
+    const { id = "", tag = "div", data = {}, hidden = false } = typeof spec === "string" ? { id: spec } : spec;
+    const node = new FakeElement(tag);
     node.id = id;
+    node.hidden = hidden;
+    Object.assign(node.dataset, data);
     body.appendChild(node);
   }
   const doc = {
@@ -125,7 +149,13 @@ export function installDom(ids, { bodyData = {} } = {}) {
     getElementById: (id) => body.find(id),
     createElement: (tag) => new FakeElement(tag),
     createElementNS: (_ns, tag) => new FakeElement(tag),
-    querySelectorAll: () => [],
+    // "[data-foo-bar]" selectors only (what i18n.js asks for); anything else finds nothing, as before.
+    querySelectorAll(selector) {
+      const attr = /^\[data-([a-z0-9-]+)\]$/.exec(selector);
+      if (!attr) return [];
+      const key = attr[1].replace(/-([a-z0-9])/g, (_, c) => c.toUpperCase());
+      return [...body.descendants()].filter((node) => Object.hasOwn(node.dataset, key));
+    },
     addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); },
   };
   globalThis.document = doc;
@@ -138,6 +168,7 @@ export function installDom(ids, { bodyData = {} } = {}) {
 const STATUS = {
   fps: 30, camera_running: true, calibrated: false, doc_chunks: 0, vlm_backend: "mock", vlm_model: "mock",
   audio_available: true, listen_mode: "push", tts_backend: "none", last_latency_s: null, uptime_s: 1, state: "idle",
+  language: "auto", current_language: "en", glare: { fraction: 0, severe: false, hotspots: [] },
 };
 
 const DEFAULT_ROUTES = {
@@ -147,6 +178,7 @@ const DEFAULT_ROUTES = {
   "GET /api/config": { status: 200, body: {} },
   "GET /api/ink": { status: 200, body: { regions: [], size: [1920, 1080] } },
   "GET /api/tutor": { status: 200, body: { mode: "help", learn_topic: null, quiz: null } },
+  "GET /api/language": { status: 200, body: { setting: "auto", current: "en" } },
   "POST /api/query": { status: 202, body: { accepted: true } },
   "POST /api/listen": { status: 202, body: { accepted: true } },
 };
