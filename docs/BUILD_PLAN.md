@@ -211,10 +211,13 @@ class VLMClient:
 - Profile `math`: the returned `spoken_text` goes through `mathspeak.to_speech` (`mathspeak_es.to_speech_es` in
   Spanish). The reply before that is kept as `display_text` (normal notation, for the screens). A failed call
   (timeout, model unreachable, unreadable reply) comes back with `failed=True`.
-- **Helper keys (5-key schema in quiz and practice).** The quiz prompt asks for `{"board_answer": str, ...the 4
-  keys}` and the practice prompt for `{"board_problem": str, ...}`. They are internal: code reads them (to
-  grade, or to know which problem the board holds) and they never reach `AvatarAction.to_dict()`, so every
-  socket event still carries the 4 spec keys (plus `display_text`, `language` and `highlight`, see E/F).
+- **Helper keys (math prompts).** Quiz asks for `{"board_answer": str, ...the 4 keys}`, help for
+  `{"board_problem": str, ...}`, practice for `{"board_problem": str, "new_problem": str, ...}` and lessons for
+  `{"new_problem": str, ...}`. `board_problem` is the problem copied off the board, `new_problem` the one the
+  reply dictates, in symbols (code's own when code replaced the model's words). They are internal: code reads
+  them (to grade, to know which problem the board holds, and for the projector's problem card via
+  `TutorAction.board_problem` / `new_problem`) and they never reach `AvatarAction.to_dict()`, so every socket
+  event still carries the 4 spec keys (plus `display_text`, `language` and `highlight`, see E/F).
 - `task` passed to `evaluate`:
 
 | Task | Dict |
@@ -318,9 +321,13 @@ class TutorSession:  # thread-safe
     def resolve_offer(self) -> None                  # clears offer_pending, keeps the topic
     def turns(self) -> list[dict[str, str]]          # last 3 {"q", "a"} pairs, oldest first
     def add_turn(self, q: str, a: str) -> None
+    problem: dict | None                             # the problem card's {"text", "source": "dictated" | "board"}
+    def show_problem(self, text: str | None, source: str) -> None  # empty text keeps the card; a new topic and
+                                                                   # quiz mode clear it
     def to_dict(self) -> dict
     # {"mode": str, "learn_topic": str | None, "confirm_stop": bool,
-    #  "quiz": None | {"active": bool, "number": int, "total": int, "score": int, "problem": str | None}}
+    #  "quiz": None | {"active": bool, "number": int, "total": int, "score": int, "problem": str | None},
+    #  "problem": None | {"text": str, "source": "dictated" | "board"}}   # None while a quiz runs
     # score = problems right on the first try (a fixed answer moves on but does not score)
 ```
 
@@ -477,10 +484,10 @@ Busy handling: `/api/query` → 409 while a query runs; `/api/listen` → 409 al
 
 Client → server: `text_query {text}`, `trigger_listen {}`, `ui_rects {"rects": [[x, y, w, h], ...]}`.
 `ui_rects` comes from the projector page: the boxes of the projected UI in projector pixels (avatar, speech
-bubble, quiz card, highlight), sent whenever they change and at least every 1 s while visible. The server forwards
+bubble, problem card, highlight), sent whenever they change and at least every 1 s while visible. The server forwards
 them to `Assistant.set_ui_rects(rects)`. Rects older than 3 s are ignored, and an ink region overlapping any UI
 rect by more than 50 % of its own area is dropped before the model and before snapping. Then the camera never
-reads Pip, the bubble or the quiz card as the student's ink.
+reads Pip, the bubble or the problem card as the student's ink.
 
 Projector UI: hotkey **Space** = push-to-talk, **T** = type a query, **C** = toggle debug overlay, **F** =
 fullscreen. The page also listens to `tutor` and shows the current quiz problem in normal notation (e.g.
@@ -499,7 +506,7 @@ built, each with its reason.
 | Spec says | The code does | Why |
 | --- | --- | --- |
 | Audio stack includes `SpeechRecognition` (biology §3) | Raw PyAudio capture (`core/audio_trigger.py`) + local Whisper; `SpeechRecognition` is not a dependency | Whisper already does the recognition; PyAudio gives the exact 16 kHz float buffer it needs and the wake-word chunking, with one dependency fewer |
-| The JSON schema is the same 4 keys in every mode (math §6) | Quiz and practice prompts ask for a 5th helper key, `board_answer` / `board_problem`, removed before `AvatarAction` | Grading and the practice check need what the model read on the board; the app and the pages still only see the 4 keys |
+| The JSON schema is the same 4 keys in every mode (math §6) | Math prompts ask for helper keys (`board_answer`, `board_problem`, `new_problem`), removed before `AvatarAction` | Grading, the practice check and the projector's problem card need what the model read on the board or dictated; the app and the pages still only see the 4 keys |
 | Quiz problems are queried from ChromaDB (math §5B) | Parsed into the quiz bank at upload (`rag/quiz_bank.py`); a quiz takes at most `SAR_QUIZ_LENGTH` from the ticked files, spread evenly from easiest to hardest | Retrieval can't keep an order of difficulty or the answers that grading needs |
 | With no worksheet, the AI makes problems up | The code invents and solves them (`quiz_bank.invent_problem`) | A 3B model asked to invent mostly echoed the student, and an invented problem needs a known answer to be graded |
 | Quiz mode "evaluates the student's physical ink answer" | The model only copies the answer into `board_answer`; `grading.grade` (sympy) decides; `None` = not graded | The 3B model called nearly every wrong answer correct; code grading is exact, handles several values (`x = 5 or x = -3`, systems) and Spanish words |
@@ -554,7 +561,7 @@ equations that are not in the seed files, so a pass never depends on an answer k
 15. **Spanish:** with the switch on Auto, "Ayúdame con el siguiente paso", "Dame un problema parecido",
     "Hazme un quiz" and "Quiero aprender a resolver fracciones" behave like cases 1, 3, 4 and 12, in Spanish,
     with a Mexican voice and math in Spanish words.
-16. **Projected UI is not ink:** with the speech bubble or quiz card showing over an empty part of the board,
+16. **Projected UI is not ink:** with the speech bubble or problem card showing over an empty part of the board,
     ask a question → the avatar never points at them, and they are never graded as the student's answer.
 17. **Idle stays clear of the writing:** with an equation on the left half of the board, a dictation (`idle`)
     parks Pip on the right half, at mid-height.

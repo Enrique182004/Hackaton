@@ -535,10 +535,6 @@ class TutorSession:
         with self._lock:
             self._problem = {"text": clean, "source": source}
 
-    def clear_problem(self) -> None:
-        with self._lock:
-            self._problem = None
-
     # ---- conversation memory -------------------------------------------------
     def turns(self) -> list[dict[str, str]]:
         """The last MAX_TURNS question/answer pairs, oldest first."""

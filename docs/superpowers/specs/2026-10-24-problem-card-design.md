@@ -44,7 +44,8 @@ is the old one read back; it keeps doing that. Quiz keeps its schema: the proble
 
 - `show_problem(text, source)` — trims, collapses whitespace, caps at 80 characters (cut at a word, `…`);
   empty text is ignored (the card keeps what it shows).
-- `clear_problem()` — on `start_learning` (a new topic starts clean) and on `set_mode("quiz")`.
+- The card clears on `start_learning` (a new topic starts clean) and on `set_mode("quiz")`; PR 2 adds a public
+  `clear_problem()` for the watcher.
 - `to_dict()` gains `"problem": {"text": …, "source": …}` or `None`. During an active quiz the quiz block stays
   the source of truth and `problem` is `None`.
 

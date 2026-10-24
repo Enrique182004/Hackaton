@@ -85,14 +85,16 @@ Check the hardware any time with `.venv/bin/python scripts/hardware_check.py`.
 1. **Sense.** Push-to-talk (**Space** on the projector page or **Talk** on the dashboard) or the wake word
    records a question, and Whisper writes it down in English or Spanish. The camera frame is warped into
    projector coordinates and the marker ink is split into regions, one per equation line or flowchart box.
-   Ink regions mostly covered by the projector's own picture (Pip, the speech bubble, the quiz card, the
+   Ink regions mostly covered by the projector's own picture (Pip, the speech bubble, the problem card, the
    highlight) are dropped, so the camera reads only the student's writing. A high-resolution crop of the ink
    goes to the model next to the board picture, so decimal points and minus signs survive.
 2. **Think.** The question retrieves the top chunks from your ticked files. In math, answer keys are removed
    from the files when they are uploaded, and again from every chunk. The question, board picture, ink crop,
    ink regions, context, last three turns and the current tutor task go to the VLM. It must answer with strict
-   JSON `{spoken_text, animation_state, target_x, target_y}`. In quiz and practice it adds one helper key that
-   code reads and removes: `board_answer` (the student's answer, copied from the board) or `board_problem`.
+   JSON `{spoken_text, animation_state, target_x, target_y}`. Math modes add helper keys that code reads and
+   removes: `board_answer` (quiz: the student's answer, copied from the board), `board_problem` (help and
+   practice: the problem copied from the board) and `new_problem` (practice and lesson starters: the problem it
+   dictates, in symbols). The projector's problem card shows the problem being worked on from these.
 3. **Check (in code).** Quiz answers are graded by `biobench_sar/grading.py` (sympy), never by the model. In
    help mode, a reply that states the solution is sent back to the model once, and then the offending sentence
    is cut. Targets are snapped to the ink. `pointing` and `error` go to the ink region the answer is about

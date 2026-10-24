@@ -106,7 +106,7 @@ Budget about 45 minutes, and do part A the day before.
       [HARDWARE_SETUP.md, section 1](HARDWARE_SETUP.md#1-projector-and-webcam-placement), then calibrate again.
 14. **Ink.** Write `3x + 5 = 20` large on the board.
     ✅ On the Board tab, an orange box appears around it within a second or two (More tools → "Drawings: 1").
-    Pip, the speech bubble and the quiz card are never boxed: the projector page tells the server where they
+    Pip, the speech bubble and the problem card are never boxed: the projector page tells the server where they
     are, and that part of the camera picture is ignored.
 
 ## E. First lessons (English)
@@ -116,7 +116,7 @@ Ask from the dashboard (**Ask** tab: type, or press **Talk**) or press **Space**
 | Say / type | Expected |
 | --- | --- |
 | "Help me with the next step" (with `3x + 5 = 20` on the board) | Pip walks to just left of the equation and points at it, and a glowing outline pulses around the equation (it fades after about 8 s). The next step is explained ("subtract five from both sides"). **It never says x = 5.** |
-| "Give me a similar problem" | A new two-step equation is dictated in words and shown in notation on the dashboard. Pip stands where it covers none of the writing. |
+| "Give me a similar problem" | A new two-step equation is dictated in words and shown in notation on the dashboard and on the projector's card ("Try this"). Pip stands where it covers none of the writing. |
 | "Quiz me" | A quiz starts. Problem 1 of 10 is read out and shown in a card at the top left of the projector. Write the answer, then say "check my answer". The code grades what you wrote: a right answer gets 🎉 and the next problem, and a wrong one gets an amber hint (never the answer) with the outline around your answer. An answer it can't read gets "I couldn't read your answer clearly. Ask me to check it again." |
 | "I'm stuck" (during the quiz) | One hint on the same problem. The quiz and the score stay as they are. |
 | "I want to learn how to solve fractions" (empty board) | A short intro, then "Do you have an exercise in mind, or should I make one up for you?" Answer "make one up" and a starter problem is dictated. |

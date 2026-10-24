@@ -118,9 +118,11 @@ def _card_text(text: str | None) -> str | None:
 `set_mode`: inside the lock, `if mode == "quiz": self._problem = None`.
 `start_learning`: inside the lock, `self._problem = None` (a new topic starts with an empty card).
 
-New section before `# ---- conversation memory`:
+New section in `TutorSession`, before `# ---- conversation memory` (as built, `clear_problem` was left
+for PR 2: nothing in PR 1 calls it):
 
 ```python
+class TutorSession:
     # ---- the problem on the projector's card ---------------------------------
     @property
     def problem(self) -> dict[str, str] | None:

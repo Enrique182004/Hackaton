@@ -1130,7 +1130,7 @@ assert.deepEqual(answers, ["Subtract 5 from both sides of 3x + 5 = 20.", "…"])
     )
 
 
-# ---- projector: quiz card and bubble -------------------------------------------------
+# ---- projector: problem card and bubble -------------------------------------------------
 
 
 @needs_node
@@ -2047,7 +2047,7 @@ await wait(300);
 assert.deepEqual(sent(), [], "nothing goes out before the socket connects");
 sock.fire("connect");
 await settle();
-// The avatar and the status corner; the hidden bubble, quiz card, transcript and outline are not on the board.
+// The avatar and the status corner; the hidden bubble, problem card, transcript and outline are not on the board.
 // Each box gets 10 px of glow around it.
 const AVATAR = [495, 295, 90, 90];
 const STATUS = [1145, 765, 130, 30];
@@ -2070,7 +2070,7 @@ const right = Math.max(...edges.map((e) => e[0] + e[2]));
 const bottom = Math.max(...edges.map((e) => e[1] + e[3]));
 assert.ok(left < 500 && top < 300 && right > 700 && bottom > 400, "the edges go all the way round the ink");
 assert.deepEqual(rects[6], STATUS);
-// The quiz card is on the board while a quiz runs...
+// The problem card is on the board while a quiz runs...
 sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: { active: true, number: 1, total: 5, score: 0, problem: "2x = 6" } });
 await settle();
 assert.deepEqual(latest()[2], [11, 9, 160, 50]);
