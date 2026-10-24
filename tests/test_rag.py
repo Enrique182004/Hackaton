@@ -226,3 +226,22 @@ def test_count_does_not_wait_for_model_load(tmp_path: Path, monkeypatch: pytest.
     assert s.count() == 1
     s.clear()
     assert s.count() == 0
+
+
+def test_list_and_delete_sources(store: VectorStore) -> None:
+    store.add_chunks([Chunk("one", "a.md", {"type": "md"}), Chunk("two", "a.md", {"type": "md"})])
+    store.add_chunks([Chunk("three", "b.csv", {"type": "csv"})])
+    assert store.list_sources() == [
+        {"source": "a.md", "type": "md", "chunks": 2},
+        {"source": "b.csv", "type": "csv", "chunks": 1},
+    ]
+    assert store.delete_source("a.md") == 2
+    assert store.count() == 1
+    assert store.delete_source("missing.md") == 0
+
+
+def test_reupload_in_different_order_does_not_duplicate(store: VectorStore) -> None:
+    chunks = [Chunk("first", "a.md", {}), Chunk("second", "a.md", {}), Chunk("first", "a.md", {})]
+    store.add_chunks(chunks)
+    store.add_chunks(list(reversed(chunks)))
+    assert store.count() == 2

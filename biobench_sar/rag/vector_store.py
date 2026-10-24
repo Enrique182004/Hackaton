@@ -51,17 +51,22 @@ class VectorStore:
         return model.encode(texts, normalize_embeddings=True).tolist()
 
     @staticmethod
-    def _id(chunk: Chunk, index: int) -> str:
-        return hashlib.sha1(f"{chunk.source}{index}{chunk.text}".encode()).hexdigest()[:16]
+    def _id(chunk: Chunk) -> str:
+        # Content-addressed per source: re-uploading the same file (in any batch order) is a no-op.
+        return hashlib.sha1(f"{chunk.source}\x00{chunk.text}".encode()).hexdigest()[:16]
 
     def add_chunks(self, chunks: list[Chunk]) -> int:
-        chunks = [c for c in chunks if c.text.strip()]
+        unique: dict[str, Chunk] = {}
+        for c in chunks:
+            if c.text.strip():
+                unique.setdefault(self._id(c), c)
+        chunks = list(unique.values())
         if not chunks:
             return 0
         embeddings = self._embed([c.text for c in chunks])
         with self._lock:
             self._col.upsert(
-                ids=[self._id(c, i) for i, c in enumerate(chunks)],
+                ids=list(unique),
                 documents=[c.text for c in chunks],
                 embeddings=embeddings,
                 metadatas=[{**c.metadata, "source": c.source} for c in chunks],
@@ -89,6 +94,26 @@ class VectorStore:
     def count(self) -> int:
         """Cached, lock-free: safe to call from a status poll while an upload is embedding."""
         return self._count
+
+    def list_sources(self) -> list[dict[str, Any]]:
+        """One entry per ingested file: name, type and chunk count, largest first."""
+        with self._lock:
+            metadatas = self._col.get(include=["metadatas"])["metadatas"] or []
+        by_source: dict[str, dict[str, Any]] = {}
+        for meta in metadatas:
+            meta = meta or {}
+            source = str(meta.get("source", ""))
+            entry = by_source.setdefault(source, {"source": source, "type": str(meta.get("type", "")), "chunks": 0})
+            entry["chunks"] += 1
+        return sorted(by_source.values(), key=lambda d: (-d["chunks"], d["source"]))
+
+    def delete_source(self, source: str) -> int:
+        with self._lock:
+            ids = self._col.get(where={"source": source})["ids"]
+            if ids:
+                self._col.delete(ids=ids)
+            self._count = int(self._col.count())
+        return len(ids)
 
     def clear(self) -> None:
         with self._lock:
