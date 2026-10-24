@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import builtins
+import errno
 import http.client
+import importlib.machinery
 import importlib.util
 import json
 import os
@@ -10,6 +12,7 @@ import socket
 import sys
 import threading
 import urllib.error
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -17,7 +20,7 @@ from typing import Any
 import pytest
 
 from biobench_sar import app as app_module
-from biobench_sar import config
+from biobench_sar import config, envfile
 
 LAUNCHER_PATH = Path(__file__).resolve().parent.parent / "packaging" / "launcher.py"
 CHECKER_PATH = LAUNCHER_PATH.parent / "check_macos_app.py"
@@ -36,6 +39,7 @@ ENV_KEYS = (
     "ANONYMIZED_TELEMETRY",
     "SAR_WHISPER_MODEL",
     "SAR_HOST",
+    "SAR_RECORD_SECONDS",
 )
 
 
@@ -51,24 +55,29 @@ def _load(path: Path, name: str) -> ModuleType:
 
 launcher = _load(LAUNCHER_PATH, "sar_launcher")
 checker = _load(CHECKER_PATH, "sar_check_macos_app")
-REAL_PORT_FREE = launcher.port_free
+REAL_BUSY_PORT_ERROR = launcher.busy_port_error
 
 
 @pytest.fixture(autouse=True)
-def clean_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def clean_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Whatever the launcher sets in os.environ / config.DATA_DIR is undone after each test.
 
     Failure reports go to a log in a temporary data folder, never the developer's own, and run_app's port
     check is stubbed: a copy of the app already running on 5050 must not fail these tests.
     """
+    environ = dict(os.environ)  # sar.env keys go straight into os.environ, past monkeypatch
     for key in ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(config, "DATA_DIR", config.DATA_DIR)
+    monkeypatch.setattr(envfile, "_SOURCES", {})  # which sar.env set each key: per test, like per process
     data = tmp_path / "default-userdata"
     data.mkdir()
     monkeypatch.setattr(launcher, "user_data_dir", lambda: data)
     monkeypatch.setattr(launcher, "_log_redirect", None)
-    monkeypatch.setattr(launcher, "port_free", lambda host, port: True)
+    monkeypatch.setattr(launcher, "busy_port_error", lambda host, port: None)
+    yield
+    os.environ.clear()
+    os.environ.update(environ)
 
 
 @pytest.fixture
@@ -212,6 +221,20 @@ def test_ollama_check_asks_tags_with_a_short_timeout() -> None:
     assert calls == [("http://localhost:11434/api/tags", 2.0)]
 
 
+@pytest.mark.parametrize(
+    "body",
+    [b'{"models": null}', b'{"models": 5}', b'{"models": [5, {"name": 3}, {"name": null}]}', b"[]", b'"ok"', b""],
+)
+def test_a_malformed_ollama_answer_is_reachable_without_the_model(body: bytes) -> None:
+    status = launcher.check_ollama(fetch=lambda url, timeout: body)
+    assert status.reachable and not status.has_model
+
+
+def test_ollama_model_names_reads_name_and_model() -> None:
+    body = {"models": [{"name": "a:latest", "model": "b:1"}, {"name": "c"}, "junk"]}
+    assert launcher.ollama_model_names(body) == {"a:latest", "b:1", "c"}
+
+
 def test_ollama_without_the_model_is_reachable_but_not_ready() -> None:
     body = json.dumps({"models": [{"name": "llama3:latest"}]}).encode()
     status = launcher.check_ollama(fetch=lambda url, timeout: body)
@@ -314,12 +337,78 @@ def test_browser_opens_once_the_port_answers() -> None:
     assert opened == [url]
 
 
-def test_port_free_sees_a_listening_socket() -> None:
+def test_busy_port_error_sees_a_listening_socket() -> None:
     with socket.socket() as server:
         server.bind(("127.0.0.1", 0))
         server.listen()
-        assert not REAL_PORT_FREE("127.0.0.1", server.getsockname()[1])
-    assert REAL_PORT_FREE("127.0.0.1", launcher.free_port())
+        busy = REAL_BUSY_PORT_ERROR("127.0.0.1", server.getsockname()[1])
+        assert isinstance(busy, OSError)
+    assert REAL_BUSY_PORT_ERROR("127.0.0.1", launcher.free_port()) is None
+
+
+def test_a_listener_on_every_address_makes_localhost_busy_too() -> None:
+    # macOS: SO_REUSEADDR lets 127.0.0.1:port bind next to 0.0.0.0:port, so only the knock finds the listener.
+    with socket.socket() as server:
+        server.bind(("0.0.0.0", 0))
+        server.listen()
+        busy = REAL_BUSY_PORT_ERROR("127.0.0.1", server.getsockname()[1])
+    assert isinstance(busy, OSError) and busy.errno in launcher.busy_errnos()
+
+
+def test_an_address_this_computer_does_not_have_is_raised_not_called_busy() -> None:
+    # 192.0.2.0/24 is TEST-NET-1: never assigned to a real interface (EADDRNOTAVAIL, errno 49 on macOS, 99 on Linux).
+    with pytest.raises(OSError) as raised:
+        REAL_BUSY_PORT_ERROR("192.0.2.55", launcher.free_port())
+    assert raised.value.errno not in launcher.busy_errnos()
+
+
+class _FailingSocket:
+    """A socket whose bind fails with a given error (the platform-specific ones can't be produced for real)."""
+
+    error: OSError = OSError()
+
+    def __init__(self, *args: Any) -> None: ...
+
+    def __enter__(self) -> _FailingSocket:
+        return self
+
+    def __exit__(self, *exc: object) -> None: ...
+
+    def setsockopt(self, *args: Any) -> None: ...
+
+    def bind(self, address: Any) -> None:
+        raise self.error
+
+
+def _windows_error(winerror: int) -> OSError:
+    error = OSError(winerror, "socket error")
+    error.winerror = winerror  # type: ignore[attr-defined]  # only Windows fills it in
+    return error
+
+
+@pytest.mark.parametrize(
+    ("platform", "error", "busy"),
+    [
+        ("darwin", OSError(errno.EADDRINUSE, "Address already in use"), True),
+        ("darwin", OSError(errno.EADDRNOTAVAIL, "Can't assign requested address"), False),
+        ("darwin", socket.gaierror(8, "nodename nor servname provided"), False),
+        ("win32", _windows_error(10048), True),
+        ("win32", _windows_error(10013), True),  # a port inside a range Hyper-V reserved
+        ("win32", _windows_error(10049), False),  # WSAEADDRNOTAVAIL
+    ],
+)
+def test_only_an_address_in_use_counts_as_a_busy_port(
+    platform: str, error: OSError, busy: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_FailingSocket, "error", error)
+    monkeypatch.setattr(launcher.socket, "socket", _FailingSocket)
+    monkeypatch.setattr(launcher.sys, "platform", platform)
+    if busy:
+        assert REAL_BUSY_PORT_ERROR("127.0.0.1", 5050) is error
+    else:
+        with pytest.raises(OSError) as raised:
+            REAL_BUSY_PORT_ERROR("127.0.0.1", 5050)
+        assert raised.value is error
 
 
 # ---- self-test ---------------------------------------------------------------------------------------
@@ -416,6 +505,38 @@ def test_bundle_check_reports_every_missing_module(monkeypatch: pytest.MonkeyPat
         imports.run()
 
 
+def _fake_grading(monkeypatch: pytest.MonkeyPatch, grade: Any) -> None:
+    module = ModuleType("biobench_sar.grading")
+    module.__spec__ = importlib.machinery.ModuleSpec("biobench_sar.grading", None)
+    module.grade = grade  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "biobench_sar.grading", module)
+
+
+def _grading_check() -> launcher.Check:
+    return next(c for c in launcher.bundle_checks(None) if c.name == "grading")
+
+
+def test_bundle_check_solves_with_sympy_and_grades(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert "sympy" in launcher.RUNTIME_MODULES
+    _fake_grading(monkeypatch, lambda student, expected: student.replace(" ", "") == expected.replace(" ", ""))
+    detail = _grading_check().run()
+    assert detail.startswith("sympy ") and "grade() marks a right and a wrong answer" in detail
+
+
+def test_bundle_check_fails_when_grading_cannot_tell_right_from_wrong(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_grading(monkeypatch, lambda student, expected: None)
+    with pytest.raises(launcher.CheckFailed, match=r"\(None, None\)"):
+        _grading_check().run()
+
+
+def test_bundle_check_without_a_grading_module_still_checks_sympy(monkeypatch: pytest.MonkeyPatch) -> None:
+    find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec", lambda name, *a: None if name == "biobench_sar.grading" else find_spec(name, *a)
+    )
+    assert "no biobench_sar.grading" in _grading_check().run()
+
+
 def test_utf8_mode_is_required_in_a_frozen_build_only() -> None:
     assert launcher.utf8_mode_detail(frozen=True, utf8_mode=1) == "on"
     assert launcher.utf8_mode_detail(frozen=False, utf8_mode=0).startswith("off")
@@ -427,6 +548,24 @@ def test_spec_turns_on_utf8_mode_with_the_option_the_bootloader_knows() -> None:
     # The bootloader ignores unknown keys silently: "X utf8_mode=1" did nothing.
     spec = (LAUNCHER_PATH.parent / "sar.spec").read_text(encoding="utf-8")
     assert '("X utf8", None, "OPTION")' in spec and '("X utf8_mode' not in spec
+
+
+def test_spec_bundles_sympy_for_quiz_grading() -> None:
+    spec = (LAUNCHER_PATH.parent / "sar.spec").read_text(encoding="utf-8")
+    hidden = spec[spec.index("hiddenimports = [") : spec.index("if IS_WIN:")]
+    for module in ('"sympy"', '"sympy.parsing.sympy_parser"', '"mpmath"'):
+        assert module in hidden
+    assert '_existing("biobench_sar.grading")' in spec
+    assert 'collect_submodules("biobench_sar"' in spec
+
+
+def test_requirements_pin_sympy_and_explain_the_missing_speechrecognition() -> None:
+    lines = (LAUNCHER_PATH.parent.parent / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    packages = [re.split(r"[<>=]", line)[0].strip().lower() for line in lines if line and not line.startswith("#")]
+    assert "sympy" in packages
+    assert "speechrecognition" not in packages
+    notes = " ".join(line for line in lines if line.startswith("#"))
+    assert "SpeechRecognition" in notes and "PyAudio" in notes and "Whisper" in notes
 
 
 def test_macos_minimum_matches_the_build_runner_and_the_docs() -> None:
@@ -555,7 +694,7 @@ def test_a_crash_in_the_app_is_reported_and_exits_1(monkeypatch: pytest.MonkeyPa
 
 
 def test_a_busy_port_stops_with_plain_advice(monkeypatch: pytest.MonkeyPatch, alerts: list[str]) -> None:
-    monkeypatch.setattr(launcher, "port_free", REAL_PORT_FREE)
+    monkeypatch.setattr(launcher, "busy_port_error", REAL_BUSY_PORT_ERROR)
     with socket.socket() as server:
         server.bind(("127.0.0.1", 0))
         server.listen()
@@ -570,15 +709,30 @@ def test_a_busy_port_stops_with_plain_advice(monkeypatch: pytest.MonkeyPatch, al
     assert f"{launcher.APP_NAME} could not start." in text
     assert f"Port {port} is already in use" in text and "SAR_PORT=5051" in text
     assert alerts and f"Port {port} is already in use" in alerts[0]
+    # The real bind error, not the advice again: the errno tells a helper what happened.
+    assert "Technical detail: OSError: [Errno" in text
+
+
+def test_an_old_lan_address_is_not_called_a_busy_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The laptop's Wi-Fi address from yesterday, after DHCP gave it a new one.
+    monkeypatch.setattr(launcher, "busy_port_error", REAL_BUSY_PORT_ERROR)
+    monkeypatch.setenv("SAR_HOST", "192.0.2.55")
+    monkeypatch.setenv("SAR_VLM_BACKEND", "mock")
+    monkeypatch.setattr(app_module, "main", lambda: pytest.fail("must not start"))
+    lines: list[str] = []
+    assert launcher.run_guarded(lambda: launcher.run_app(open_browser=False, out=lines.append), out=lines.append) == 1
+    text = "\n".join(lines)
+    assert "192.0.2.55:5050 is not an address this computer can serve on" in text and "SAR_HOST" in text
+    assert "already in use" not in text
 
 
 def test_a_host_that_isnt_an_address_is_not_called_a_busy_port(monkeypatch: pytest.MonkeyPatch) -> None:
-    def unresolvable(host: str, port: int) -> bool:
+    def unresolvable(host: str, port: int) -> OSError | None:
         raise socket.gaierror(8, "nodename nor servname provided, or not known")
 
     monkeypatch.setenv("SAR_HOST", "my-laptop.local:5050")
     monkeypatch.setenv("SAR_VLM_BACKEND", "mock")
-    monkeypatch.setattr(launcher, "port_free", unresolvable)
+    monkeypatch.setattr(launcher, "busy_port_error", unresolvable)
     monkeypatch.setattr(app_module, "main", lambda: pytest.fail("must not start"))
     lines: list[str] = []
     assert launcher.run_guarded(lambda: launcher.run_app(open_browser=False, out=lines.append), out=lines.append) == 1
@@ -587,24 +741,74 @@ def test_a_host_that_isnt_an_address_is_not_called_a_busy_port(monkeypatch: pyte
     assert "already in use" not in text
 
 
-def test_a_settings_typo_names_the_bad_line(monkeypatch: pytest.MonkeyPatch, alerts: list[str]) -> None:
-    def settings() -> object:  # reads its numbers like config.Settings does
-        return (float(os.environ.get("SAR_RECORD_SECONDS", "5")), int(os.environ.get("SAR_CAMERA_INDEX", "0")))
+def _settings() -> object:  # reads its numbers like config.Settings does
+    return (float(os.environ.get("SAR_RECORD_SECONDS", "5")), int(os.environ.get("SAR_CAMERA_INDEX", "0")))
 
-    env_file = Path("/school/sar.env")
-    monkeypatch.setenv("SAR_RECORD_SECONDS", "5s")
-    monkeypatch.setenv("SAR_CAMERA_INDEX", "2")
-    monkeypatch.setattr(config, "Settings", settings)
+
+def _advice(lines: list[str]) -> str:
+    return next(line for line in lines if line.startswith(("This setting", "These settings")))
+
+
+def test_a_settings_typo_names_the_bad_line_and_its_file(
+    folders: dict[str, Path], monkeypatch: pytest.MonkeyPatch, alerts: list[str]
+) -> None:
+    good, bad = folders["exe"] / "sar.env", folders["data"] / "sar.env"
+    good.write_text("SAR_CAMERA_INDEX=2\n")
+    bad.write_text("SAR_RECORD_SECONDS=5s\n")
+    loaded = launcher.prepare_environment(frozen=False)
+    assert loaded == [good, bad]
+    monkeypatch.setattr(config, "Settings", _settings)
     monkeypatch.setattr(app_module, "main", lambda: pytest.fail("must not start"))
     lines: list[str] = []
-    run = lambda: launcher.run_app(open_browser=False, out=lines.append, env_files=[env_file])  # noqa: E731
+    run = lambda: launcher.run_app(open_browser=False, out=lines.append, env_files=loaded)  # noqa: E731
     assert launcher.run_guarded(run, out=lines.append) == 1
-    advice = next(line for line in lines if line.startswith("This setting"))
-    assert "SAR_RECORD_SECONDS=5s" in advice and str(env_file) in advice
+    advice = _advice(lines)
+    assert "SAR_RECORD_SECONDS=5s" in advice and f"the settings file {bad}." in advice
+    assert str(good) not in advice, "only the file the bad value came from"
     assert "SAR_CAMERA_INDEX" not in advice
     assert "Technical detail: ValueError" in "\n".join(lines)
     assert os.environ["SAR_RECORD_SECONDS"] == "5s" and os.environ["SAR_CAMERA_INDEX"] == "2", "env restored"
     assert alerts
+
+
+def test_a_bad_environment_variable_is_not_blamed_on_sar_env(
+    folders: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (folders["data"] / "sar.env").write_text("SAR_CAMERA_INDEX=2\nSAR_RECORD_SECONDS=4\n")
+    monkeypatch.setenv("SAR_RECORD_SECONDS", "5s")  # the real environment beats the file
+    loaded = launcher.prepare_environment(frozen=False)
+    monkeypatch.setattr(config, "Settings", _settings)
+    monkeypatch.setattr(app_module, "main", lambda: pytest.fail("must not start"))
+    lines: list[str] = []
+    run = lambda: launcher.run_app(open_browser=False, out=lines.append, env_files=loaded)  # noqa: E731
+    assert launcher.run_guarded(run, out=lines.append) == 1
+    advice = _advice(lines)
+    assert "SAR_RECORD_SECONDS=5s" in advice and "the environment variables (not in a sar.env)" in advice
+    assert "sar.env (" not in advice and str(folders["data"]) not in advice
+
+
+def test_bad_values_from_different_places_each_name_their_own(
+    folders: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (folders["data"] / "sar.env").write_text("SAR_CAMERA_INDEX=two\n")
+    monkeypatch.setenv("SAR_RECORD_SECONDS", "5s")
+    launcher.prepare_environment(frozen=False)
+    monkeypatch.setattr(config, "Settings", _settings)
+    advice = launcher.settings_advice([folders["data"] / "sar.env"])
+    assert advice.startswith(
+        "These settings have values the app can't read: SAR_CAMERA_INDEX=two, SAR_RECORD_SECONDS=5s."
+    )
+    assert f"SAR_CAMERA_INDEX in the settings file {folders['data'] / 'sar.env'}" in advice
+    assert "SAR_RECORD_SECONDS in the environment variables" in advice
+
+
+def test_bad_values_from_one_file_name_it_once(folders: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file = folders["data"] / "sar.env"
+    env_file.write_text("SAR_CAMERA_INDEX=two\nSAR_RECORD_SECONDS=5s\n")
+    launcher.prepare_environment(frozen=False)
+    monkeypatch.setattr(config, "Settings", _settings)
+    advice = launcher.settings_advice([env_file])
+    assert advice.count(str(env_file)) == 1 and "Fix or delete them in the settings file" in advice
 
 
 def test_the_reported_sar_vlm_timeout_typo_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -643,7 +847,7 @@ def test_unreadable_settings_blames_no_variable_when_settings_fail_anyway(monkey
 
 def test_an_unreadable_sar_env_is_reported(folders: dict[str, Path], alerts: list[str]) -> None:
     env_file = folders["data"] / "sar.env"
-    env_file.write_text("SAR_CAMERA_INDEX=1\n", encoding="utf-16")  # Notepad's "Unicode"
+    env_file.write_bytes("# cámara\nSAR_CAMERA_INDEX=1\n".encode("cp1252"))  # Notepad's "ANSI"
     lines: list[str] = []
     assert launcher.run_guarded(lambda: launcher.main(["--no-browser"]), out=lines.append) == 1
     text = "\n".join(lines)

@@ -63,6 +63,7 @@ for dist in (
     "flask",
     "flask-socketio",
     "huggingface-hub",
+    "mpmath",
     "numpy",
     "openai-whisper",
     "packaging",
@@ -76,6 +77,7 @@ for dist in (
     "scikit-learn",
     "scipy",
     "sentence-transformers",
+    "sympy",
     "tiktoken",
     "tokenizers",
     "torch",
@@ -105,6 +107,10 @@ hiddenimports = [
     "pytesseract",
     "pyttsx3.drivers",
     "pyttsx3.drivers.dummy",
+    # Quiz grading (biobench_sar/grading.py): sympy's parser runs `from sympy import *` from a string at run time.
+    "sympy",
+    "sympy.parsing.sympy_parser",
+    "mpmath",
 ]
 if IS_WIN:
     hiddenimports += ["pyttsx3.drivers.sapi5", "comtypes.client"]
@@ -123,6 +129,7 @@ hiddenimports += _existing(
     "transformers.models.bert.tokenization_bert_fast",
 )
 hiddenimports += collect_submodules("biobench_sar", filter=lambda name: name != "biobench_sar.__main__")
+hiddenimports += _existing("biobench_sar.grading")  # named as well: the self-test's "grading" check runs it
 # chromadb picks its API, segment manager and telemetry classes from dotted-path strings in its Settings.
 hiddenimports += collect_submodules("chromadb", filter=lambda name: not name.startswith("chromadb.test"))
 

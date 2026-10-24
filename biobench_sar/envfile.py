@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import codecs
 import os
 from pathlib import Path
 
 # Not from biobench_sar.config: importing it here would read SAR_DATA_DIR before load_env_file applies the file.
 DEFAULT_ENV_FILE = Path(__file__).resolve().parent.parent / "sar.env"
+
+# key -> (file, value) for each key a sar.env put into os.environ, so advice can name the file a bad value came from.
+_SOURCES: dict[str, tuple[Path, str]] = {}
 
 
 def env_file_path() -> Path:
@@ -16,7 +20,7 @@ def env_file_path() -> Path:
 
 def parse_env_lines(text: str) -> dict[str, str]:
     values: dict[str, str] = {}
-    for raw in text.splitlines():
+    for raw in text.removeprefix("﻿").splitlines():
         line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -30,6 +34,19 @@ def parse_env_lines(text: str) -> dict[str, str]:
     return values
 
 
+def decode_env_bytes(data: bytes) -> str:
+    """UTF-8 with or without a BOM (Notepad's "UTF-8 with BOM"), or UTF-16 with a BOM (Notepad's "Unicode" and
+    Windows PowerShell 5.1's `>` / Out-File). Anything else raises UnicodeDecodeError, so the caller can tell the
+    teacher to save the file as UTF-8 instead of silently dropping its settings."""
+    if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return data.decode("utf-16")
+    text = data.decode("utf-8-sig")
+    if "\x00" in text:  # UTF-16 without a BOM decodes as UTF-8 with a NUL after every letter
+        at = data.index(b"\x00")
+        raise UnicodeDecodeError("utf-8", data, at, at + 1, "NUL byte, probably UTF-16 without a BOM")
+    return text
+
+
 def load_env_file(path: Path | None = None) -> list[str]:
     """Apply KEY=VALUE pairs that aren't already set in the environment; returns the keys applied.
 
@@ -37,10 +54,20 @@ def load_env_file(path: Path | None = None) -> list[str]:
     """
     path = path or env_file_path()
     try:
-        values = parse_env_lines(path.read_text(encoding="utf-8"))
+        values = parse_env_lines(decode_env_bytes(path.read_bytes()))
     except OSError:
         return []
     applied = [key for key in values if key not in os.environ]
     for key in applied:
         os.environ[key] = values[key]
+        _SOURCES[key] = (path, values[key])
     return applied
+
+
+def env_source(key: str) -> Path | None:
+    """The sar.env file that set `key`, or None when the value came from elsewhere (a real environment variable,
+    or something that changed it after the file was read) or `key` is not set."""
+    source = _SOURCES.get(key)
+    if source is None or os.environ.get(key) != source[1]:
+        return None
+    return source[0]

@@ -24,10 +24,15 @@ fi
 if [[ ! -d .venv ]]; then
   if command -v uv >/dev/null; then
     uv venv --seed --python 3.12 .venv
-  elif command -v python3.12 >/dev/null; then
-    python3.12 -m venv .venv
   else
-    echo "Python 3.12 not found. Install with: brew install python@3.12 (or install uv)"; exit 1
+    python=""
+    for candidate in python3.12 python3.11 python3.10; do
+      if command -v "$candidate" >/dev/null; then python="$candidate"; break; fi
+    done
+    if [[ -z "$python" ]]; then
+      echo "Python 3.10-3.12 not found. Install with: brew install python@3.12 (or install uv)"; exit 1
+    fi
+    "$python" -m venv .venv
   fi
 fi
 
@@ -36,7 +41,13 @@ fi
 CFLAGS="-I$(brew --prefix portaudio)/include" LDFLAGS="-L$(brew --prefix portaudio)/lib" \
   .venv/bin/python -m pip install -r requirements.txt
 
-# 4. Optional: pull the local vision-language model (~3 GB).
+# 4. Room settings: start from the classroom kit (C930e webcam at 1080p, 1280x800 Epson projector).
+if [[ ! -f sar.env && -f sar.env.example ]]; then
+  cp sar.env.example sar.env
+  echo "Created sar.env from sar.env.example (the classroom kit); edit it if your room differs."
+fi
+
+# 5. Optional: pull the local vision-language model (~3 GB).
 if [[ "$PULL_MODEL" == "1" ]]; then
   pgrep -x ollama >/dev/null || { (ollama serve >/dev/null 2>&1 &); sleep 3; }
   ollama pull qwen2.5vl:3b
@@ -51,4 +62,5 @@ Setup complete. Next:
   SAR_VLM_BACKEND=mock .venv/bin/python -m biobench_sar         # no model needed
   .venv/bin/python -m biobench_sar                               # real VLM via Ollama
 Open http://127.0.0.1:5050/ fullscreen on the projector, http://127.0.0.1:5050/dashboard on your laptop.
+Room settings are in sar.env; docs/HARDWARE_DAY.md walks through the first run with the kit.
 MSG
