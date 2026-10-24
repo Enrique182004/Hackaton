@@ -152,7 +152,8 @@ def test_query_event_order(built: Any) -> None:
     # No camera frame -> no ink, so the server downgrades the fake VLM's "pointing" to "idle".
     assert avatar["animation_state"] == "idle" and avatar["target_x"] == 100
     speak = next(m for m in got if m["name"] == "speak")["args"][0]
-    assert speak == {"url": "/tts/fake.mp3", "text": "Look here"}
+    said = {"display_text": "Look here", "spoken_text": "Look here", "language": "en"}
+    assert speak == {"url": "/tts/fake.mp3", "text": "Look here", **said}
     assert got[-1]["args"][0]["state"] == "idle"
 
 
@@ -524,9 +525,10 @@ def test_socket_connect_receives_current_status(built: Any, fakes: Any) -> None:
     app, socketio = built
     sio = socketio.test_client(app)
     got = sio.get_received()
-    assert [m["name"] for m in got] == ["status", "tutor"]
+    assert [m["name"] for m in got] == ["status", "tutor", "language"]
     assert got[0]["args"][0] == {"state": "idle"}
     assert got[1]["args"][0] == {"mode": "help", "learn_topic": None, "quiz": None}, "a reloaded projector catches up"
+    assert got[2]["args"][0] == {"setting": "auto", "current": "en"}
 
 
 def _poll(base: str, sid: str | None = None, body: bytes | None = None) -> str:
@@ -550,14 +552,14 @@ def test_socket_connect_packet_precedes_status_push(built: Any) -> None:
         packets: list[str] = []
         deadline = time.time() + 5
         while time.time() < deadline and not (
-            any(p.startswith("40") for p in packets) and any(p.startswith('42["tutor"') for p in packets)
+            any(p.startswith("40") for p in packets) and any(p.startswith('42["language"') for p in packets)
         ):
             packets += _poll(base, sid).split("\x1e")
     finally:
         server.shutdown()
         server.server_close()
     messages = [p for p in packets if p[:2] in ("40", "42")]
-    assert [p[:2] for p in messages] == ["40", "42", "42"], packets
+    assert [p[:2] for p in messages] == ["40", "42", "42", "42"], packets
     assert json.loads(messages[1][2:]) == ["status", {"state": "idle"}]
     assert json.loads(messages[2][2:])[0] == "tutor"
 
@@ -1083,3 +1085,129 @@ def test_biology_profile_reports_itself(settings: Settings, fakes: app_module.Se
     assert client.get("/api/status").get_json()["profile"] == "biology"
     item = _ask(flask_app, socketio, "quiz me")
     assert fakes.vlm.kwargs[-1]["task"] is None and item["task_kind"] is None and item["mode"] == "help"
+
+
+# ---- language ---------------------------------------------------------------------------------------------------
+
+
+def test_language_api_reads_and_switches(built: Any, fakes: Any) -> None:
+    app, socketio = built
+    client = app.test_client()
+    assert client.get("/api/language").get_json() == {"setting": "auto", "current": "en"}
+    sio = socketio.test_client(app)
+    sio.get_received()
+    r = client.put("/api/language", json={"language": "es"})
+    assert r.status_code == 200 and r.get_json() == {"setting": "es", "current": "es"}
+    pushed = [m["args"][0] for m in collect(sio, ["language"]) if m["name"] == "language"]
+    assert pushed == [{"setting": "es", "current": "es"}], "every open page hears about it"
+    assert fakes.audio.languages == ["es"], "Whisper decodes in the forced language"
+    assert client.get("/api/language").get_json() == {"setting": "es", "current": "es"}
+    assert client.put("/api/language", json={"language": "auto"}).get_json() == {"setting": "auto", "current": "en"}
+
+
+@pytest.mark.parametrize("body", [{"language": "fr"}, {"language": "ES"}, {"language": None}, {}, ["es"], "es"])
+def test_language_api_rejects_anything_else(built: Any, fakes: Any, body: Any) -> None:
+    client = built[0].test_client()
+    r = client.put("/api/language", json=body)
+    assert r.status_code == 400 and "auto, en, es" in r.get_json()["error"]
+    assert client.get("/api/language").get_json()["setting"] == "auto" and fakes.audio.languages == []
+
+
+def test_language_setting_from_the_environment(settings: Settings, fakes: Any, templates_dir: Path) -> None:
+    app, _ = app_module.create_app(
+        dataclasses.replace(settings, language="es"), fakes, template_folder=str(templates_dir)
+    )
+    client = app.test_client()
+    assert client.get("/api/language").get_json() == {"setting": "es", "current": "es"}
+    status, config = client.get("/api/status").get_json(), client.get("/api/config").get_json()
+    assert (status["language"], status["current_language"]) == ("es", "es")
+    assert (config["language"], config["current_language"]) == ("es", "es")
+
+
+def test_typed_query_replies_in_the_question_language(built: Any, fakes: Any) -> None:
+    app, socketio = built
+    item = _ask(app, socketio, "¿Me ayudas con esta ecuación, por favor?")
+    assert item["language"] == "es" and fakes.vlm.kwargs[-1]["language"] == "es"
+    assert fakes.tts.spoken[-1][1] == "es"
+    status = app.test_client().get("/api/status").get_json()
+    assert (status["language"], status["current_language"]) == ("auto", "es")
+    assert _ask(app, socketio, "Can you help me with this equation?")["language"] == "en"
+
+
+def test_socket_text_query_replies_in_the_question_language(built: Any, fakes: Any) -> None:
+    app, socketio = built
+    sio = socketio.test_client(app)
+    sio.emit("text_query", {"text": "Dame una pista, por favor"})
+    got = collect(sio, ["interaction"])
+    assert next(m for m in got if m["name"] == "interaction")["args"][0]["language"] == "es"
+
+
+def test_answers_carry_display_and_spoken_text(built: Any, fakes: Any) -> None:
+    from biobench_sar.schemas import AvatarAction
+
+    @dataclass(frozen=True)
+    class Shown(AvatarAction):
+        display_text: str | None = None
+
+    fakes.vlm.action = Shown("x plus two equals five", "idle", 1, 2, display_text="x + 2 = 5")
+    app, socketio = built
+    sio = socketio.test_client(app)
+    assert app.test_client().post("/api/query", json={"text": "read it"}).status_code == 202
+    got = collect(sio, ["interaction", "speak", "avatar_update"])
+    by_name = {m["name"]: m["args"][0] for m in got}
+    for name in ("avatar_update", "speak", "interaction"):
+        assert by_name[name]["display_text"] == "x + 2 = 5", name
+        assert by_name[name]["spoken_text"] == "x plus two equals five", name
+    history = app.test_client().get("/api/history").get_json()["interactions"][0]
+    assert (history["display_text"], history["language"]) == ("x + 2 = 5", "en")
+
+
+# ---- glare ------------------------------------------------------------------------------------------------------
+
+
+def test_status_glare_is_null_without_a_camera(built: Any) -> None:
+    assert built[0].test_client().get("/api/status").get_json()["glare"] is None
+
+
+def test_status_reports_glare_on_the_raw_frame(built: Any, fakes: Any) -> None:
+    frame = np.full((120, 160, 3), 120, np.uint8)
+    frame[20:60, 30:90] = 255  # the bulb's mirror image: a flat clipped patch
+    fakes.vision.frame = frame
+    glare = built[0].test_client().get("/api/status").get_json()["glare"]
+    assert set(glare) == {"fraction", "severe", "hotspots", "size"}
+    assert glare["severe"] is True and glare["size"] == [160, 120]
+    x, y, w, h = glare["hotspots"][0]
+    assert x <= 30 and y <= 20 and x + w >= 89 and y + h >= 59, "camera pixels of the raw frame"
+    assert 0.1 < glare["fraction"] < 0.2
+
+
+def test_status_glare_is_measured_at_most_every_two_seconds(
+    built: Any, fakes: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from biobench_sar.core import glare
+
+    calls: list[int] = []
+    real = glare.measure_glare
+
+    def counted(frame: Any, **kw: Any) -> Any:
+        calls.append(1)
+        return real(frame, **kw)
+
+    monkeypatch.setattr(glare, "measure_glare", counted)
+    fakes.vision.frame = np.full((40, 40, 3), 120, np.uint8)
+    client = built[0].test_client()
+    for _ in range(5):
+        assert client.get("/api/status").get_json()["glare"]["severe"] is False
+    assert calls == [1], "cached between status polls"
+
+
+def test_status_survives_a_glare_failure(built: Any, fakes: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from biobench_sar.core import glare
+
+    def broken(frame: Any, **kw: Any) -> None:
+        raise RuntimeError("bad frame")
+
+    monkeypatch.setattr(glare, "measure_glare", broken)
+    fakes.vision.frame = np.full((40, 40, 3), 120, np.uint8)
+    r = built[0].test_client().get("/api/status")
+    assert r.status_code == 200 and r.get_json()["glare"] is None

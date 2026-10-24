@@ -6,7 +6,14 @@ Usage: python scripts/bench_vlm.py [-n 3] [--model qwen2.5vl:3b] [--url http://l
 Math scenarios: H/HA help, P/PF practice (equation / fraction board), QD dictate, QH stuck mid-quiz (hint),
 QC/QW/QN check (right / wrong / only the problem written), QDI/QCI/QWI quiz without worksheet problems,
 LO/LE/HF lesson offer, starter and follow-up. Quiz cases get the real seeded chunks, answers included.
+Spanish (replies in Spanish): ELO/ELE lesson offer and "invéntame uno", EH/EHA help on 3x + 5 = 20,
+EQD/EQC/EQW quiz dictate and check (right / wrong).
+Crop: a small "3.5 - x^2 = 0.25" on a big board sent as the high-res ink crop: CR what the model copies off the
+board (board_answer of a quiz check: "3.5", then the minus sign) and CRH a help reply whose first step fits the signs
+and decimals as written; CRW / CRHW the same on the whole board, as before the crop.
 Biology: A missing step, B complete, AB complete after an earlier "not yet".
+
+Example (the final-wiring live check): --scenarios --profile math --runs 2 --only ELO,ELE,EH,EHA,EQD,EQC,EQW,CR
 """
 
 from __future__ import annotations
@@ -26,7 +33,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from biobench_sar.llm.vlm_client import VLMClient, reads_problem
+from biobench_sar.lang import detect_language
+from biobench_sar.llm.vlm_client import OFFER_QUESTION_ES, VLMClient, reads_problem
 from biobench_sar.schemas import AvatarAction, InkRegion, RetrievedChunk
 
 SIZE = (1920, 1080)
@@ -163,7 +171,8 @@ def echoes(spoken: str, query: str) -> bool:
 class Scenario(NamedTuple):
     name: str
     query: str
-    board: Callable[[], tuple[bytes, list[InkRegion]]]
+    # (jpeg, ink regions) or (jpeg, ink regions, InkCrop) when the image is a crop of the board.
+    board: Callable[[], tuple[Any, ...]]
     expected: str
     mode: str = "help"
     task: dict[str, Any] | None = None
@@ -171,6 +180,9 @@ class Scenario(NamedTuple):
     context: list[RetrievedChunk] | Callable[[], list[RetrievedChunk]] = CONTEXT
     check: Callable[[str], str | None] = lambda _spoken: None  # returns a failure reason or None
     turns: list[dict[str, str]] | None = None
+    language: str = "en"
+    # Check what the model copied off the board (board_problem / board_answer) instead of the spoken reply.
+    reads: bool = False
 
     def chunks(self) -> list[RetrievedChunk]:
         return self.context() if callable(self.context) else list(self.context)
@@ -471,14 +483,262 @@ MATH_SCENARIOS = {
         turns=[OFFER_TURN, EXAMPLE_TURN],
     ),
 }
+
+# ---- Spanish -------------------------------------------------------------------------------------------------
+# The solved value said as a result in Spanish ("x es igual a cinco", "la respuesta es cinco", "x vale cinco",
+# "quince entre tres es cinco"), not "más cinco" / "resta cinco" or a question.
+_LEAK_RE_ES = re.compile(
+    r"(?:\bx|\brespuesta|\bsoluci[oó]n|\bvalor\s+de\s+x|\btres)\s*(?:=|es\s+igual\s+a|es|vale|ser[ií]a|da|queda\s+en)"
+    r"\s*(?:5|cinco)\b",
+    re.IGNORECASE,
+)
+_FRACTION_ES = re.compile(
+    r"\b(?:medios?|tercios?|cuartos?|quintos?|sextos?|s[eé]ptimos?|octavos?|novenos?|d[eé]cimos?)\b", re.I
+)
+_SOLVED_FRACTION_ES = re.compile(
+    r"\b(?:es\s+igual\s+a|da|son|resulta)\s+(?:\w+\s+){0,2}?(?:medios?|tercios?|cuartos?|quintos?|sextos?|octavos?)\b",
+    re.I,
+)
+LEARN_TOPIC_ES = "resolver fracciones"
+LEARN_QUERY_ES = "Quiero aprender a resolver fracciones."
+OFFER_TURN_ES = {"q": LEARN_QUERY_ES, "a": f"Una fracción es una parte de un todo. {OFFER_QUESTION_ES}"}
+
+
+def spanish(spoken: str) -> str | None:
+    """A failure reason unless the reply is Spanish words only."""
+    if detect_language(spoken, default="es") != "es":
+        return "not Spanish"
+    return "symbols/digits" if has_notation(spoken) else None
+
+
+def _all(*checks: Callable[[str], str | None]) -> Callable[[str], str | None]:
+    def check(spoken: str) -> str | None:
+        reasons = [r for r in (c(spoken) for c in checks) if r]
+        return ", ".join(reasons) or None
+
+    return check
+
+
+def _no_leak_es(spoken: str) -> str | None:
+    return "gave the final answer" if _LEAK_RE_ES.search(spoken) else None
+
+
+def _offer_es(spoken: str) -> str | None:
+    text = spoken.lower()
+    asked = "ejercicio" in text and "invente" in text and "?" in spoken
+    return None if asked else "did not ask: ¿tienes un ejercicio en mente o invento uno?"
+
+
+def _fraction_es(spoken: str) -> str | None:
+    if _SOLVED_FRACTION_ES.search(spoken):
+        return "solved the starter problem"
+    return None if _FRACTION_ES.search(spoken) else "no fraction problem dictated"
+
+
+def _reads_es(problem: str) -> Callable[[str], str | None]:
+    def check(spoken: str) -> str | None:
+        return None if reads_problem(spoken, problem, "es") else f"did not read {problem} in Spanish"
+
+    return check
+
+
+SPANISH_SCENARIOS = {
+    "ELO": Scenario(
+        "ES learn offer, empty board",
+        LEARN_QUERY_ES,
+        lambda: make_board([]),
+        "idle",
+        task={"kind": "learn", "topic": LEARN_TOPIC_ES, "stage": "offer"},
+        context=[],
+        check=_all(_offer_es, spanish),
+        language="es",
+    ),
+    "ELE": Scenario(
+        "ES learn example after 'invéntame uno'",
+        "Invéntame uno.",
+        lambda: make_board([]),
+        "idle",
+        task={"kind": "learn", "topic": LEARN_TOPIC_ES, "stage": "example"},
+        context=[],
+        check=_all(_fraction_es, spanish),
+        turns=[OFFER_TURN_ES],
+        language="es",
+    ),
+    "EH": Scenario(
+        f"ES help on {EQUATION}",
+        "Estoy atorado, ¿qué hago ahora?",
+        lambda: make_board([EQUATION]),
+        "pointing",
+        context=MATH_CONTEXT,
+        check=_all(_no_leak_es, spanish),
+        language="es",
+    ),
+    "EHA": Scenario(
+        f"ES asks for the answer to {EQUATION}",
+        "Nada más dime cuánto vale x.",
+        lambda: make_board([EQUATION]),
+        "pointing",
+        context=MATH_CONTEXT,
+        check=_all(_no_leak_es, spanish),
+        language="es",
+    ),
+    "EQD": Scenario(
+        f"ES quiz dictate {QUIZ_PROBLEM}",
+        "Hazme un quiz.",
+        lambda: make_board([]),
+        "idle",
+        mode="quiz",
+        task=QUIZ_DICTATE,
+        context=quiz_context,
+        check=_all(_reads_es(QUIZ_PROBLEM), spanish),
+        language="es",
+    ),
+    "EQC": Scenario(
+        "ES quiz check, correct answer x = 5",
+        "¿Está bien mi respuesta?",
+        lambda: make_board([EQUATION, "x = 5"]),
+        "celebrating",
+        mode="quiz",
+        task=QUIZ_TASK,
+        context=quiz_context,
+        check=_all(_reads_es(str(QUIZ_TASK["next_problem"])), spanish),
+        language="es",
+    ),
+    "EQW": Scenario(
+        "ES quiz check, wrong answer x = 7",
+        "¿Está bien mi respuesta?",
+        lambda: make_board([EQUATION, "x = 7"]),
+        "error",
+        mode="quiz",
+        task=QUIZ_TASK,
+        context=quiz_context,
+        check=_all(_no_leak_es, spanish),
+        language="es",
+    ),
+}
+
+
+# ---- the high-res ink crop ------------------------------------------------------------------------------------
+CROP_EQUATION = "3.5 - x^2 = 0.25"
+CAMERA = (1920, 1200)  # a camera frame bigger than the WXGA board: the crop keeps its detail
+CROP_TEXT_SCALE = 0.65  # digits ~14 camera px tall: about 7 px once the whole board is shrunk to 1024 px
+BOARD = (1280, 800)
+# Copied off the board with the decimal point and the minus sign: "3.5 - x^2 = 0.25" / "3.5 - x squared equals 0.25".
+_COPIED_CROP_RE = re.compile(r"^\s*3\.5\s*[-−]\s*x\b")
+# A first step that only fits the board as written: "add x squared" (the minus sign was seen) or a step on 3.5 / 0.25
+# (the decimal points were seen). "subtract x squared" or "add three point five" means a sign was misread.
+_RIGHT_STEP_RE = re.compile(
+    r"\badd\s+x\s+squared\b|\bthree\s+point\s+five\b|\bzero\s+point\s+two\s+five\b", re.IGNORECASE
+)
+_WRONG_SIGN_RE = re.compile(r"\bsubtract\s+x\s+squared\b|\badd\s+three\s+point\s+five\b", re.IGNORECASE)
+
+
+def _small_equation_frame() -> np.ndarray:
+    """A camera frame of a big board with one small line of math on it, marker-thin, like a student's."""
+    img = np.full((CAMERA[1], CAMERA[0], 3), 235, np.uint8)
+    x, y = 860, 640
+    font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, CROP_TEXT_SCALE, 2
+    for text in ("3.5", "-", "x"):
+        cv2.putText(img, text, (x, y), font, scale, (25, 25, 25), thick, cv2.LINE_AA)
+        x += cv2.getTextSize(text, font, scale, thick)[0][0] + 8
+    cv2.putText(img, "2", (x - 3, y - 10), font, scale * 0.6, (25, 25, 25), 1, cv2.LINE_AA)
+    x += 12
+    for text in ("=", "0.25"):
+        cv2.putText(img, text, (x, y), font, scale, (25, 25, 25), thick, cv2.LINE_AA)
+        x += cv2.getTextSize(text, font, scale, thick)[0][0] + 8
+    return img
+
+
+def crop_board() -> tuple[bytes, list[InkRegion], Any]:
+    """The pipeline's own path: ink found on the warped board, the crop rendered from the raw camera frame."""
+    from biobench_sar.config import Settings
+    from biobench_sar.core.homography import Calibration
+    from biobench_sar.core.ink_crop import crop_ink_view
+    from biobench_sar.core.vision_loop import find_ink_regions
+
+    raw = _small_equation_frame()
+    calibration = Calibration.identity(CAMERA, BOARD)
+    ink = find_ink_regions(calibration.warp_frame(raw), **Settings(profile="math").ink_kwargs)
+    crop = crop_ink_view(raw, calibration, ink)
+    assert crop is not None, "no ink found on the synthetic board"
+    return crop.jpeg, ink, crop
+
+
+def whole_board() -> tuple[bytes, list[InkRegion]]:
+    from biobench_sar.config import Settings
+    from biobench_sar.core.homography import Calibration
+    from biobench_sar.core.vision_loop import find_ink_regions
+
+    calibration = Calibration.identity(CAMERA, BOARD)
+    warped = calibration.warp_frame(_small_equation_frame())
+    return _jpeg(warped), find_ink_regions(warped, **Settings(profile="math").ink_kwargs)
+
+
+def _copied_crop(read: str) -> str | None:
+    return None if _COPIED_CROP_RE.match(read or "") else f"copied {read!r}: not 3.5 and the minus sign"
+
+
+def _step_fits_the_board(spoken: str) -> str | None:
+    if _WRONG_SIGN_RE.search(spoken):
+        return "a step for a misread sign"
+    return None if _RIGHT_STEP_RE.search(spoken) else "no step on x squared, 3.5 or 0.25"
+
+
+CROP_QUERY = "Check my answer."
+# The problem is not given: the model has only the photo to read it from.
+CROP_READ_TASK = {"kind": "quiz", "stage": "check", "number": 1, "total": 5, "problem": "the problem on the board"}
+CROP_HELP_QUERY = "Read my equation out loud, then tell me the first step."
+CROP_SCENARIOS = {
+    "CR": Scenario(
+        f"small {CROP_EQUATION} on a big board, high-res crop: what it copies",
+        CROP_QUERY,
+        crop_board,
+        "",
+        mode="quiz",
+        task=CROP_READ_TASK,
+        context=[],
+        check=_copied_crop,
+        reads=True,
+    ),
+    "CRW": Scenario(
+        f"small {CROP_EQUATION} on a big board, whole board (before the crop): what it copies",
+        CROP_QUERY,
+        whole_board,
+        "",
+        mode="quiz",
+        task=CROP_READ_TASK,
+        context=[],
+        check=_copied_crop,
+        reads=True,
+    ),
+    "CRH": Scenario(
+        f"small {CROP_EQUATION} on a big board, high-res crop: help",
+        CROP_HELP_QUERY,
+        crop_board,
+        "pointing",
+        context=[],
+        check=_step_fits_the_board,
+    ),
+    "CRHW": Scenario(
+        f"small {CROP_EQUATION} on a big board, whole board (before the crop): help",
+        CROP_HELP_QUERY,
+        whole_board,
+        "pointing",
+        context=[],
+        check=_step_fits_the_board,
+    ),
+}
+MATH_SCENARIOS.update(SPANISH_SCENARIOS)
+MATH_SCENARIOS.update(CROP_SCENARIOS)
 SCENARIOS = {"biology": BIO_SCENARIOS, "math": MATH_SCENARIOS}
 
 
-def judge(scenario: Scenario, action: AvatarAction) -> list[str]:
-    problems = [] if action.animation_state == scenario.expected else [f"state {action.animation_state}"]
+def judge(scenario: Scenario, action: AvatarAction, read: str | None = None) -> list[str]:
+    state_ok = not scenario.expected or action.animation_state == scenario.expected
+    problems = [] if state_ok else [f"state {action.animation_state}"]
     if echoes(action.spoken_text, scenario.query):
         problems.append("repeated the student")
-    reason = scenario.check(action.spoken_text)
+    reason = scenario.check((read or "") if scenario.reads else action.spoken_text)
     return problems + ([reason] if reason else [])
 
 
@@ -488,33 +748,40 @@ def run_scenarios(
     for key, scenario in SCENARIOS[profile].items():
         if only and key not in only:
             continue
-        jpeg, regions = scenario.board()
+        jpeg, regions, *rest = scenario.board()
+        crop = rest[0] if rest else None
+        size = BOARD if key.startswith("CR") else SIZE
         context = scenario.chunks()
         counts: Counter[str] = Counter()
         passed, notation, times = 0, 0, []
         for i in range(runs):
             t = time.perf_counter()
-            args = (scenario.query, jpeg, context, regions, SIZE)
-            kwargs = {"mode": scenario.mode, "task": scenario.task, "recent_turns": scenario.turns}
+            args = (scenario.query, jpeg, context, regions, size)
+            kwargs: dict[str, Any] = {"mode": scenario.mode, "task": scenario.task, "recent_turns": scenario.turns}
+            kwargs.update(language=scenario.language, crop=crop)
             # raw skips evaluate's math post-processing (quiz grading, offer question, mathspeak): the model alone.
-            if raw:
+            if raw or scenario.reads:
                 reply = client._evaluate(*args, **kwargs)
                 a, read = reply.action, reply.board_answer or reply.board_problem
             else:
                 a, read = client.evaluate(*args, **kwargs), None
             times.append(time.perf_counter() - t)
             counts[a.animation_state] += 1
-            fails = judge(scenario, a)
+            fails = judge(scenario, a, read)
             passed += not fails
             notation += has_notation(a.spoken_text)
             verdict = "ok" if not fails else "FAIL: " + ", ".join(fails)
+            shown = getattr(a, "display_text", None)
             print(
                 f"  [{key}] run {i + 1}: {times[-1]:.1f}s {a.animation_state} ({a.target_x},{a.target_y}) "
-                f"{verdict} {a.spoken_text!r}" + (f" board_answer={read!r}" if read is not None else "")
+                f"{verdict} {a.spoken_text!r}"
+                + (f" display={shown!r}" if shown and shown != a.spoken_text else "")
+                + (f" board_answer={read!r}" if read is not None else "")
             )
         sym = f", symbols/digits in {notation}/{runs}" if profile == "math" else ""
         print(
-            f"case {key} ({scenario.name}): expect {scenario.expected}: {dict(counts)} -> {passed}/{runs} pass"
+            f"case {key} ({scenario.name}): expect {scenario.expected or 'any state'}: {dict(counts)} -> "
+            f"{passed}/{runs} pass"
             f"{sym}, median {statistics.median(times):.1f}s"
         )
 

@@ -369,6 +369,115 @@ def test_strip_answers_on_the_real_seed_chunks() -> None:
     assert "x = 5" not in csv_row
 
 
+def _keyed_seed_worksheet(tmp_path: Path) -> tuple[Path, list[QuizProblem]]:
+    """The real seed worksheet laid out the other common way: problems first, every answer in an answer key at the
+    end, one worked answer per paragraph, so the real ingestor splits the key over several chunks."""
+    seed = (SEED / "worksheet_linear_equations.md").read_text(encoding="utf-8")
+    problems = parse_worksheet_text(seed, "seed")
+    assert len(problems) == 12 and all(p.answer for p in problems)
+    lines = [line for line in seed.splitlines() if not line.strip().lower().startswith("answer:")]
+    key = [
+        f"{n}. {p.answer} (check it: put the value back into {p.problem} and both sides come out the same, "
+        "which is how the student can see the step was right before moving on)"
+        for n, p in enumerate(problems, 1)
+    ]
+    path = tmp_path / "worksheet_with_key.md"
+    path.write_text("\n".join(lines) + "\n\n## Answer key\n\n" + "\n\n".join(key) + "\n", encoding="utf-8")
+    return path, problems
+
+
+def test_answer_key_spanning_several_real_chunks_is_stripped(tmp_path: Path) -> None:
+    from biobench_sar.rag.ingestor import ingest_file
+    from biobench_sar.rag.quiz_bank import strip_chunk_answers
+
+    path, problems = _keyed_seed_worksheet(tmp_path)
+    chunks = [(c.source, c.text) for c in ingest_file(path)]
+    heading = [i for i, (_, text) in enumerate(chunks) if "## Answer key" in text]
+    assert len(heading) == 1 and heading[0] < len(chunks) - 1, "the key really spans several chunks"
+    later = [text for _, text in chunks[heading[0] + 1 :]]
+    assert any(re.search(r"^\d+\. x = \d+ \(check", t, re.M) for t in later)
+    assert any(re.search(r"^\d+\. x = \d+ \(check", strip_answers(t), re.M) for t in later), "the gap: per chunk"
+
+    stripped = strip_chunk_answers(chunks)
+    assert not any(re.search(r"^\d+\. x = -?\d+", t, re.M) for t in stripped), stripped
+    assert "5. 2x + 3 = 11" in "\n".join(stripped), "the problems stay"
+    parsed = parse_quiz_file(path, path.name)
+    assert [p.problem for p in parsed] == [p.problem for p in problems], "the quiz bank still reads the whole file"
+    assert all((got.answer or "").startswith(str(want.answer)) for got, want in zip(parsed, problems, strict=True))
+
+
+@pytest.mark.parametrize("order", ["relevance", "continuation_only"])
+def test_answer_key_chunks_are_stripped_in_any_retrieval_order(tmp_path: Path, order: str) -> None:
+    from biobench_sar.rag.ingestor import ingest_file
+    from biobench_sar.rag.quiz_bank import strip_chunk_answers
+
+    path, _problems = _keyed_seed_worksheet(tmp_path)
+    chunks = [(c.source, c.text) for c in ingest_file(path)]
+    start = next(i for i, (_, text) in enumerate(chunks) if "## Answer key" in text)
+    # Retrieval returns the most similar chunks first, and may skip the one with the heading altogether.
+    picked = list(reversed(chunks)) if order == "relevance" else chunks[start + 1 :]
+    for text in strip_chunk_answers(picked):
+        assert not re.search(r"^\d+\. x = -?\d+", text, re.M), text
+
+
+def test_strip_chunk_answers_leaves_the_real_seed_chunks_as_strip_answers_does() -> None:
+    from biobench_sar.rag.ingestor import ingest_file
+    from biobench_sar.rag.quiz_bank import strip_chunk_answers
+
+    chunks = [
+        (c.source, c.text)
+        for name in ("quiz_bank.csv", "worksheet_linear_equations.md", "tutoring_guide.md")
+        for c in ingest_file(SEED / name)
+    ]
+    stripped = strip_chunk_answers(chunks)
+    assert stripped == [strip_answers(text) for _, text in chunks], "no notes lost to the answer-key check"
+    for (source, _), text in zip(chunks, stripped, strict=True):
+        if source != "tutoring_guide.md":  # prose about answers ("the answer is correct"), not an answer
+            assert not re.search(r"\banswer\s*(?:is|:)", text, re.I), text
+
+
+def test_strip_chunk_answers_keyed_source_drops_worked_answers() -> None:
+    from biobench_sar.rag.quiz_bank import strip_chunk_answers
+
+    key = ("ws.md", "# Worksheet\n1. x + 9 = 15\n2. 10 - 3x = 4\n## Answer key\n1. 15 - 9 = 6, so x = 6")
+    rest = ("ws.md", "2. 10 - 3x = 4, so x = 2\n\n## Notes\nShow every step.")
+    other = ("guide.md", "2. 10 - 3x = 4, so x = 2 is a common slip\n## Tips")
+    out = strip_chunk_answers([rest, key, other])
+    assert out[0] == "## Notes\nShow every step.", "a worked answer of a keyed source"
+    assert out[1] == "# Worksheet\n1. x + 9 = 15\n2. 10 - 3x = 4"
+    assert out[2] == other[1], "another file without a key keeps its prose"
+
+
+def test_strip_answers_answer_label_on_its_own_line() -> None:
+    assert strip_answers("1. x + 9 = 15\nAnswer:\nx = 6\n2. 2x = 8") == "1. x + 9 = 15\n2. 2x = 8"
+    assert strip_answers("Respuesta:\n\n  x = 6\nSigue.") == "\nSigue."
+    assert strip_answers("Answer:\nShow each step.") == "Show each step.", "only an answer after the label goes"
+
+
+@pytest.mark.parametrize(
+    ("line", "answer"),
+    [
+        ("7. x = 14", True),
+        ("x = 5 or x = -3", True),
+        ("5/6", True),
+        ("(2, 3)", True),
+        ("12. x = 6 (subtract nine)", True),
+        ("| 3 | x = 7 |", True),
+        ("Problem 3: x = 2", True),
+        ("1. x + 9 = 15", False),
+        ("3x = 15", False),
+        ("1. 3/4 - 1/2", False),
+        ("9. 4(x - 1) = 20", False),
+        ("Row 1: problem is 1/4 + 2/4", False),
+        ("- Same denominators: add the tops.", False),
+    ],
+)
+def test_answer_line_shape(line: str, answer: bool) -> None:
+    from biobench_sar.rag.quiz_bank import _is_answer_line
+
+    assert _is_answer_line(line) is answer
+
+
 def test_strip_answers_formats() -> None:
     text = (
         "# Quiz\n1. x + 9 = 15 (answer: 6)\n2. 2x = 8\n   **Answer:** x = 4\nNever read an answer out loud.\n"

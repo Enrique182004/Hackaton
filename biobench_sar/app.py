@@ -18,7 +18,7 @@ from flask import Flask, jsonify, render_template, request, send_from_directory
 from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
 
-from biobench_sar.assistant import Assistant
+from biobench_sar.assistant import LANGUAGE_SETTINGS, Assistant
 from biobench_sar.config import Settings
 from biobench_sar.tutor import MODES
 
@@ -76,6 +76,7 @@ def build_services(settings: Settings, on_query: Any, on_state: Any, should_list
         on_state=on_state,
         should_listen=should_listen,
         silence_rms=settings.silence_rms,
+        language=settings.language,
     )
     tts = TTSEngine(settings.tts_backend, settings.tts_voice, settings.tts_dir)
     return Services(vision=vision, store=store, vlm=vlm, audio=audio, tts=tts)
@@ -229,8 +230,19 @@ def create_app(
                 "busy": assistant.busy,
                 "last_latency_s": assistant.last_latency_s,
                 "uptime_s": round(time.monotonic() - assistant.started_at),
+                "language": assistant.language_setting,
+                "current_language": assistant.current_language,
+                "glare": glare_status(),
             }
         )
+
+    def glare_status() -> dict[str, Any] | None:
+        # Measured at most every few seconds on the raw camera frame; a broken camera must not break the status.
+        try:
+            return assistant.glare.status(svc.vision.latest_frame)
+        except Exception:
+            log.exception("glare status failed")
+            return None
 
     @app.get("/api/config")
     def api_config() -> Any:
@@ -251,8 +263,22 @@ def create_app(
                 "wake_word": settings.wake_word,
                 "tts_backend": settings.tts_backend,
                 "tts_voice": settings.tts_voice,
+                "language": assistant.language_setting,
+                "current_language": assistant.current_language,
             }
         )
+
+    @app.get("/api/language")
+    def api_language() -> Any:
+        return jsonify(assistant.language_body())
+
+    @app.put("/api/language")
+    def api_set_language() -> Any:
+        body = request.get_json(silent=True)
+        setting = body.get("language") if isinstance(body, dict) else None
+        if setting not in LANGUAGE_SETTINGS:
+            return jsonify({"error": f"language must be one of: {', '.join(LANGUAGE_SETTINGS)}"}), 400
+        return jsonify(assistant.set_language(setting))
 
     @app.get("/api/history")
     def api_history() -> Any:
@@ -350,7 +376,7 @@ def create_app(
             return jsonify({"accepted": False, "error": "empty text"}), 400
         if assistant.busy:
             return jsonify({"accepted": False, "error": "busy"}), 409
-        svc.audio.submit_text(text)
+        assistant.submit_text(text)
         return jsonify({"accepted": True}), 202
 
     @app.post("/api/listen")
@@ -440,12 +466,13 @@ def create_app(
         # A client that (re)connects mid-query must not show a stale state.
         socketio.emit("status", {"state": assistant.state}, to=request.sid)
         socketio.emit("tutor", assistant.tutor.to_dict(), to=request.sid)
+        socketio.emit("language", assistant.language_body(), to=request.sid)
 
     @socketio.on("text_query")
     def on_text_query(data: Any) -> None:
         text = str((data or {}).get("text") or "") if isinstance(data, dict) else ""
         if text.strip():
-            svc.audio.submit_text(text)
+            assistant.submit_text(text)
 
     @socketio.on("trigger_listen")
     def on_trigger_listen(_data: Any = None) -> None:

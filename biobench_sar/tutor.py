@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import random
 import re
 import threading
+import unicodedata
 from collections import deque
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from biobench_sar.rag.quiz_bank import QuizProblem, invent_problem
+
+log = logging.getLogger(__name__)
 
 MODES = ("help", "practice", "quiz")
 DEFAULT_QUIZ_LENGTH = 10  # problems in a quiz without worksheet problems (they are invented, see start_quiz)
@@ -235,6 +240,104 @@ def detect_offer_reply(text: str) -> str | None:
     if _any(_OFFER_GENERATE, norm):
         return "generate"
     return None
+
+
+# ---- both languages ----------------------------------------------------------------------------------------
+# The Spanish detectors live in biobench_sar.lang and return what the English ones above return. Each *_any function
+# tries the reply language's detector first and then the other one: a student may switch language mid-lesson, and
+# a forced "en" setting must still understand "¿me das una pista?".
+
+_T = TypeVar("_T")
+
+
+def _spanish(name: str, text: str, empty: _T) -> _T:
+    """biobench_sar.lang's Spanish detector `name` on `text`; `empty` when it is missing or fails."""
+    try:
+        from biobench_sar import lang
+    except ImportError:
+        return empty
+    detector: Callable[[str], _T] | None = getattr(lang, name, None)
+    if detector is None:
+        return empty
+    try:
+        return detector(text)
+    except Exception:
+        log.exception("Spanish intent detector %s failed", name)
+        return empty
+
+
+def _norm_es(text: str) -> str:
+    plain = "".join(c for c in unicodedata.normalize("NFD", (text or "").lower()) if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9ñ\s]", " ", plain)).strip()
+
+
+def _first(language: str, english: Callable[[], _T | None], spanish: Callable[[], _T | None]) -> _T | None:
+    for detect in (spanish, english) if language == "es" else (english, spanish):
+        found = detect()
+        if found is not None:
+            return found
+    return None
+
+
+def detect_mode_any(text: str, language: str = "en") -> str | None:
+    """detect_mode for English or Spanish ("dame una pista", "hazme un quiz", "otro parecido")."""
+    return _first(language, lambda: detect_mode(text), lambda: _spanish("detect_mode_es", text, None))
+
+
+def is_quiz_stop_any(text: str) -> bool:
+    """ "stop the quiz" / "termina el quiz"."""
+    return is_quiz_stop(text) or bool(_spanish("is_quiz_stop_es", text, False))
+
+
+_REPEAT_ES = _compile(
+    r"\brepit\w*",
+    r"\brepetir\w*",
+    r"\b(?:dilo|dimelo|leelo|lee|leemelo)\s+(?:otra\s+vez|de\s+nuevo)\b",
+    r"^(?:otra\s+vez|de\s+nuevo|mande|perdon|que|como|eh)$",
+    r"\bcual\s+(?:era|es)\s+(?:el|la)\s+(?:problema|pregunta|ecuacion|ejercicio)\b",
+    r"\bno\s+(?:te\s+|lo\s+)?(?:escuche|oi|alcance\s+a\s+(?:oir|escuchar))\b",
+)
+
+
+def is_repeat_request_any(text: str) -> bool:
+    """ "Can you repeat the problem?" / "¿me lo repites?" / "¿cuál era el problema?"."""
+    return is_repeat_request(text) or _any(_REPEAT_ES, _norm_es(text))
+
+
+# "aprender" / "enséñame" say it outright, like "learn" / "teach me"; the "¿cómo se ...?" and "explícame" forms are
+# about the board when it is in use, and about the student's own problem when they name one ("¿cómo resuelvo 3x + 5?").
+_LEARN_TRUSTED_ES = re.compile(r"\b(?:aprender|ensen\w*)\b")
+_EXPLICIT_ES = re.compile(
+    r"\d|\bes\s+igual\s+a\b|\bal\s+(?:cuadrado|cubo)\b"
+    r"|\b(?:mas|menos)\s+(?:uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|x|ye)\b"
+    r"|\b(?:un|una|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+"
+    r"(?:medios?|tercios?|cuartos?|quintos?|sextos?|septimos?|octavos?|novenos?|decimos?)\b"
+)
+
+
+def _learn_request_es(text: str, board_in_use: bool) -> str | None:
+    plain = _norm_es(text)
+    trusted = bool(_LEARN_TRUSTED_ES.search(plain))
+    if not trusted and (board_in_use or _spanish("detect_mode_es", text, None) is not None):
+        return None
+    topic = _spanish("detect_learn_request_es", text, None)
+    if topic is None or (not trusted and _EXPLICIT_ES.search(plain)):
+        return None
+    return topic
+
+
+def detect_learn_request_any(text: str, language: str = "en", *, board_in_use: bool = False) -> str | None:
+    """detect_learn_request for English or Spanish ("quiero aprender fracciones", "enséñame ecuaciones")."""
+    return _first(
+        language,
+        lambda: detect_learn_request(text, board_in_use=board_in_use),
+        lambda: _learn_request_es(text, board_in_use),
+    )
+
+
+def detect_offer_reply_any(text: str, language: str = "en") -> str | None:
+    """Answer to the lesson offer in English or Spanish: "invéntame uno" -> "generate", "tengo uno" -> "own"."""
+    return _first(language, lambda: detect_offer_reply(text), lambda: _spanish("detect_offer_reply_es", text, None))
 
 
 class TutorSession:

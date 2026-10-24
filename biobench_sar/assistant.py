@@ -22,11 +22,11 @@ from biobench_sar.rag.quiz_bank import QuizBank, QuizProblem, pick_progressive
 from biobench_sar.schemas import AvatarAction, error_action
 from biobench_sar.tutor import (
     TutorSession,
-    detect_learn_request,
-    detect_mode,
-    detect_offer_reply,
-    is_quiz_stop,
-    is_repeat_request,
+    detect_learn_request_any,
+    detect_mode_any,
+    detect_offer_reply_any,
+    is_quiz_stop_any,
+    is_repeat_request_any,
 )
 
 log = logging.getLogger(__name__)
@@ -34,20 +34,143 @@ log = logging.getLogger(__name__)
 WORDS_PER_SECOND = 2.5
 DRAWING_STATES = frozenset({"pointing", "celebrating"})
 HISTORY_SIZE = 50
+LANGUAGES = ("en", "es")
+LANGUAGE_SETTINGS = ("auto", *LANGUAGES)
+GLARE_INTERVAL_S = 2.0
+# A bulb reflection is a patch of the board; a "hotspot" over half of it or more is an overexposed camera.
+MAX_GLARE_SHARE = 0.5
 NO_ANSWER_TEXT = "I can't see an answer on the board yet. Write it, then ask me to check it."
+TEXTS = {
+    "en": {
+        "no_answer": NO_ANSWER_TEXT,
+        "error": "Sorry, something went wrong. Please try again.",
+        "last": "That was the last problem! ",
+        "summary": "{ending}You solved {score} of {total} on the first try.",
+    },
+    "es": {
+        "no_answer": "Todavía no veo una respuesta en el pizarrón. Escríbela y luego pídeme que la revise.",
+        "error": "Perdón, algo salió mal. Inténtalo de nuevo.",
+        "last": "¡Ese fue el último problema! ",
+        "summary": "{ending}Resolviste {score} de {total} al primer intento.",
+    },
+}
 # The model or the VLM client often announces the end itself; then the summary only adds the score.
-_QUIZ_END_SAID = re.compile(r"\b(?:last problem|finished|all done|end of the quiz)\b", re.I)
+_QUIZ_END_SAID = re.compile(
+    r"\b(?:last problem|finished|all done|end of the quiz|[uú]ltimo problema|terminaste|terminamos|fin del quiz)\b",
+    re.I,
+)
 _UNSET: Any = object()
 
 
-def _speakable(text: str) -> str:
-    """Text the assistant adds itself goes through mathspeak too ("3 of 10" -> "three of ten")."""
+def _language(code: Any) -> str:
+    return "es" if code == "es" else "en"
+
+
+def _speakable(text: str, language: str = "en") -> str:
+    """Text the assistant adds itself goes through mathspeak too ("3 of 10" -> "three of ten" / "tres de diez")."""
     try:
-        from biobench_sar.llm.mathspeak import to_speech
+        if _language(language) == "es":
+            from biobench_sar.llm.mathspeak_es import to_speech_es as to_speech
+        else:
+            from biobench_sar.llm.mathspeak import to_speech
 
         return str(to_speech(text)).strip() or text
     except Exception:
         return text
+
+
+def _detect_language(text: str, default: str) -> str:
+    try:
+        from biobench_sar.lang import detect_language
+
+        return _language(detect_language(text, default=default))
+    except Exception:
+        log.exception("language detection failed")
+        return _language(default)
+
+
+class GlareMonitor:
+    """glare.measure_glare on the latest raw camera frame, at most every `interval_s`; thread-safe.
+
+    The report's hotspots are in that frame's camera pixels; hotspots_on_board maps them into projector space.
+    """
+
+    def __init__(self, interval_s: float = GLARE_INTERVAL_S, clock: Callable[[], float] = time.monotonic) -> None:
+        self._interval = interval_s
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._at: float | None = None
+        self._report: Any = None
+        self._size: tuple[int, int] | None = None
+
+    def report(self, frame_source: Callable[[], Any]) -> Any:
+        """The GlareReport of a frame from `frame_source` (cached), or None without a frame."""
+        with self._lock:
+            now = self._clock()
+            if self._at is not None and now - self._at < self._interval:
+                return self._report
+            self._at = now
+            self._report, self._size = None, None
+            try:
+                frame = frame_source()
+                if frame is not None:
+                    from biobench_sar.core.glare import measure_glare
+
+                    self._report = measure_glare(frame)
+                    self._size = (int(frame.shape[1]), int(frame.shape[0]))
+            except Exception:
+                log.exception("glare check failed")
+                self._report, self._size = None, None
+            return self._report
+
+    def status(self, frame_source: Callable[[], Any]) -> dict[str, Any] | None:
+        """{"fraction", "severe", "hotspots": [[x, y, w, h], ...], "size": [w, h]} or None without a camera."""
+        report = self.report(frame_source)
+        if report is None:
+            return None
+        with self._lock:
+            size = self._size
+        body = report.to_dict()
+        return {**body, "size": list(size) if size else None}
+
+
+def hotspots_on_board(hotspots: Iterable[Any], calibration: Any) -> list[tuple[float, float, float, float]]:
+    """Camera-pixel hotspot boxes as projector-space (x, y, w, h) boxes: the bounding box of the mapped corners."""
+    boxes: list[tuple[float, float, float, float]] = []
+    for x, y, w, h in hotspots:
+        if calibration is None:
+            boxes.append((float(x), float(y), float(w), float(h)))
+            continue
+        import numpy as np
+
+        corners = np.array([[x, y], [x + w, y], [x + w, y + h], [x, y + h]], dtype=np.float32)
+        mapped = calibration.camera_to_projector(corners)
+        x0, y0 = (float(v) for v in mapped.min(axis=0))
+        x1, y1 = (float(v) for v in mapped.max(axis=0))
+        boxes.append((x0, y0, x1 - x0, y1 - y0))
+    return boxes
+
+
+def drop_glare_ink(
+    ink: list[Any], boxes: list[tuple[float, float, float, float]], board_size: tuple[int, int] | None = None
+) -> list[Any]:
+    """Ink regions whose center is not inside a glare hotspot: the bulb's reflection washes ink out and its rim
+    reads as a stroke, so what is found there is not the student's writing. A "hotspot" over most of the board is
+    an overexposed camera, not a reflection: the ink in it is still the student's, so it stays."""
+    if board_size is not None:
+        area = max(1, board_size[0] * board_size[1])
+        boxes = [box for box in boxes if box[2] * box[3] < MAX_GLARE_SHARE * area]
+    if not boxes:
+        return ink
+
+    def in_glare(region: Any) -> bool:
+        try:
+            cx, cy = float(region["cx"]), float(region["cy"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        return any(x <= cx <= x + w and y <= cy <= y + h for x, y, w, h in boxes)
+
+    return [region for region in ink if not in_glare(region)]
 
 
 Emit = Callable[[str, dict[str, Any]], None]
@@ -75,6 +198,9 @@ class Interaction:
     error: bool
     mode: str = "help"
     task_kind: str | None = None
+    # The answer as shown (math notation kept) and the reply's language; spoken_text is what the voice said.
+    display_text: str = ""
+    language: str = "en"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -176,6 +302,76 @@ class Assistant:
         self.tutor = TutorSession()
         self._tutor_lock = threading.Lock()
         self._tutor_pushed = self.tutor.to_dict()
+        self.glare = GlareMonitor()
+        self._language_lock = threading.Lock()
+        self._language = settings.language if settings.language in LANGUAGE_SETTINGS else "auto"
+        # The language of the last reply: what "auto" falls back on when a question leans neither way.
+        self._reply_language = self._language if self._language in LANGUAGES else "en"
+        self._typed = threading.local()
+
+    # ---- language ----------------------------------------------------------
+    @property
+    def language_setting(self) -> str:
+        """ "auto" (reply in the student's language) | "en" | "es"."""
+        with self._language_lock:
+            return self._language
+
+    @property
+    def current_language(self) -> str:
+        """The language replies are in now: the setting when it is forced, else the last reply's."""
+        with self._language_lock:
+            return self._language if self._language in LANGUAGES else self._reply_language
+
+    def language_body(self) -> dict[str, str]:
+        with self._language_lock:
+            current = self._language if self._language in LANGUAGES else self._reply_language
+            return {"setting": self._language, "current": current}
+
+    def set_language(self, setting: str) -> dict[str, str]:
+        """Switch the setting ("auto" | "en" | "es"); ValueError otherwise. Whisper decodes in a forced language."""
+        if setting not in LANGUAGE_SETTINGS:
+            raise ValueError(f"language must be one of {', '.join(LANGUAGE_SETTINGS)}")
+        with self._language_lock:
+            self._language = setting
+        audio = getattr(self.services, "audio", None)
+        set_audio = getattr(audio, "set_language", None)
+        if callable(set_audio):
+            try:
+                set_audio(setting)
+            except Exception:
+                log.exception("could not set the microphone language")
+        body = self.language_body()
+        self._emit("language", body)
+        return body
+
+    def reply_language(self, text: str, *, spoken: bool) -> str:
+        """The language to answer `text` in: the setting when forced; with "auto", the language Whisper heard a
+        spoken question in, else the text's own (the last reply's language when it leans neither way)."""
+        with self._language_lock:
+            setting, previous = self._language, self._reply_language
+        if setting in LANGUAGES:
+            return setting
+        if spoken:
+            heard = getattr(getattr(self.services, "audio", None), "last_language", None)
+            if heard in LANGUAGES:
+                return str(heard)
+        return _detect_language(text, previous)
+
+    def _replied_in(self, language: str) -> None:
+        with self._language_lock:
+            changed = self._reply_language != language and self._language == "auto"
+            self._reply_language = language
+        if changed:
+            self._emit("language", self.language_body())
+
+    def submit_text(self, text: str) -> None:
+        """A typed question (dashboard, socket): delivered through the audio service like a spoken one, but its
+        language comes from the text, not from what the microphone last heard."""
+        self._typed.active = True
+        try:
+            self.services.audio.submit_text(text)
+        finally:
+            self._typed.active = False
 
     @property
     def active_sources(self) -> set[str] | None:
@@ -249,16 +445,67 @@ class Assistant:
             self.emit_status(self._state, "busy")
             return False
         try:
-            self._start_task(self._run, text)
+            # Decided here, on the delivering thread: AudioTrigger.last_language belongs to this question only now.
+            language = self.reply_language(text, spoken=not getattr(self._typed, "active", False))
+            self._start_task(self._run, text, language)
         except Exception:
             self._busy.release()
             raise
         return True
 
-    def _run(self, text: str) -> None:
-        from biobench_sar.core.vision_loop import encode_jpeg, find_ink_regions
+    def _board(self) -> tuple[Any, Any, Any]:
+        """(raw camera frame, its calibration, projector-space frame), read together; raw is None for a vision
+        service without latest_frame_and_calibration."""
+        vision = self.services.vision
+        both = getattr(vision, "latest_frame_and_calibration", None)
+        if not callable(both):
+            return None, None, vision.latest_warped()
+        raw, calibration = both()
+        if raw is None:
+            return None, None, None
+        return raw, calibration, calibration.warp_frame(raw) if calibration is not None else raw
 
+    def _board_image(self, raw: Any, calibration: Any, warped: Any, ink: list[Any]) -> tuple[bytes | None, Any]:
+        """(JPEG for the model, its InkCrop or None): the high-res crop of the ink, else the whole board."""
+        from biobench_sar.core.vision_loop import encode_jpeg
+
+        crop = None
+        if ink:
+            try:
+                from biobench_sar.core.ink_crop import crop_from_warped, crop_ink_view
+
+                if raw is not None and calibration is not None:
+                    crop = crop_ink_view(raw, calibration, ink)
+                if crop is None and warped is not None:
+                    crop = crop_from_warped(warped, ink)
+            except Exception as exc:
+                log.warning("ink crop failed, sending the whole board: %s", exc)
+                crop = None
+        if crop is not None:
+            return crop.jpeg, crop
+        return (encode_jpeg(warped) if warped is not None else None), None
+
+    def _ink(self, raw: Any, calibration: Any, warped: Any) -> list[Any]:
+        from biobench_sar.core.vision_loop import find_ink_regions
+
+        if warped is None:
+            return []
+        ink = find_ink_regions(warped, **self.settings.ink_kwargs)
+        if not ink or raw is None:
+            return ink  # without the raw frame and its calibration a hotspot can't be placed on the board
+        hotspots = list(getattr(self.glare.report(lambda: raw), "hotspots", None) or [])
+        if not hotspots:
+            return ink
+        try:
+            board = (int(warped.shape[1]), int(warped.shape[0]))
+            return drop_glare_ink(ink, hotspots_on_board(hotspots, calibration), board)
+        except Exception:
+            log.exception("glare filter failed; keeping every ink region")
+            return ink
+
+    def _run(self, text: str, language: str = "en") -> None:
         svc = self.services
+        language = _language(language)
         started = time.monotonic()
         sources: list[str] = []
         ink: list[Any] = []
@@ -268,15 +515,18 @@ class Assistant:
         try:
             self._emit("transcript", {"text": text})
             self.emit_status("thinking")
-            frame = svc.vision.latest_warped()
-            ink = find_ink_regions(frame, **self.settings.ink_kwargs) if frame is not None else []
+            raw, calibration, frame = self._board()
+            ink = self._ink(raw, calibration, frame)
             # Planned after looking at the board: "how do I add fractions?" next to ink is about that ink.
-            task = self._plan(text, has_ink=bool(ink)) if self.tutoring else None
+            task = self._plan(text, has_ink=bool(ink), language=language) if self.tutoring else None
             mode = self.tutor.mode if self.tutoring else "help"
             self.push_tutor()
             context = self._retrieve(text)
             sources = list(dict.fromkeys(chunk.source for chunk in context))
-            image = encode_jpeg(frame) if frame is not None else None
+            image, crop = self._board_image(raw, calibration, frame, ink)
+            extra: dict[str, Any] = {"language": language}
+            if crop is not None:
+                extra["crop"] = crop
             action = svc.vlm.evaluate(
                 text,
                 image,
@@ -286,26 +536,32 @@ class Assistant:
                 mode=mode,
                 task=task,
                 recent_turns=self.tutor.turns(),
+                **extra,
             )
+            display = str(getattr(action, "display_text", None) or action.spoken_text)
             # A failed call (timeout, model down) says nothing about the student: no grading, nothing remembered.
             failed = bool(getattr(action, "failed", False))
             checking = task is not None and task["kind"] == "quiz" and task["stage"] == "check"
             if checking and not ink and not failed:
                 # Nothing on the board to grade. Saying "correct, next problem" here would leave the quiz behind.
-                action = replace(action, spoken_text=NO_ANSWER_TEXT, animation_state="idle")
+                display = TEXTS[language]["no_answer"]
+                action = replace(action, spoken_text=_speakable(display, language), animation_state="idle")
             elif action.animation_state in DRAWING_STATES and not ink and not _is_learn(task):
                 # Nothing drawn to point at or approve; small VLMs still pick these for plain questions.
                 action = replace(action, animation_state="idle")
             if task is not None and task["kind"] == "quiz" and not failed:
-                action = self._advance_quiz(task, action, graded=bool(ink))
+                action, display = self._advance_quiz(task, action, display, graded=bool(ink), language=language)
             if not failed:
                 self.tutor.add_turn(text, action.spoken_text)
             self.push_tutor()
-            self._emit("avatar_update", action.to_dict())
+            said = {"display_text": display, "spoken_text": action.spoken_text, "language": language}
+            self._emit("avatar_update", {**action.to_dict(), **said})
             self.emit_status("speaking")
-            audio_name = svc.tts.speak(action.spoken_text)
-            self._emit("speak", {"url": f"/tts/{audio_name}" if audio_name else None, "text": action.spoken_text})
+            audio_name = svc.tts.speak(action.spoken_text, lang=language)
+            url = f"/tts/{audio_name}" if audio_name else None
+            self._emit("speak", {"url": url, "text": action.spoken_text, **said})
             self._speaking_until = time.monotonic() + estimate_speech_seconds(action.spoken_text)
+            self._replied_in(language)
             self._record(
                 text,
                 action,
@@ -316,33 +572,48 @@ class Assistant:
                 error=action.animation_state == "error",
                 mode=mode,
                 task=task,
+                display=display,
+                language=language,
             )
         except Exception:
             log.exception("query pipeline failed")
-            action = error_action("Sorry, something went wrong. Please try again.", self.settings.projector_size)
-            self._emit("avatar_update", action.to_dict())
-            self._record(text, action, sources, ink, frame is not None, started, error=True, mode=mode, task=task)
+            action = error_action(TEXTS[language]["error"], self.settings.projector_size)
+            said = {"display_text": action.spoken_text, "spoken_text": action.spoken_text, "language": language}
+            self._emit("avatar_update", {**action.to_dict(), **said})
+            self._record(
+                text,
+                action,
+                sources,
+                ink,
+                frame is not None,
+                started,
+                error=True,
+                mode=mode,
+                task=task,
+                language=language,
+            )
         finally:
             self.emit_status("idle")
             self._busy.release()
 
-    def _plan(self, text: str, *, has_ink: bool = False) -> Task | None:
-        """What this question asks the model to do: a lesson step, a practice problem, a quiz step or plain help."""
+    def _plan(self, text: str, *, has_ink: bool = False, language: str = "en") -> Task | None:
+        """What this question asks the model to do: a lesson step, a practice problem, a quiz step or plain help.
+        English and Spanish requests both count, the reply language's first."""
         tutor = self.tutor
         if tutor.offer_pending:
-            reply = detect_offer_reply(text)
+            reply = detect_offer_reply_any(text, language)
             if reply is not None:
                 tutor.resolve_offer()
                 stage = "example" if reply == "generate" else "own"
                 return {"kind": "learn", "topic": tutor.learn_topic, "stage": stage}
             # Only the very next turn answers the offer: a "no" or "I'll write it" much later means something else.
             tutor.expire_offer()
-        topic = detect_learn_request(text, board_in_use=has_ink or tutor.quiz_active)
+        topic = detect_learn_request_any(text, language, board_in_use=has_ink or tutor.quiz_active)
         if topic is not None:
             tutor.start_learning(topic)
             return {"kind": "learn", "topic": topic, "stage": "offer"}
-        asked = detect_mode(text)
-        stuck = asked == "help" and tutor.quiz_active and not is_quiz_stop(text)
+        asked = detect_mode_any(text, language)
+        stuck = asked == "help" and tutor.quiz_active and not is_quiz_stop_any(text)
         if stuck:
             asked = None  # "I'm stuck" mid-quiz wants a hint on this problem, not to quit the quiz
         if asked is not None:
@@ -355,7 +626,7 @@ class Assistant:
             if not tutor.quiz_active:
                 self._start_tutor_quiz()
             stage = "dictate"
-        elif not tutor.dictated or is_repeat_request(text):
+        elif not tutor.dictated or is_repeat_request_any(text):
             stage = "dictate"
         else:
             stage = "hint" if stuck else "check"
@@ -370,18 +641,21 @@ class Assistant:
             "next_problem": upcoming.problem if stage == "check" and upcoming else None,
         }
 
-    def _advance_quiz(self, task: Task, action: AvatarAction, *, graded: bool = True) -> AvatarAction:
+    def _advance_quiz(
+        self, task: Task, action: AvatarAction, display: str, *, graded: bool = True, language: str = "en"
+    ) -> tuple[AvatarAction, str]:
         """Quiz bookkeeping for a finished turn. The VLM client says what it graded and read out (TutorAction
-        verdict / dictated); for a plain AvatarAction the state stands in: celebrating = correct, error = wrong."""
+        verdict / dictated); for a plain AvatarAction the state stands in: celebrating = correct, error = wrong.
+        Returns the action and the text shown for it (the final summary is added to both)."""
         tutor = self.tutor
         if not tutor.quiz_active or tutor.quiz_number != task["number"]:
-            return action  # the quiz was stopped or restarted while the model was thinking
+            return action, display  # the quiz was stopped or restarted while the model was thinking
         if task["stage"] == "dictate":
             if action.animation_state != "error":
                 tutor.mark_dictated()
-            return action
+            return action, display
         if task["stage"] != "check" or not graded:
-            return action  # a hint, or nothing on the board to grade: the attempt does not count
+            return action, display  # a hint, or nothing on the board to grade: the attempt does not count
         verdict = getattr(action, "verdict", _UNSET)
         if verdict is _UNSET:
             verdict = {"celebrating": "correct", "error": "wrong"}.get(action.animation_state)
@@ -390,15 +664,18 @@ class Assistant:
         elif verdict == "correct":
             tutor.record(True)
             if not tutor.quiz_active:
-                ending = "" if _QUIZ_END_SAID.search(action.spoken_text) else "That was the last problem! "
-                summary = _speakable(f"{ending}You solved {tutor.score} of {tutor.quiz_total} on the first try.")
-                return replace(action, spoken_text=f"{action.spoken_text} {summary}")
+                texts = TEXTS[_language(language)]
+                ending = "" if _QUIZ_END_SAID.search(action.spoken_text) else texts["last"]
+                shown = texts["summary"].format(ending=ending, score=tutor.score, total=tutor.quiz_total)
+                # Spoken like every other reply: "You solved three of ten", never "3 of 10" read by the voice.
+                summary = _speakable(shown, language)
+                return replace(action, spoken_text=f"{action.spoken_text} {summary}"), f"{display} {shown}"
             read = getattr(action, "dictated", _UNSET)
             if read is _UNSET:
                 read = task["next_problem"]
             if read:
                 tutor.mark_dictated()  # the next problem was read out with the praise: the next turn checks it
-        return action
+        return action, display
 
     def _retrieve(self, text: str) -> list[Any]:
         sources = self.selection.query_sources()
@@ -422,6 +699,8 @@ class Assistant:
         error: bool,
         mode: str = "help",
         task: Task | None = None,
+        display: str | None = None,
+        language: str = "en",
     ) -> None:
         item = Interaction(
             id=self._next_id,
@@ -438,6 +717,8 @@ class Assistant:
             error=error,
             mode=mode,
             task_kind=None if task is None else str(task["kind"]),
+            display_text=display or action.spoken_text,
+            language=_language(language),
         )
         self._next_id += 1
         self._history.append(item)

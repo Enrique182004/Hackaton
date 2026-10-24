@@ -399,3 +399,118 @@ def test_session_is_thread_safe() -> None:
         t.record(True)
     [th.join() for th in threads]
     assert not errors and not t.quiz_active and len(t.turns()) == MAX_TURNS
+
+
+# ---- English and Spanish together ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "mode"),
+    [
+        ("Estoy atorado, ¿qué hago ahora?", "help"),
+        ("Dame una pista", "help"),
+        ("Hazme un quiz", "quiz"),
+        ("Dame otro parecido", "practice"),
+        ("Termina el quiz", "help"),
+        ("help me", "help"),
+        ("quiz me", "quiz"),
+        ("Revisa mi respuesta", None),
+        ("ok", None),
+    ],
+)
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_detect_mode_any_reads_both_languages(text: str, mode: str | None, language: str) -> None:
+    from biobench_sar.tutor import detect_mode_any
+
+    assert detect_mode_any(text, language) == mode
+
+
+def test_detect_mode_any_tries_the_reply_language_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    from biobench_sar import lang, tutor
+
+    monkeypatch.setattr(tutor, "detect_mode", lambda text: "practice")
+    monkeypatch.setattr(lang, "detect_mode_es", lambda text: "quiz")
+    assert tutor.detect_mode_any("x", "es") == "quiz"
+    assert tutor.detect_mode_any("x", "en") == "practice"
+
+
+def test_spanish_detector_failure_falls_back_to_english(monkeypatch: pytest.MonkeyPatch) -> None:
+    from biobench_sar import lang, tutor
+
+    def broken(text: str) -> str | None:
+        raise RuntimeError("regex blew up")
+
+    monkeypatch.setattr(lang, "detect_mode_es", broken)
+    assert tutor.detect_mode_any("help me", "es") == "help"
+    assert tutor.detect_mode_any("dame una pista", "es") is None
+
+
+@pytest.mark.parametrize(
+    ("text", "board_in_use", "topic"),
+    [
+        ("Quiero aprender a resolver fracciones", False, "resolver fracciones"),
+        ("Enséñame ecuaciones", True, "ecuaciones"),  # says it outright: a lesson even with ink on the board
+        ("¿Cómo se suman fracciones?", False, "sumar fracciones"),
+        ("¿Cómo se suman fracciones?", True, None),  # with ink on the board it is about that ink
+        ("¿Cómo resuelvo la ecuación 3x + 5 = 20?", False, None),  # their own problem: help, not a lesson
+        ("¿Cómo sumo un medio más un tercio?", False, None),
+        ("Explícame la siguiente paso, estoy atorado", False, None),
+        ("I want to learn fractions", True, "fractions"),
+        ("how do I add fractions?", True, None),
+    ],
+)
+def test_detect_learn_request_any(text: str, board_in_use: bool, topic: str | None) -> None:
+    from biobench_sar.tutor import detect_learn_request_any
+
+    assert detect_learn_request_any(text, "es", board_in_use=board_in_use) == topic
+    assert detect_learn_request_any(text, "en", board_in_use=board_in_use) == topic
+
+
+@pytest.mark.parametrize(
+    ("text", "reply"),
+    [
+        ("Invéntame uno", "generate"),
+        ("No, tú escoge", "generate"),
+        ("Tengo uno", "own"),
+        ("Yo lo escribo", "own"),
+        ("make one up", "generate"),
+        ("I have one", "own"),
+        ("¿Qué es una fracción?", None),
+    ],
+)
+def test_detect_offer_reply_any(text: str, reply: str | None) -> None:
+    from biobench_sar.tutor import detect_offer_reply_any
+
+    assert detect_offer_reply_any(text, "es") == reply
+    assert detect_offer_reply_any(text, "en") == reply
+
+
+@pytest.mark.parametrize(
+    ("text", "stop"),
+    [("termina el quiz", True), ("ya no quiero hacer el quiz", True), ("stop the quiz", True), ("ayuda", False)],
+)
+def test_is_quiz_stop_any(text: str, stop: bool) -> None:
+    from biobench_sar.tutor import is_quiz_stop_any
+
+    assert is_quiz_stop_any(text) is stop
+
+
+@pytest.mark.parametrize(
+    ("text", "repeat"),
+    [
+        ("¿Me lo repites?", True),
+        ("Repítelo, por favor", True),
+        ("¿Puedes repetir el problema?", True),
+        ("¿Cuál era el problema?", True),
+        ("No escuché", True),
+        ("¿Qué?", True),
+        ("Dilo otra vez", True),
+        ("repeat the problem", True),
+        ("Ya lo escribí", False),
+        ("¿Qué hago ahora?", False),
+    ],
+)
+def test_is_repeat_request_any(text: str, repeat: bool) -> None:
+    from biobench_sar.tutor import is_repeat_request_any
+
+    assert is_repeat_request_any(text) is repeat

@@ -8,14 +8,80 @@ from biobench_sar.config import DATA_DIR, PACKAGE_DIR, Settings
 
 
 def _clear(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("SAR_INK_MIN_AREA", "SAR_INK_BLOCK_SIZE", "SAR_INK_C", "SAR_INK_MAX_REGIONS"):
+    for name in (
+        "SAR_INK_MIN_AREA",
+        "SAR_INK_BLOCK_SIZE",
+        "SAR_INK_C",
+        "SAR_INK_MAX_REGIONS",
+        "SAR_INK_SMALL_MERGE_PX",
+        "SAR_PROFILE",
+        "SAR_LANGUAGE",
+        "SAR_PROJECTOR_WIDTH",
+        "SAR_PROJECTOR_HEIGHT",
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
 def test_ink_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear(monkeypatch)
     s = Settings()
-    assert (s.ink_min_area, s.ink_block_size, s.ink_c, s.ink_max_regions) == (150, 31, 15, 10)
+    # Math boards are many small symbols: 20 regions, specks within 24 px join their symbol.
+    assert (s.ink_min_area, s.ink_block_size, s.ink_c, s.ink_max_regions) == (150, 31, 15, 20)
+    assert s.ink_small_merge_px == 24
+    assert s.ink_kwargs == {"min_area": 150, "max_regions": 20, "block_size": 31, "c": 15, "small_merge_px": 24}
+
+
+def test_ink_max_regions_follows_the_profile_unless_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear(monkeypatch)
+    assert Settings(profile="math").ink_max_regions == 20
+    assert Settings(profile="biology").ink_max_regions == 10
+    monkeypatch.setenv("SAR_PROFILE", "biology")
+    assert Settings().ink_max_regions == 10
+    monkeypatch.setenv("SAR_INK_MAX_REGIONS", "7")
+    assert Settings().ink_max_regions == 7, "an explicit value wins for biology"
+    monkeypatch.setenv("SAR_PROFILE", "math")
+    assert Settings().ink_max_regions == 7, "and for math"
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("0", 0), ("40", 40), ("-1", 24), ("abc", 24), ("", 24)])
+def test_ink_small_merge_px_env(monkeypatch: pytest.MonkeyPatch, raw: str, expected: int) -> None:
+    _clear(monkeypatch)
+    monkeypatch.setenv("SAR_INK_SMALL_MERGE_PX", raw)
+    s = Settings()
+    assert s.ink_small_merge_px == expected and s.ink_kwargs["small_merge_px"] == expected
+
+
+def test_projector_defaults_to_the_epson_wxga_kit(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear(monkeypatch)
+    s = Settings()
+    assert s.projector_size == (1280, 800)
+    assert s.projector_width * 10 == s.projector_height * 16, "16:10"
+
+
+def test_projector_size_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear(monkeypatch)
+    monkeypatch.setenv("SAR_PROJECTOR_WIDTH", "1920")
+    monkeypatch.setenv("SAR_PROJECTOR_HEIGHT", "1080")
+    assert Settings().projector_size == (1920, 1080)
+    monkeypatch.setenv("SAR_PROJECTOR_WIDTH", "0")
+    monkeypatch.setenv("SAR_PROJECTOR_HEIGHT", "wide")
+    assert Settings().projector_size == (1280, 800), "nonsense falls back to the kit"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(None, "auto"), ("auto", "auto"), ("es", "es"), ("es-MX", "es"), ("English", "en"), ("EN", "en"), ("fr", "auto")],
+)
+def test_language_setting_env(monkeypatch: pytest.MonkeyPatch, raw: str | None, expected: str) -> None:
+    _clear(monkeypatch)
+    if raw is not None:
+        monkeypatch.setenv("SAR_LANGUAGE", raw)
+    assert Settings().language == expected
+
+
+def test_language_passed_in_is_normalized() -> None:
+    assert Settings(language="Español").language == "es"
+    assert Settings(language="klingon").language == "auto"
 
 
 def test_ink_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -44,7 +110,7 @@ def test_garbage_or_negative_falls_back_to_defaults(monkeypatch: pytest.MonkeyPa
     s = Settings()
     assert s.ink_min_area == 150
     assert s.ink_block_size == 31
-    assert s.ink_max_regions == 10
+    assert s.ink_max_regions == 20
     # C == 0 is a legal (if extreme) setting; negatives and garbage are not.
     assert s.ink_c == (0 if raw == "0" else 15)
 
@@ -105,6 +171,14 @@ def _build(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> object:
 def test_build_services_passes_silence_rms_to_audio(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     svc = _build(monkeypatch, Settings(silence_rms=0.042, calibration_file=tmp_path / "calibration.json"))
     assert svc.audio.silence_rms == 0.042  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(("language", "whisper"), [("auto", "auto"), ("es", "es"), ("en", "en")])
+def test_build_services_passes_language_to_audio(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, language: str, whisper: str
+) -> None:
+    svc = _build(monkeypatch, Settings(language=language, calibration_file=tmp_path / "calibration.json"))
+    assert svc.audio.language == whisper  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize("profile", ["math", "biology"])

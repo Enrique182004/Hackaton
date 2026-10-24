@@ -24,7 +24,10 @@ class FakeVision:
         return None if self.frame is None else self.frame.copy()
 
     def latest_warped(self) -> np.ndarray | None:
-        return self.latest_frame()
+        return self.latest_frame() if self.calibration is None else self.calibration.warp_frame(self.frame)
+
+    def latest_frame_and_calibration(self) -> tuple[np.ndarray | None, Any]:
+        return self.latest_frame(), self.calibration
 
     def set_calibration(self, calibration: Any) -> None:
         self.calibration = calibration
@@ -116,6 +119,13 @@ class FakeAudio:
     def __init__(self) -> None:
         self.on_query: Callable[[str], None] | None = None
         self.triggered = 0
+        self.language = "auto"
+        self.languages: list[str] = []  # every set_language call
+
+    def set_language(self, code: str) -> str:
+        self.language = code
+        self.languages.append(code)
+        return code
 
     def start(self) -> None: ...
     def stop(self) -> None: ...
@@ -129,7 +139,11 @@ class FakeAudio:
 
 
 class FakeTTS:
-    def speak(self, text: str) -> str | None:
+    def __init__(self) -> None:
+        self.spoken: list[tuple[str, str | None]] = []
+
+    def speak(self, text: str, lang: str | None = None) -> str | None:
+        self.spoken.append((text, lang))
         return "fake.mp3"
 
 

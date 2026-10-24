@@ -37,6 +37,7 @@ _NUMBERED = re.compile(
 _ANSWER_LINE = re.compile(r"^\s*[-*>]*\s*(?:answer|ans|solution|respuesta)\s*[:=]\s*(?P<text>\S.*)$", re.I)
 _INLINE_ANSWER = re.compile(r"[(\[]?\s*\b(?:answer|ans|respuesta)\b\s*[:=]\s*(?P<text>.+?)\s*[)\]]?\s*$", re.I)
 _ANSWER_KEY = re.compile(r"^\W*(?:answer\s+key|answers|solutions|respuestas|soluciones)\W*$", re.I)
+_ANSWER_LABEL = re.compile(r"^\s*[-*>]*\s*(?:answer|ans|solution|respuesta)\s*[:=]\s*$", re.I)
 # A tutoring guide's numbered tips can contain math too; only files that present themselves as worksheets count.
 _WORKSHEET_HINT = re.compile(
     r"worksheet|quiz|exercise|homework|assignment|practice|problem\s*set|drill|\btest\b|ejercicio|tarea|examen|"
@@ -245,12 +246,67 @@ _CSV_ANSWER = re.compile(
 )
 
 
-def strip_answers(text: str) -> str:
+_VALUE = r"[-−]?\s*(?:\d+\s+\d+\s*/\s*\d+|\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?|\.\d+)"
+_SOLVED = rf"(?:[a-z]\s*(?:<=|>=|=|<|>|≤|≥)\s*{_VALUE}|\(\s*{_VALUE}\s*,\s*{_VALUE}\s*\)|{_VALUE})"
+# "x = 6", "x = 5 or x = -3", "5/6", "(2, 3)", "x = 6 (subtract nine first)": a value, never a problem to solve.
+_ANSWER_SHAPE = re.compile(
+    rf"^{_SOLVED}(?:\s*(?:,|;|\bor\b|\band\b|\bo\b|\by\b)\s*{_SOLVED})*"
+    r"(?:\s+[(\[]\s*[a-záéíóúñ]{2,}.*|\s+[-–—]\s+[a-záéíóúñ]{2,}.*|\s*:\s+[a-záéíóúñ]{2,}.*)?\.?$",
+    re.I,
+)
+_LINE_PREFIX = re.compile(
+    r"^\s*(?:[-*•>]+\s*)?(?:(?:problem|question|exercise|problema|pregunta|ejercicio|q)\s*#?\s*)?"
+    r"(?:\d{1,3}\s*[.):]\s*)?",
+    re.I,
+)
+# A lone letter set to a number somewhere in the line ("10 - 3x = 4, so x = 2"); "3x = 15" is a step, not this.
+_SOLVED_IN_LINE = re.compile(r"(?:^|[\s,;:(→>])[a-z]\s*=\s*[-−]?\s*\d", re.I)
+
+
+def _answer_body(line: str) -> str:
+    return _LINE_PREFIX.sub("", _clean(line), count=1).strip()
+
+
+def _is_answer_line(line: str) -> bool:
+    cleaned = _clean(line)
+    if cleaned.startswith("|"):
+        cells = [cell.strip() for cell in cleaned.strip("|").split("|")]
+        values = [cell for cell in cells if cell and not cell.isdigit()]
+        return bool(values) and all(_ANSWER_SHAPE.match(cell) for cell in values)
+    body = _answer_body(line)
+    return bool(body) and bool(_ANSWER_SHAPE.match(body))
+
+
+def _opens_on_answers(text: str, *, keyed: bool) -> bool:
+    """Whether a chunk starts inside an answer key: its first line is a bare answer ("7. x = 14"), or, for a source
+    known to have an answer key, a numbered line that ends solved ("8. 10 - 3x = 4, so x = 2")."""
+    first = next((line for line in text.splitlines() if _clean(line)), "")
+    if not first or _HEADING.match(_clean(first)) or _ANSWER_KEY.match(_clean(first)) or _CSV_ROW.match(first):
+        return False
+    if _is_answer_line(first):
+        return True
+    return keyed and bool(_NUMBERED.match(_clean(first))) and bool(_SOLVED_IN_LINE.search(_answer_body(first)))
+
+
+def _has_answer_key(text: str) -> bool:
+    return any(_ANSWER_KEY.match(_clean(line)) for line in text.splitlines())
+
+
+def strip_chunk_answers(chunks: Sequence[tuple[str, str]]) -> list[str]:
+    """Each retrieved (source, text) chunk's text without its answers, like strip_answers, and also when an answer
+    key spans several chunks of one source: the chunks after the one with the "Answer key" heading carry no heading,
+    only answers. Chunks arrive in relevance order, not document order, so each is judged on its own lines plus
+    whether any retrieved chunk of its source has an answer key."""
+    keyed = {source for source, text in chunks if _has_answer_key(text)}
+    return [strip_answers(text, in_key=_opens_on_answers(text, keyed=source in keyed)) for source, text in chunks]
+
+
+def strip_answers(text: str, *, in_key: bool = False) -> str:
     """The text without its answers: "Answer: x = 6" lines, "(answer: 6)", an answer-key block and a quiz-bank row's
     "answer is ...". Retrieved notes go into every math prompt; with an answer in them the model reads it out or
-    copies it as the student's answer."""
+    copies it as the student's answer. `in_key`: the text starts inside an answer key (a later chunk of one)."""
     out: list[str] = []
-    in_key = False
+    label_only = False  # an "Answer:" line with the answer on the next line
     for line in text.splitlines():
         cleaned = _clean(line)
         if _ANSWER_KEY.match(cleaned):
@@ -260,7 +316,14 @@ def strip_answers(text: str) -> str:
             if not _HEADING.match(cleaned):
                 continue  # everything under "Answer key" is an answer
             in_key = False
+        if label_only and cleaned:
+            label_only = False
+            if _is_answer_line(cleaned):
+                continue
         if _ANSWER_LINE.match(cleaned):
+            continue
+        if _ANSWER_LABEL.match(cleaned):
+            label_only = True
             continue
         if _CSV_ROW.match(line):
             line = _CSV_ANSWER.sub("", line)
