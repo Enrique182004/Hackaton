@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import platform
 import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -165,20 +168,38 @@ def check_tts(settings: Settings, no_sound: bool) -> list[Result]:
         return [("tts", "WARN", f"no local TTS ({exc}); edge-tts needs internet")]
 
 
-def check_tesseract() -> list[Result]:
-    try:
-        import pytesseract
+def tesseract_install_hint(system: str) -> str:
+    if system == "Windows":
+        return "install: winget install UB-Mannheim.TesseractOCR"
+    if system == "Darwin":
+        return "install: brew install tesseract"
+    return "install: sudo apt install tesseract-ocr"
 
-        return [("tesseract", "PASS", str(pytesseract.get_tesseract_version()))]
-    except ImportError:
-        pass
+
+def check_tesseract(
+    find: Callable[[], str | None] | None = None,
+    run: Callable[..., Any] = subprocess.run,
+    which: Callable[[str], str | None] = shutil.which,
+    system: str | None = None,
+) -> list[Result]:
+    """The same search the app makes before OCR: PATH, then the usual install folders (the Windows installer never
+    adds itself to PATH)."""
+    if find is None:
+        from biobench_sar.rag.ingestor import find_tesseract as find
+    system = platform.system() if system is None else system
+    exe = find()
+    if exe is None:
+        return [("tesseract", "FAIL", f"not found on PATH or in the usual folders; {tesseract_install_hint(system)}")]
+    try:
+        proc = run([exe, "--version"], capture_output=True, text=True, timeout=15)
     except Exception as exc:
-        return [("tesseract", "FAIL", f"binary not found ({exc})")]
-    exe = shutil.which("tesseract")
-    if not exe:
-        return [("tesseract", "FAIL", "not found on PATH")]
-    out = subprocess.run([exe, "--version"], capture_output=True, text=True).stdout.splitlines()
-    return [("tesseract", "PASS", out[0] if out else exe)]
+        return [("tesseract", "FAIL", f"{exe} does not run ({exc})")]
+    lines = (proc.stdout or proc.stderr or "").splitlines()  # tesseract 3 printed its version on stderr
+    if proc.returncode != 0:
+        return [("tesseract", "FAIL", f"{exe} --version exited {proc.returncode}")]
+    version = lines[0].strip() if lines else exe
+    where = "" if which("tesseract") else f" at {exe} (not on PATH; the assistant finds it there)"
+    return [("tesseract", "PASS", version + where)]
 
 
 def check_ollama(settings: Settings) -> list[Result]:
@@ -233,36 +254,159 @@ def projector_display_result(resolutions: list[tuple[int, int]], projector: tupl
     )
 
 
-def check_displays(projector: tuple[int, int] = (1920, 1080)) -> list[Result]:
-    system = platform.system()
-    if system == "Darwin":
+# ---- Windows displays through the Win32 API (ctypes only, no extra package) ------------------------------------
+# WCHAR is 2 bytes on Windows but ctypes.c_wchar is 4 elsewhere, so it is c_uint16 here: the layouts (and the tests
+# of their sizes) are the same on every OS.
+ENUM_CURRENT_SETTINGS = 0xFFFFFFFF  # (DWORD)-1
+
+
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_int32),
+        ("top", ctypes.c_int32),
+        ("right", ctypes.c_int32),
+        ("bottom", ctypes.c_int32),
+    ]
+
+
+class MONITORINFOEXW(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_uint32),
+        ("rcMonitor", RECT),
+        ("rcWork", RECT),
+        ("dwFlags", ctypes.c_uint32),
+        ("szDevice", ctypes.c_uint16 * 32),
+    ]
+
+
+class DEVMODEW(ctypes.Structure):
+    # wingdi.h; the printer/display union after dmFields is spelled out as its display half (16 bytes either way).
+    _fields_ = [
+        ("dmDeviceName", ctypes.c_uint16 * 32),
+        ("dmSpecVersion", ctypes.c_uint16),
+        ("dmDriverVersion", ctypes.c_uint16),
+        ("dmSize", ctypes.c_uint16),
+        ("dmDriverExtra", ctypes.c_uint16),
+        ("dmFields", ctypes.c_uint32),
+        ("dmPositionX", ctypes.c_int32),
+        ("dmPositionY", ctypes.c_int32),
+        ("dmDisplayOrientation", ctypes.c_uint32),
+        ("dmDisplayFixedOutput", ctypes.c_uint32),
+        ("dmColor", ctypes.c_int16),
+        ("dmDuplex", ctypes.c_int16),
+        ("dmYResolution", ctypes.c_int16),
+        ("dmTTOption", ctypes.c_int16),
+        ("dmCollate", ctypes.c_int16),
+        ("dmFormName", ctypes.c_uint16 * 32),
+        ("dmLogPixels", ctypes.c_uint16),
+        ("dmBitsPerPel", ctypes.c_uint32),
+        ("dmPelsWidth", ctypes.c_uint32),
+        ("dmPelsHeight", ctypes.c_uint32),
+        ("dmDisplayFlags", ctypes.c_uint32),
+        ("dmDisplayFrequency", ctypes.c_uint32),
+        ("dmICMMethod", ctypes.c_uint32),
+        ("dmICMIntent", ctypes.c_uint32),
+        ("dmMediaType", ctypes.c_uint32),
+        ("dmDitherType", ctypes.c_uint32),
+        ("dmReserved1", ctypes.c_uint32),
+        ("dmReserved2", ctypes.c_uint32),
+        ("dmPanningWidth", ctypes.c_uint32),
+        ("dmPanningHeight", ctypes.c_uint32),
+    ]
+
+
+def wide_string(chars: Any) -> str:
+    """A WCHAR[] field as text, up to its NUL."""
+    return "".join(map(chr, chars)).split("\0", 1)[0]
+
+
+def windows_display_sizes(user32: Any = None, functype: Any = None) -> list[tuple[int, int]]:
+    """Every display's current mode in physical pixels: EnumDisplayMonitors -> GetMonitorInfoW for its device name
+    -> EnumDisplaySettingsW. The monitor rectangle is only the fallback, since Windows scales it for DPI."""
+    if user32 is None:
+        user32 = ctypes.WinDLL("user32")  # type: ignore[attr-defined]  # Windows only
+    if functype is None:
+        functype = ctypes.WINFUNCTYPE  # type: ignore[attr-defined]
+    # BOOL CALLBACK MonitorEnumProc(HMONITOR, HDC, LPRECT, LPARAM)
+    monitor_proc = functype(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ssize_t)
+    user32.EnumDisplayMonitors.argtypes = [ctypes.c_void_p, ctypes.c_void_p, monitor_proc, ctypes.c_ssize_t]
+    user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(MONITORINFOEXW)]
+    user32.EnumDisplaySettingsW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32, ctypes.POINTER(DEVMODEW)]
+    sizes: list[tuple[int, int]] = []
+    errors: list[BaseException] = []
+
+    def on_monitor(hmonitor: int | None, hdc: int | None, rect: int | None, data: int) -> int:
         try:
-            out = subprocess.run(
-                ["system_profiler", "SPDisplaysDataType"], capture_output=True, text=True, timeout=15
-            ).stdout
+            info = MONITORINFOEXW()
+            info.cbSize = ctypes.sizeof(MONITORINFOEXW)
+            if not user32.GetMonitorInfoW(hmonitor, ctypes.byref(info)):
+                return 1
+            mode = DEVMODEW()
+            mode.dmSize = ctypes.sizeof(DEVMODEW)
+            if user32.EnumDisplaySettingsW(wide_string(info.szDevice), ENUM_CURRENT_SETTINGS, ctypes.byref(mode)):
+                sizes.append((int(mode.dmPelsWidth), int(mode.dmPelsHeight)))
+            else:
+                r = info.rcMonitor
+                sizes.append((r.right - r.left, r.bottom - r.top))
+            return 1
+        except BaseException as exc:  # an exception can't cross the C callback; stop and re-raise it below
+            errors.append(exc)
+            return 0
+
+    callback = monitor_proc(on_monitor)
+    ok = user32.EnumDisplayMonitors(None, None, callback, 0)
+    if errors:
+        raise errors[0]
+    if not ok:
+        raise OSError("EnumDisplayMonitors failed")
+    return sizes
+
+
+def screeninfo_sizes() -> list[tuple[int, int]]:
+    """Optional fallback (pip install screeninfo); raises ImportError when it isn't installed."""
+    from screeninfo import get_monitors
+
+    return [(int(m.width), int(m.height)) for m in get_monitors()]
+
+
+def macos_display_sizes() -> list[tuple[int, int]]:
+    out = subprocess.run(["system_profiler", "SPDisplaysDataType"], capture_output=True, text=True, timeout=15).stdout
+    return parse_resolutions(out)
+
+
+def display_sizes(system: str) -> list[tuple[int, int]]:
+    if system == "Darwin":
+        return macos_display_sizes()
+    if system == "Windows":
+        try:
+            return windows_display_sizes()
         except Exception as exc:
-            return [("displays", "WARN", str(exc))]
-        return [projector_display_result(parse_resolutions(out), projector)]
+            try:
+                return screeninfo_sizes()
+            except ImportError:
+                raise exc from None
+    return screeninfo_sizes()
+
+
+def check_displays(projector: tuple[int, int] = (1280, 800), system: str | None = None) -> list[Result]:
+    system = platform.system() if system is None else system
     try:
-        from screeninfo import get_monitors
-
-        mons = get_monitors()
-        desc = "; ".join(f"{m.width}x{m.height}" for m in mons)
-        return [("displays", "PASS" if len(mons) >= 2 else "WARN", f"{len(mons)} display(s): {desc}")]
+        sizes = display_sizes(system)
     except ImportError:
-        return [("displays", "WARN", "skipped (pip install screeninfo to enable)")]
+        return [("displays", "WARN", "skipped (pip install screeninfo to list displays on this OS)")]
     except Exception as exc:
-        return [("displays", "WARN", str(exc))]
+        return [("displays", "WARN", f"could not list the displays ({type(exc).__name__}: {exc})")]
+    return [projector_display_result(sizes, projector)]
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="SAR whiteboard assistant hardware check")
     parser.add_argument("--camera", type=int, default=None, help="check only this camera index")
     parser.add_argument("--skip-mic", action="store_true")
     parser.add_argument("--skip-camera", action="store_true")
     parser.add_argument("--no-sound", action="store_true", help="skip audible TTS sample")
     parser.add_argument("--save-frame", metavar="PATH", help="save a camera snapshot (jpg)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     applied = load_env_file()
     settings = Settings()
 
