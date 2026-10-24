@@ -405,6 +405,7 @@ class TutorSession:
             self._index = self._score = 0
             self._missed = self._dictated = False
             self._learn_topic, self._offer_pending = None, False
+            self._problem = None  # the quiz owns the card; the old problem must not come back after it
 
     def stop_quiz(self) -> None:
         with self._lock:
@@ -526,14 +527,20 @@ class TutorSession:
             return dict(self._problem) if self._problem else None
 
     def show_problem(self, text: str | None, source: str) -> None:
-        """Show `text` on the card; empty text keeps what it shows (a model that left the key out)."""
+        """Show `text` on the card; empty text keeps what it shows (a model that left the key out). Ignored while a
+        quiz runs: a turn that started before the quiz must not leave its problem behind for after it."""
         if source not in PROBLEM_SOURCES:
             raise ValueError(f"source must be one of {', '.join(PROBLEM_SOURCES)}")
         clean = _card_text(text)
         if clean is None:
             return
         with self._lock:
-            self._problem = {"text": clean, "source": source}
+            if self._quiz != "active":
+                self._problem = {"text": clean, "source": source}
+
+    def clear_problem(self) -> None:
+        with self._lock:
+            self._problem = None
 
     # ---- conversation memory -------------------------------------------------
     def turns(self) -> list[dict[str, str]]:

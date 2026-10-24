@@ -577,3 +577,20 @@ def test_running_quiz_owns_the_card() -> None:
     t.start_quiz([], length=3)
     t.show_problem("x + 3 = 8", "board")
     assert t.to_dict()["problem"] is None
+
+
+def test_a_quiz_started_directly_clears_the_card_and_holds_it() -> None:
+    # The dashboard's "Start quiz" calls start_quiz without set_mode: the old problem must not come back after.
+    t = TutorSession()
+    t.show_problem("4x + 7 = 19", "dictated")
+    t.start_quiz([], length=3)
+    t.show_problem("2x = 8", "board")  # a help turn that was already running when the quiz started
+    t.stop_quiz()
+    assert t.problem is None and t.to_dict()["problem"] is None
+
+
+def test_clear_problem() -> None:
+    t = TutorSession()
+    t.show_problem("x + 3 = 8", "dictated")
+    t.clear_problem()
+    assert t.problem is None
