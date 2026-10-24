@@ -17,6 +17,7 @@ import pytest
 from biobench_sar import assistant as assistant_module
 from biobench_sar.assistant import HISTORY_SIZE, Assistant, DocumentSelection, estimate_speech_seconds
 from biobench_sar.config import Settings
+from biobench_sar.llm.vlm_client import TutorAction
 from biobench_sar.rag.quiz_bank import QuizProblem, solve_problem
 from biobench_sar.schemas import AvatarAction, RetrievedChunk
 from biobench_sar.tutor import DEFAULT_QUIZ_LENGTH
@@ -1359,3 +1360,45 @@ def test_empty_board_sends_the_whole_board_without_a_crop(h: Harness, monkeypatc
     h.assistant.services.vision = RawVision(np.full((100, 100, 3), 128, np.uint8))
     h.assistant.handle_query("hello")
     assert h.vlm.seen[-1][1] == b"jpeg" and "crop" not in h.vlm.kwargs[-1]
+
+
+# ---- the problem card -----------------------------------------------------------------------------------------
+
+
+def _reply(h: Harness, **problems: str | None) -> None:
+    h.vlm.action = TutorAction("ok", "idle", 10, 20, **problems)  # type: ignore[arg-type]
+
+
+def test_practice_shows_the_dictated_problem(h: Harness) -> None:
+    _reply(h, board_problem="2x + 3 = 11", new_problem="4x + 7 = 19")
+    h.vision.frame = np.zeros((4, 4, 3), np.uint8)
+    h.assistant.handle_query("give me a similar problem")
+    assert _tutor_events(h)[-1]["problem"] == {"text": "4x + 7 = 19", "source": "dictated"}
+
+
+def test_help_shows_the_students_problem(h: Harness) -> None:
+    _reply(h, board_problem="2x + 3 = 11")
+    h.assistant.handle_query("help me")
+    assert h.assistant.tutor.problem == {"text": "2x + 3 = 11", "source": "board"}
+    assert _tutor_events(h)[-1]["problem"] == {"text": "2x + 3 = 11", "source": "board"}
+
+
+def test_empty_or_failed_reply_keeps_the_card(h: Harness) -> None:
+    _reply(h, board_problem="2x + 3 = 11")
+    h.assistant.handle_query("help me")
+    _reply(h, board_problem="")
+    h.assistant.handle_query("and now?")
+    h.vlm.action = TutorAction("model down", "error", 10, 20, failed=True, board_problem="9 = 9")
+    h.assistant.handle_query("hello?")
+    assert h.assistant.tutor.problem == {"text": "2x + 3 = 11", "source": "board"}
+
+
+def test_quiz_turns_leave_the_card_to_the_quiz(h: Harness) -> None:
+    _reply(h, board_problem="7 + 7")
+    h.assistant.handle_query("quiz me")
+    assert h.assistant.tutor.problem is None and _tutor_events(h)[-1]["problem"] is None
+
+
+def test_plain_actions_change_nothing(h: Harness) -> None:
+    h.assistant.handle_query("hello")  # the stub's AvatarAction has no problem keys
+    assert h.assistant.tutor.problem is None

@@ -421,6 +421,14 @@ class Assistant:
             self._tutor_pushed = state
         self._emit("tutor", state)
 
+    def _show_problem(self, action: AvatarAction) -> None:
+        """The projector card follows the turn: a problem the assistant dictated, else the student's off the board."""
+        dictated = getattr(action, "new_problem", None)
+        if dictated:
+            self.tutor.show_problem(dictated, "dictated")
+        else:
+            self.tutor.show_problem(getattr(action, "board_problem", None), "board")
+
     def quiz_problems(self) -> list[QuizProblem]:
         """Worksheet problems from the ticked files only, at most Settings.quiz_length spread over every level."""
         return pick_progressive(self.quiz_bank.problems(self.selection.query_sources()), self.settings.quiz_length)
@@ -553,6 +561,8 @@ class Assistant:
                 action, display = self._advance_quiz(task, action, display, graded=bool(ink), language=language)
             if not failed:
                 self.tutor.add_turn(text, action.spoken_text)
+            if not failed and self.tutoring and (task is None or task["kind"] != "quiz"):
+                self._show_problem(action)
             self.push_tutor()
             said = {"display_text": display, "spoken_text": action.spoken_text, "language": language}
             self._emit("avatar_update", {**action.to_dict(), **said})
