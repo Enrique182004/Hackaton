@@ -136,7 +136,7 @@ _ES_SMALL = dict(
         strict=True,
     )
 )
-_ES_SMALL |= {"veintiun": 21, "veintiuna": 21}
+_ES_SMALL |= {"un": 1, "una": 1, "veintiun": 21, "veintiuna": 21}
 # "un" / "una" are numbers only before a fraction word ("un medio"): "x es una variable" says nothing about 1.
 _ES_ARTICLE_ONE = frozenset({"un", "una"})
 _ES_TENS = dict(

@@ -1376,3 +1376,238 @@ def test_empty_board_sends_the_whole_board_without_a_crop(h: Harness, monkeypatc
     h.assistant.services.vision = RawVision(np.full((100, 100, 3), 128, np.uint8))
     h.assistant.handle_query("hello")
     assert h.vlm.seen[-1][1] == b"jpeg" and "crop" not in h.vlm.kwargs[-1]
+
+
+# ---- targets snapped in code, the highlight and projected UI --------------------------------------------------
+
+BOARD_W, BOARD_H = Settings().projector_size
+LINE_1 = {"x": 400, "y": 200, "w": 300, "h": 80, "cx": 550, "cy": 240}  # the problem
+LINE_2 = {"x": 400, "y": 400, "w": 200, "h": 80, "cx": 500, "cy": 440}  # the answer, below it
+
+
+def _with_ink(monkeypatch: pytest.MonkeyPatch, *regions: dict[str, int]) -> None:
+    vision = sys.modules["biobench_sar.core.vision_loop"]
+    monkeypatch.setattr(vision, "find_ink_regions", lambda frame, **kw: [dict(r) for r in regions])
+
+
+def _reply(h: Harness, text: str, action: AvatarAction) -> dict[str, Any]:
+    h.vlm.action = action
+    h.vision.frame = np.zeros((4, 4, 3), np.uint8)
+    h.assistant.handle_query(text)
+    return h.payloads("avatar_update")[-1]
+
+
+def test_pointing_stops_just_left_of_the_nearest_ink_and_highlights_it(
+    h: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from biobench_sar.assistant import POINT_GAP
+
+    _with_ink(monkeypatch, LINE_1, LINE_2)
+    avatar = _reply(h, "help", AvatarAction("Subtract five.", "pointing", 410, 210))  # the model's corner of line 1
+    assert (avatar["target_x"], avatar["target_y"]) == (400 - POINT_GAP, 240)
+    assert avatar["highlight"] == [400, 200, 300, 80]
+    assert h.payloads("speak")[-1]["highlight"] == [400, 200, 300, 80]
+    assert h.assistant.history()[0]["highlight"] == [400, 200, 300, 80]
+
+
+def test_pointing_at_ink_on_the_left_edge_stands_right_of_it(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    from biobench_sar.assistant import POINT_GAP
+
+    _with_ink(monkeypatch, {"x": 5, "y": 100, "w": 50, "h": 40, "cx": 30, "cy": 120})
+    avatar = _reply(h, "help", AvatarAction("Look here.", "pointing", 0, 0))
+    assert (avatar["target_x"], avatar["target_y"]) == (5 + 50 + POINT_GAP, 120)
+
+
+def test_error_and_celebrating_go_to_the_centre_of_the_region(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _with_ink(monkeypatch, LINE_1, LINE_2)
+    error = _reply(h, "is this right?", AvatarAction("A step is missing.", "error", 900, 700))
+    assert (error["target_x"], error["target_y"]) == (500, 440) and error["highlight"] == [400, 400, 200, 80]
+    cheer = _reply(h, "is this right?", AvatarAction("All there!", "celebrating", 10, 10))
+    assert (cheer["target_x"], cheer["target_y"]) == (550, 240) and cheer["highlight"] == [400, 200, 300, 80]
+
+
+def test_quiz_check_highlights_the_answer_line(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _bank(h, "a.md", ("3x + 5 = 20", "x = 5", 1), ("x + 1 = 2", "x = 1", 1))
+    _ask(h, "quiz me")
+    _with_ink(monkeypatch, LINE_1, LINE_2)
+    avatar = _reply(h, "check my answer", AvatarAction("Correct!", "celebrating", 550, 240))  # the model: line 1
+    assert (avatar["target_x"], avatar["target_y"]) == (500, 440), "the lowest line is the answer"
+    assert avatar["highlight"] == [400, 400, 200, 80]
+
+
+@pytest.mark.parametrize(
+    ("region", "side"),
+    [
+        ({"x": 100, "y": 300, "w": 300, "h": 100, "cx": 250, "cy": 350}, "right"),
+        ({"x": BOARD_W - 400, "y": 300, "w": 300, "h": 100, "cx": BOARD_W - 250, "cy": 350}, "left"),
+    ],
+)
+def test_idle_stands_on_the_side_away_from_the_ink(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, region: dict[str, int], side: str
+) -> None:
+    _with_ink(monkeypatch, region)
+    avatar = _reply(h, "what is a fraction?", AvatarAction("A part of a whole.", "idle", region["cx"], region["cy"]))
+    right = region["x"] + region["w"]
+    expected = (right + BOARD_W) / 2 if side == "right" else region["x"] / 2
+    assert (avatar["target_x"], avatar["target_y"]) == (round(expected), BOARD_H // 2)
+    assert avatar["highlight"] is None
+
+
+def test_idle_without_ink_keeps_the_models_target(h: Harness) -> None:
+    h.vlm.action = AvatarAction("Hello.", "walking", 300, 200)
+    h.assistant.handle_query("hi")
+    avatar = h.payloads("avatar_update")[-1]
+    assert (avatar["target_x"], avatar["target_y"], avatar["highlight"]) == (300, 200, None)
+
+
+def test_failed_call_stands_aside_and_highlights_nothing(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _with_ink(monkeypatch, LINE_1)
+    failed = _tutor_action("The AI model took too long to answer.", "error", failed=True)
+    avatar = _reply(h, "help", failed)
+    assert avatar["animation_state"] == "error" and avatar["highlight"] is None
+    assert avatar["target_x"] == round((700 + BOARD_W) / 2), "away from the ink, not on it"
+
+
+def test_ink_without_a_box_is_never_snapped(h: Harness) -> None:
+    avatar = _reply(h, "help", AvatarAction("Look.", "pointing", 10, 20))  # the fake ink has no x/y/w/h
+    assert (avatar["target_x"], avatar["target_y"], avatar["highlight"]) == (10, 20, None)
+
+
+def test_pipeline_error_has_no_highlight(h: Harness) -> None:
+    h.vlm.error = RuntimeError("boom")
+    h.assistant.handle_query("q")
+    assert h.payloads("avatar_update")[-1]["highlight"] is None and h.assistant.history()[0]["highlight"] is None
+
+
+def test_ink_under_projected_ui_is_dropped_before_the_model(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _with_ink(monkeypatch, LINE_1, LINE_2)
+    h.assistant.set_ui_rects([[380, 380, 300, 150]])  # the speech bubble over line 2
+    avatar = _reply(h, "help", AvatarAction("Look.", "pointing", 500, 440))
+    assert h.vlm.seen[-1][2] == [LINE_1], "the bubble's own text is not the student's writing"
+    assert avatar["highlight"] == [400, 200, 300, 80], "snapped to what is left"
+
+
+@pytest.mark.parametrize(("width", "kept"), [(120, True), (160, False)])  # 40% / 53% of line 1 covered
+def test_ui_rects_drop_ink_covered_by_more_than_half(
+    h: Harness, monkeypatch: pytest.MonkeyPatch, width: int, kept: bool
+) -> None:
+    _with_ink(monkeypatch, LINE_1)
+    h.assistant.set_ui_rects([[400, 200, width, 80]])
+    _reply(h, "help", AvatarAction("Look.", "pointing", 500, 240))
+    assert h.vlm.seen[-1][2] == ([LINE_1] if kept else [])
+
+
+def test_stale_ui_rects_are_ignored(h: Harness, monkeypatch: pytest.MonkeyPatch, clock: FakeClock) -> None:
+    from biobench_sar.assistant import UI_RECTS_TTL_S
+
+    _with_ink(monkeypatch, LINE_1)
+    h.assistant.set_ui_rects([[0, 0, BOARD_W, BOARD_H]])
+    assert h.assistant.ui_rects() == [(0.0, 0.0, float(BOARD_W), float(BOARD_H))]
+    clock.now += UI_RECTS_TTL_S + 0.5
+    assert h.assistant.ui_rects() == []
+    _reply(h, "help", AvatarAction("Look.", "pointing", 500, 240))
+    assert h.vlm.seen[-1][2] == [LINE_1], "the page stopped reporting: its old boxes are gone"
+
+
+def test_set_ui_rects_skips_malformed_entries(h: Harness) -> None:
+    from biobench_sar.assistant import MAX_UI_RECTS
+
+    h.assistant.set_ui_rects(
+        [[1, 2, 3, 4], "x", [1, 2], [1, 2, -3, 4], [True, 1, 2, 3], {"x": 1}, [float("nan"), 1, 1, 1], [5, 6, 7, 8]]
+    )
+    assert h.assistant.ui_rects() == [(1.0, 2.0, 3.0, 4.0), (5.0, 6.0, 7.0, 8.0)]
+    h.assistant.set_ui_rects({"rects": [[1, 2, 3, 4]]})
+    assert h.assistant.ui_rects() == [], "only a list of boxes"
+    h.assistant.set_ui_rects([[n, n, 10, 10] for n in range(100)])
+    assert len(h.assistant.ui_rects()) == MAX_UI_RECTS
+
+
+def test_the_highlight_never_masks_the_ink_it_outlines(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _with_ink(monkeypatch, LINE_1, LINE_2)
+    first = _reply(h, "help", AvatarAction("Look.", "pointing", 410, 210))
+    x, y, w, hgt = first["highlight"]
+    h.assistant.set_ui_rects([[x - 10, y - 10, w + 20, hgt + 20], [380, 380, 300, 150]])  # glow + the bubble
+    _reply(h, "and now?", AvatarAction("Look.", "pointing", 410, 210))
+    assert h.vlm.seen[-1][2] == [LINE_1], "the outlined line stays, the line under the bubble goes"
+
+
+def test_drop_ui_ink() -> None:
+    from biobench_sar.assistant import drop_ui_ink
+
+    ink = [dict(LINE_1), dict(LINE_2), {"x": 1}]
+    assert drop_ui_ink(ink, []) == ink
+    assert drop_ui_ink(ink, [(380.0, 380.0, 300.0, 150.0)]) == [LINE_1, {"x": 1}], "no box: kept"
+    outline = (400.0, 200.0, 300.0, 80.0)
+    assert drop_ui_ink(ink, [(395.0, 195.0, 310.0, 90.0)], outline) == ink, "the highlight itself"
+    assert drop_ui_ink(ink, [(0.0, 0.0, 1280.0, 800.0)], outline) == [{"x": 1}], "a full-screen card is no highlight"
+
+
+def test_place_target_unit() -> None:
+    from biobench_sar.assistant import place_target
+
+    size = (1280, 800)
+    pointed, box = place_target(AvatarAction("a", "pointing", 0, 0), [LINE_1], size)
+    assert box == [400, 200, 300, 80] and pointed.target_y == 240
+    idle, none = place_target(AvatarAction("a", "idle", 550, 240), [LINE_1], size)
+    assert none is None and (idle.target_x, idle.target_y) == (990, 400)
+    kept, nothing = place_target(AvatarAction("a", "error", 3, 4), [], size)
+    assert (kept.target_x, kept.target_y, nothing) == (3, 4, None)
+    aside, no_box = place_target(AvatarAction("a", "error", 550, 240), [LINE_1], size, stand_aside=True)
+    assert (aside.animation_state, aside.target_x, no_box) == ("error", 990, None)
+
+
+# ---- stopping a quiz: asked to confirm, by code -------------------------------------------------------------
+
+
+def test_anything_but_yes_keeps_the_quiz_and_is_handled_as_usual(h: Harness) -> None:
+    _bank(h, "a.md", ("3x + 5 = 20", "x = 5", 1), ("x + 1 = 2", "x = 1", 1))
+    _ask(h, "quiz me")
+    h.assistant.handle_query("I want to stop")
+    assert h.assistant.tutor.pending_stop
+    task = _ask(h, "no, keep going", state="celebrating", ink=True)["task"]
+    tutor = h.assistant.tutor
+    assert task["stage"] == "check" and not tutor.pending_stop and tutor.quiz_active
+    assert tutor.score == 1, "graded as an answer, as any other turn"
+    assert _tutor_events(h)[-1]["confirm_stop"] is False
+
+
+@pytest.mark.parametrize("yes", ["yes", "yeah", "ok", "sure", "Sí", "claro", "dale", "stop the quiz"])
+def test_yes_after_the_question_stops_with_the_score(h: Harness, yes: str) -> None:
+    _bank(h, "a.md", ("1 + 1", "2", 1), ("2 + 2", "4", 1))
+    _ask(h, "quiz me")
+    _ask(h, "check", state="celebrating", ink=True)  # problem 1 solved on the first try
+    calls = len(h.vlm.seen)
+    h.assistant.handle_query("stop")
+    h.assistant.handle_query(yes)
+    assert len(h.vlm.seen) == calls and not h.assistant.tutor.quiz_active
+    said = h.payloads("speak")[-1]["text"]
+    assert said in (
+        "Okay, the quiz is over. You solved one of two on the first try.",
+        "Listo, terminamos el quiz. Resolviste uno de dos al primer intento.",
+    )
+    newest = h.assistant.history()[0]
+    assert (newest["task_kind"], newest["animation_state"], newest["highlight"]) == ("quiz", "idle", None)
+
+
+def test_the_confirmation_question_is_idle_away_from_the_ink(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _ask(h, "quiz me")
+    _with_ink(monkeypatch, LINE_1)
+    avatar = _reply(h, "stop", AvatarAction("ignored", "celebrating", 550, 240))
+    assert avatar["animation_state"] == "idle" and avatar["highlight"] is None
+    assert avatar["target_x"] == round((700 + BOARD_W) / 2)
+    assert h.assistant.tutor.score == 0, "the question grades nothing"
+    assert h.assistant.tutor.turns()[-1]["a"].startswith("Do you want to end the quiz?")
+
+
+def test_stop_without_a_quiz_needs_no_confirmation(h: Harness) -> None:
+    assert _ask(h, "stop the quiz")["task"] is None
+    assert not h.assistant.tutor.pending_stop and "Do you want" not in h.payloads("speak")[-1]["text"]
+
+
+def test_the_dashboards_stop_needs_no_confirmation(h: Harness) -> None:
+    _ask(h, "quiz me")
+    h.assistant.handle_query("stop")
+    h.assistant.tutor.stop_quiz()  # POST /api/tutor/quiz/stop
+    h.assistant.push_tutor()
+    assert _tutor_events(h)[-1] == {"mode": "help", "learn_topic": None, "quiz": None, "confirm_stop": False}
+    assert _ask(h, "yes")["task"] is None, "the old question is gone: 'yes' is a plain question now"

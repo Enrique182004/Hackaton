@@ -514,3 +514,168 @@ def test_is_repeat_request_any(text: str, repeat: bool) -> None:
     from biobench_sar.tutor import is_repeat_request_any
 
     assert is_repeat_request_any(text) is repeat
+
+
+# ---- stopping a quiz: confirmed first -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "stop"),
+    [
+        ("stop the quiz", True),
+        ("stop", True),
+        ("Stop!", True),
+        ("please stop", True),
+        ("stop it please", True),
+        ("I want to stop", True),
+        ("let's stop here", True),
+        ("can we stop?", True),
+        ("I quit", True),
+        ("I don't want to do this anymore", True),
+        ("para", True),
+        ("basta", True),
+        ("quiero terminar", True),
+        ("ya no quiero seguir", True),
+        ("termina el quiz", True),
+        ("I'm done", False),  # with the answer: check it
+        ("I'm stuck", False),
+        ("help", False),
+        ("x = 5", False),
+        ("stop sign", False),
+        ("ya", False),  # "ya lo escribí": done writing, not stop
+    ],
+)
+def test_is_stop_intent_any(text: str, stop: bool) -> None:
+    from biobench_sar.tutor import is_stop_intent_any
+
+    assert is_stop_intent_any(text) is stop
+
+
+@pytest.mark.parametrize(
+    ("text", "yes"),
+    [
+        ("yes", True),
+        ("Yes!", True),
+        ("yeah", True),
+        ("sure", True),
+        ("ok", True),
+        ("okay, stop", True),
+        ("yes please", True),
+        ("sí", True),
+        ("Sí, por favor", True),
+        ("claro", True),
+        ("dale", True),
+        ("de acuerdo", True),
+        ("sí, termina", True),
+        ("ok keep going", False),
+        ("no", False),
+        ("no, sigo", False),
+        ("x = 5", False),
+        ("yes x = 5", False),
+        ("", False),
+    ],
+)
+def test_is_yes_any(text: str, yes: bool) -> None:
+    from biobench_sar.tutor import is_yes_any
+
+    assert is_yes_any(text) is yes
+
+
+def test_pending_stop_needs_a_running_quiz() -> None:
+    t = TutorSession()
+    assert t.request_stop() is False and not t.pending_stop
+    t.start_quiz(_problems("1 + 1", "2 + 2"))
+    assert t.request_stop() is True and t.pending_stop
+    assert t.to_dict()["confirm_stop"] is True and t.quiz_active, "asking does not stop it"
+    t.clear_stop()
+    assert not t.pending_stop and t.to_dict()["confirm_stop"] is False
+
+
+@pytest.mark.parametrize("end", ["stop_quiz", "start_quiz", "set_mode", "finish"])
+def test_pending_stop_ends_with_the_quiz(end: str) -> None:
+    t = TutorSession()
+    t.start_quiz(_problems("1 + 1"))
+    t.request_stop()
+    if end == "stop_quiz":
+        t.stop_quiz()  # the dashboard's Stop quiz button: no confirmation
+    elif end == "start_quiz":
+        t.start_quiz(_problems("2 + 2"))
+    elif end == "set_mode":
+        t.set_mode("help")
+    else:
+        t.record(True)  # the last problem solved: the quiz is over
+    assert not t.pending_stop and t.to_dict()["confirm_stop"] is False
+
+
+# ---- learning a topic: more ways to ask, and "sure" to the offer -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "topic"),
+    [
+        ("how do I add fractions", "adding fractions"),
+        ("teach me fractions", "fractions"),
+        ("explain fractions", "fractions"),
+        ("can you show me how to solve equations", "solving equations"),
+        ("What is a fraction?", "fraction"),
+        ("what are equations", "equations"),
+        ("I don't understand fractions", "fractions"),
+        ("I want to understand percentages", "percentages"),
+        ("I need help with fractions", "fractions"),
+        ("help me with fractions", "fractions"),
+        ("tell me about slope", "slope"),
+        ("how do fractions work?", "fractions"),
+    ],
+)
+def test_more_ways_to_ask_for_a_lesson(text: str, topic: str) -> None:
+    assert detect_learn_request(text) == topic
+    assert detect_learn_request(text, board_in_use=True) is None or text.startswith("teach me"), "ink: help with it"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what is x",
+        "what is the answer",
+        "what's the next step",
+        "help me with this",
+        "I don't understand this",
+        "what is three plus four",
+        "help me with the equation",
+    ],
+)
+def test_more_ways_to_ask_never_take_board_questions(text: str) -> None:
+    assert detect_learn_request(text) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "topic"),
+    [
+        ("¿Qué es una fracción?", "fracción"),
+        ("No entiendo las fracciones", "las fracciones"),
+        ("Ayúdame con las ecuaciones", "las ecuaciones"),
+        ("Háblame de la pendiente", "la pendiente"),
+        ("¿Qué es esto?", None),
+        ("No entiendo el problema", None),
+        ("ayúdame con esta ecuación", None),
+    ],
+)
+def test_more_ways_to_ask_for_a_lesson_in_spanish(text: str, topic: str | None) -> None:
+    from biobench_sar.tutor import detect_learn_request_any
+
+    assert detect_learn_request_any(text, "es") == topic
+    assert detect_learn_request_any(text, "es", board_in_use=True) is None
+
+
+@pytest.mark.parametrize("text", ["sure", "yes", "ok", "okay", "yeah", "yes please", "sí", "claro", "dale"])
+def test_a_plain_yes_to_the_offer_makes_one_up(text: str) -> None:
+    from biobench_sar.tutor import detect_offer_reply_any
+
+    assert detect_offer_reply_any(text, "en") == "generate" and detect_offer_reply_any(text, "es") == "generate"
+
+
+def test_a_yes_that_says_more_keeps_its_meaning() -> None:
+    from biobench_sar.tutor import detect_offer_reply_any
+
+    assert detect_offer_reply("yes I do") == "own" and detect_offer_reply_any("sí, tengo uno", "es") == "own"
+    assert detect_offer_reply("okay make one") == "generate"
