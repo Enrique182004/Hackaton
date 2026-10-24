@@ -1165,6 +1165,13 @@ def test_answers_carry_display_and_spoken_text(built: Any, fakes: Any) -> None:
 # ---- glare ------------------------------------------------------------------------------------------------------
 
 
+def test_status_says_which_computer_it_runs_on(built: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, _ = built
+    for platform, expected in (("darwin", "mac"), ("win32", "windows"), ("linux", "other")):
+        monkeypatch.setattr(sys, "platform", platform)
+        assert app.test_client().get("/api/status").get_json()["host_os"] == expected
+
+
 def test_status_glare_is_null_without_a_camera(built: Any) -> None:
     assert built[0].test_client().get("/api/status").get_json()["glare"] is None
 

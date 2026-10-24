@@ -24,6 +24,11 @@ function check(tone, what, how = "") {
   );
 }
 
+// Only the steps for the computer the assistant runs on; older servers don't say, so they get both.
+function cameraFixKey(hostOs) {
+  return { mac: "check.camera.fixMac", windows: "check.camera.fixWindows", other: "check.camera.fixOther" }[hostOs] ?? "check.camera.fix";
+}
+
 function filesCheck(s) {
   const w = words();
   const total = s.total_documents;
@@ -61,7 +66,7 @@ export function renderStatus(s) {
   const glare = glareOf(s);
   $("checks").replaceChildren(
     ...[
-      s.camera_running ? check("ok", t("check.camera.ok")) : check("bad", t("check.camera.bad"), t("check.camera.fix")),
+      s.camera_running ? check("ok", t("check.camera.ok")) : check("bad", t("check.camera.bad"), t(cameraFixKey(s.host_os))),
       glareCheck(glare),
       s.calibrated ? check("ok", t("check.calib.ok")) : check("warn", t("check.calib.warn"), t("check.calib.fix")),
       filesCheck(s),
@@ -70,6 +75,7 @@ export function renderStatus(s) {
       s.tts_backend === "none" ? check("warn", t("check.voice.off")) : check("ok", t("check.voice.ok")),
     ].filter(Boolean),
   );
+  markOverflow($("checks"));
   $("fps").textContent = s.camera_running ? t("board.fps", { n: (s.fps ?? 0).toFixed(0) }) : "–";
   $("latency").textContent = s.last_latency_s == null ? "–" : t("board.latency", { n: s.last_latency_s.toFixed(1) });
   $("uptime").textContent = formatDuration(s.uptime_s);
@@ -79,6 +85,16 @@ export function renderStatus(s) {
   else if (glare === "severe") setBadge("board", () => t("badge.board.glare"), "bad");
   else if (!s.calibrated) setBadge("board", () => t("badge.board.notLinedUp"), "warn");
   else setBadge("board", () => t("badge.board.ready"), "ok");
+}
+
+// A list that scrolls fades out at the bottom until it is scrolled to the end, so a cut-off item reads as "more below".
+function markOverflow(list) {
+  list.dataset.more = list.scrollTop + list.clientHeight < list.scrollHeight - 2 ? "1" : "0";
+  if (!list.dataset.watched) {
+    list.dataset.watched = "1";
+    list.addEventListener("scroll", () => markOverflow(list), { passive: true });
+    window.addEventListener("resize", () => markOverflow(list));
+  }
 }
 
 function sentence(state, detail) {

@@ -856,6 +856,15 @@ assert.match(checks(), /Answers are read aloud on the projector page \\(click it
 renderStatus({ ...base, vlm_backend: "ollama", vlm_model: "qwen2.5vl:3b", tts_backend: "none" });
 assert.match(checks(), /AI model chosen: qwen2\\.5vl:3b If an answer says it couldn't reach the AI model, start Ollama and ask again\\./);
 assert.doesNotMatch(checks(), /AI model ready/);
+// A server that says which computer it runs on gets only that computer's steps.
+renderStatus({ ...base, camera_running: false, host_os: "windows" });
+assert.match(checks(), /Camera not found .*“Let desktop apps access your camera”.*restart the assistant\\./);
+assert.doesNotMatch(checks(), /System Settings|On a Mac/);
+renderStatus({ ...base, camera_running: false, host_os: "mac" });
+assert.match(checks(), /Camera not found .*System Settings → Privacy & Security → Camera, and restart the assistant\\./);
+assert.doesNotMatch(checks(), /Let desktop apps|On Windows/);
+renderStatus({ ...base, camera_running: false, host_os: "other" });
+assert.match(checks(), /Camera not found Check the camera is plugged in and not open in another app, then restart the assistant\\./);
 """,
     )
 
@@ -1636,7 +1645,7 @@ assert.deepEqual(badge(), ["ready", "ok"]);
 renderStatus({ ...base, calibrated: false, glare: { fraction: 0.03, severe: true, hotspots: [[10, 20, 400, 300]] } });
 assert.equal(lines()[1].dataset.tone, "bad");
 assert.match(glare(), /^✗ Glare on the board: move the camera Projector light bounces off the board/);
-assert.match(glare(), /Move the webcam further out on the same side as the projector lens/);
+assert.match(glare(), /Raise the webcam higher above the projector lens/);
 assert.match(glare(), /“Checking for glare” in the hardware guide \\(docs\\/HARDWARE_SETUP\\.md\\)\\.$/);
 assert.deepEqual(badge(), ["glare on the board", "bad"]);
 renderStatus({ ...base, calibrated: false, glare: { fraction: 0, severe: false, hotspots: [] } });
@@ -2570,6 +2579,9 @@ def test_help_texts_never_assume_a_terminal_window() -> None:
     # The desktop app on either system, not only a Terminal on a Mac.
     assert "On a Mac" in en["check.camera.fix"] and "Let desktop apps access your camera" in en["check.camera.fix"]
     assert "En una Mac" in es["check.camera.fix"] and "En Windows" in es["check.camera.fix"]
+    for key in ("check.camera.fixMac", "check.camera.fixWindows", "check.camera.fixOther"):
+        assert "restart the assistant" in en[key], key
+        assert "vuelve a iniciar el asistente" in es[key], key
 
 
 def css_block(css: str, opener: str) -> str:
