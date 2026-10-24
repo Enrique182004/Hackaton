@@ -60,7 +60,9 @@ today):
   reply has no `new_problem`: an older problem must not stand in for the one just read out;
 - help → `show_problem(board_problem, "board")`, only when the frame has ink (an empty board's "problem" is a
   copied example or a placeholder);
-- a lesson's offer / own stage → nothing.
+- a lesson's offer / own stage → nothing. The offer speaks a worked example solved in code (#88,
+  `worked_examples.py`); by decision the card stays empty for it: the bubble already shows it in notation, and the
+  card is only for problems the student solves (a solved example under "Try this" would ask them to solve it).
 
 `VLMClient.evaluate` hands over only problems the card may show (`_card_problems`): `board_problem` in help and
 practice, `new_problem` only in practice and a lesson's example, and only when the final `spoken_text` reads it

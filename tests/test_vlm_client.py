@@ -2036,3 +2036,15 @@ def test_a_retry_without_the_board_keeps_the_first_read(monkeypatch: pytest.Monk
     action = _card_ask(client, "help")
     assert "five" in action.spoken_text and "equals five" not in action.spoken_text
     assert action.board_problem == "3x + 5 = 20"
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+@pytest.mark.parametrize("topic", ["adding fractions", "solving equations"])
+def test_a_worked_example_leaves_the_card_empty(topic: str, language: str) -> None:
+    # The lesson offer speaks a worked example solved in code (worked_examples.py); the bubble shows it. The card is
+    # only for problems the student solves, so it stays empty until the starter problem ("make one up").
+    client = VLMClient("mock", "m", "", profile="math")
+    task = {"kind": "learn", "topic": topic, "stage": "offer"}
+    action = client.evaluate(f"teach me {topic}", None, [], [], (1920, 1080), mode="help", task=task, language=language)
+    assert "=" in (action.display_text or ""), "the offer carries a solved example"
+    assert (action.new_problem, action.board_problem) == (None, None)
