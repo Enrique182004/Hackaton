@@ -163,7 +163,7 @@
           {% endif %}
           <div class="more-col">
             <h3 data-i18n="more.cameraView">Camera view</h3>
-            <div class="seg" role="group" aria-label="Camera view" data-i18n-aria-label="more.cameraView">
+            <div class="seg" id="camera-view" role="group" aria-label="Camera view" data-i18n-aria-label="more.cameraView">
               <button type="button" aria-pressed="true" data-view="1" data-i18n="more.linedUp">Lined-up</button>
               <button type="button" aria-pressed="false" data-view="0" data-i18n="more.raw">Raw camera</button>
             </div>
@@ -178,6 +178,27 @@
             <ol class="hits" id="hits"></ol>
           </div>
           <div class="more-col">
+            {# The room's settings, for every page: hidden until GET /api/accessibility answers (older servers have none). #}
+            <section class="access-card" id="access-card" aria-labelledby="access-title" hidden>
+              <h3 id="access-title" data-i18n="access.title">Accessibility</h3>
+              <p class="hint small" data-i18n="access.hint">These change the projector and the voice for the whole room.</p>
+              <label class="check-line"><input type="checkbox" id="access-captions"> <span data-i18n="access.captions">Keep captions up until the next question</span></label>
+              <label class="check-line"><input type="checkbox" id="access-calm"> <span data-i18n="access.calm">Calm mode (no bouncing or flashing)</span></label>
+              <label class="check-line"><input type="checkbox" id="access-contrast"> <span data-i18n="access.contrast">High contrast</span></label>
+              <p class="seg-label" data-i18n="access.size">Text size on the board</p>
+              <div class="seg" id="access-size" role="group" aria-label="Text size on the board" data-i18n-aria-label="access.size">
+                <button type="button" id="access-size-normal" aria-pressed="true" data-access-size="normal" data-i18n="access.size.normal">Normal</button>
+                <button type="button" id="access-size-large" aria-pressed="false" data-access-size="large" data-i18n="access.size.large">Large</button>
+                <button type="button" id="access-size-xlarge" aria-pressed="false" data-access-size="xlarge" data-i18n="access.size.xlarge">Extra large</button>
+              </div>
+              <p class="seg-label" data-i18n="access.rate">Voice speed</p>
+              <div class="seg" id="access-rate" role="group" aria-label="Voice speed" data-i18n-aria-label="access.rate">
+                <button type="button" id="access-rate-slower" aria-pressed="false" data-access-rate="slower" data-i18n="access.rate.slower">Slower</button>
+                <button type="button" id="access-rate-normal" aria-pressed="true" data-access-rate="normal" data-i18n="access.rate.normal">Normal</button>
+                <button type="button" id="access-rate-faster" aria-pressed="false" data-access-rate="faster" data-i18n="access.rate.faster">Faster</button>
+              </div>
+              <p class="note" id="access-msg" role="status"></p>
+            </section>
             <h3 data-i18n="more.settings">Settings</h3>
             <dl class="config" id="config"></dl>
             <h3 data-i18n="more.log">Activity log</h3>

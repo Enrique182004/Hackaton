@@ -293,6 +293,17 @@ input::placeholder { color: var(--ink-faint); }
 .log time { color: var(--ink-faint); margin-right: var(--s2); }
 .log .ev { color: var(--accent); font-weight: 700; margin-right: var(--s2); }
 
+/* ---- more tools: accessibility (the whole room) ------------------------------------ */
+.access-card[hidden] { display: none; }
+.access-card .hint.small { margin: 0 0 var(--s1); }
+.access-card .check-line input { flex: none; }
+.access-card .check-line input:disabled, .access-card .seg button:disabled { cursor: progress; }
+.seg-label { margin: var(--s2) 0 var(--s1); font-weight: 700; font-size: 0.9rem; }
+/* Three buttons share a narrow column: a long label ("Extra large", "Más rápida") wraps inside its button
+   instead of pushing the group past the column's edge. */
+.access-card .seg { display: flex; max-width: 100%; }
+.access-card .seg button { flex: 1 1 auto; min-width: 0; padding: 4px var(--s2); font-size: 0.88rem; line-height: 1.2; }
+
 /* ---- more tools: phones and tablets ---------------------------------------- */
 .phone-card[hidden], .qr[hidden], .phone-other[hidden] { display: none !important; }
 .phone-card .hint.small { margin: 0 0 var(--s2); }

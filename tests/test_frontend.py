@@ -1181,7 +1181,16 @@ TEXT_ATTRS = ("placeholder", "alt", "title", "aria-label")
 LANGUAGE_FREE = re.compile(r"^[\W\d_]*$")  # numbers, dashes, arrows: the same in every language
 SLOT = re.compile(r"\{(\w+)\}")
 # The same text on purpose: language names written in their own language, and words Spanish keeps.
-SAME_IN_SPANISH = {"lang.en", "lang.es", "lang.auto", "mode.quiz", "files.meta", "board.latency"}
+SAME_IN_SPANISH = {
+    "lang.en",
+    "lang.es",
+    "lang.auto",
+    "mode.quiz",
+    "files.meta",
+    "board.latency",
+    "access.size.normal",
+    "access.rate.normal",
+}
 
 
 class _Untranslated(HTMLParser):
@@ -2921,3 +2930,290 @@ def test_projector_page_paints_the_rooms_settings_first() -> None:
         assert tag, "no <body> tag"
         attrs = dict(re.findall(r'\s(data-[a-z-]+)="([^"]*)"', tag.group(0)))
         assert attrs == {"data-projector-width": "1280", "data-projector-height": "800", **looks}, variables
+
+
+# ---- dashboard: accessibility card -----------------------------------------------------------------------------------
+
+ROOM_ACCESS = {
+    "captions_stay": False,
+    "text_size": "normal",
+    "speech_rate": "normal",
+    "calm": False,
+    "high_contrast": False,
+}
+# The card as a teacher reads it: which boxes are ticked, which size and speed are pressed.
+ACCESS_DASHBOARD = (
+    DASHBOARD
+    + f"const ACCESS = {json.dumps(ROOM_ACCESS)};\n"
+    + """
+const card = () => ({
+  captions_stay: $("access-captions").checked,
+  text_size: ["normal", "large", "xlarge"].filter((s) => $(`access-size-${s}`).getAttribute("aria-pressed") === "true"),
+  speech_rate: ["slower", "normal", "faster"].filter((r) => $(`access-rate-${r}`).getAttribute("aria-pressed") === "true"),
+  calm: $("access-calm").checked,
+  high_contrast: $("access-contrast").checked,
+});
+const shows = (body) => ({ ...body, text_size: [body.text_size], speech_rate: [body.speech_rate] });
+const puts = (http) => http.calls.filter((c) => c.method === "PUT" && c.path === "/api/accessibility").map((c) => JSON.parse(c.body));
+"""
+)
+
+
+@needs_node
+def test_accessibility_card_waits_for_the_server_and_shows_the_rooms_settings(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+const sock = installIo();
+const replies = [];
+installFetch({ "GET /api/accessibility": () => new Promise((resolve) => replies.push(resolve)) });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+// No guessed defaults: the card shows only what the server says the room has.
+assert.equal($("access-card").hidden, true);
+const room = { ...ACCESS, captions_stay: true, text_size: "xlarge", speech_rate: "slower", high_contrast: true };
+for (const reply of replies) reply({ status: 200, body: room });
+await settle();
+assert.equal($("access-card").hidden, false);
+assert.deepEqual(card(), shows(room));
+for (const s of ["normal", "large", "xlarge"]) assert.equal($(`access-size-${s}`).dataset.accessSize, s);
+for (const r of ["slower", "normal", "faster"]) assert.equal($(`access-rate-${r}`).dataset.accessRate, r);
+""",
+    )
+    run_node(
+        tmp_path / "older",
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+// A server from before accessibility settings: the card never shows, and nothing is sent.
+const sock = installIo();
+const http = installFetch({ "GET /api/accessibility": { status: 404, body: { error: "not found" } } });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+assert.equal($("access-card").hidden, true);
+assert.ok(http.calls.some((c) => c.path === "/api/accessibility"), "the page never asked");
+assert.deepEqual(puts(http), []);
+""",
+    )
+
+
+@needs_node
+def test_accessibility_card_sends_only_the_setting_that_changed(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+const sock = installIo();
+let room = { ...ACCESS };
+let hold = null;
+const http = installFetch({
+  "GET /api/accessibility": () => ({ status: 200, body: room }),
+  "PUT /api/accessibility": async (init) => {
+    if (hold) await hold;
+    room = { ...room, ...JSON.parse(init.body) };
+    return { status: 200, body: room };
+  },
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+const controls = ["access-captions", "access-calm", "access-contrast", "access-size-normal", "access-size-large",
+                  "access-size-xlarge", "access-rate-slower", "access-rate-normal", "access-rate-faster"];
+let release;
+hold = new Promise((resolve) => { release = resolve; });
+const click = $("access-size-large").fire("click");
+await settle();
+// The whole card waits for the server, so a second tap can't race the first.
+assert.deepEqual(controls.filter((id) => !$(id).disabled), []);
+release();
+await click;
+hold = null;
+assert.deepEqual(puts(http), [{ text_size: "large" }]);
+assert.deepEqual(card(), shows({ ...ACCESS, text_size: "large" }));
+assert.deepEqual(controls.filter((id) => $(id).disabled), []);
+// A box ticks itself before its change event fires; the PUT carries just that box.
+$("access-captions").checked = true;
+await $("access-captions").fire("change");
+assert.deepEqual(puts(http).at(-1), { captions_stay: true });
+await $("access-rate-faster").fire("click");
+assert.deepEqual(puts(http).at(-1), { speech_rate: "faster" });
+$("access-contrast").checked = true;
+await $("access-contrast").fire("change");
+assert.deepEqual(puts(http).at(-1), { high_contrast: true });
+assert.deepEqual(card(), shows({ ...ACCESS, captions_stay: true, text_size: "large", speech_rate: "faster",
+                                 high_contrast: true }));
+// Pressing the size that is already on sends nothing.
+await $("access-size-large").fire("click");
+assert.equal(puts(http).length, 4);
+assert.equal($("access-msg").textContent, "");
+""",
+    )
+
+
+@needs_node
+def test_accessibility_card_follows_a_change_made_elsewhere(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+const sock = installIo();
+const replies = [];
+installFetch({ "GET /api/accessibility": () => new Promise((resolve) => replies.push(resolve)) });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+// A phone turned on calm mode and a faster voice: every open dashboard follows at once.
+const pushed = { ...ACCESS, calm: true, speech_rate: "faster" };
+sock.fire("accessibility", pushed);
+assert.equal($("access-card").hidden, false);
+assert.deepEqual(card(), shows(pushed));
+assert.match(logText(), /accessibility captions stay: false · text size: normal · speech rate: faster · calm: true/);
+// A GET that left before the push can't bring the old settings back.
+for (const reply of replies) reply({ status: 200, body: ACCESS });
+await settle();
+assert.deepEqual(card(), shows(pushed));
+// Half a body (an older or newer server) changes nothing.
+sock.fire("accessibility", { text_size: "large" });
+assert.deepEqual(card(), shows(pushed));
+""",
+    )
+
+
+@needs_node
+def test_accessibility_card_failure_is_explained_and_changes_nothing(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+const sock = installIo();
+const http = installFetch({
+  "GET /api/accessibility": { status: 200, body: ACCESS },
+  "PUT /api/accessibility": { status: 400, body: { error: "text_size must be one of: normal, large, xlarge" } },
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+await $("access-size-large").fire("click");
+const note = $("access-msg");
+assert.equal(note.textContent,
+  "Couldn't change that setting. Check the assistant is still running (restart the assistant if it closed), then try again.");
+assert.equal(note.dataset.tone, "warn");
+assert.match(logText(), /accessibility text_size must be one of: normal, large, xlarge/);
+assert.deepEqual(card(), shows(ACCESS));
+// The box the teacher ticked goes back to what the room really has.
+$("access-calm").checked = true;
+await $("access-calm").fire("change");
+assert.deepEqual(puts(http), [{ text_size: "large" }, { calm: true }]);
+assert.equal($("access-calm").checked, false);
+assert.equal($("access-calm").disabled, false);
+assert.equal($("access-size-large").disabled, false);
+// The note switches language with the page.
+sock.fire("language", { setting: "es", current: "es" });
+assert.equal(note.textContent,
+  "No se pudo cambiar ese ajuste. Revisa que el asistente siga funcionando (si se cerró, vuelve a iniciar el asistente) " +
+  "y vuelve a intentarlo.");
+""",
+    )
+
+
+@needs_node
+def test_accessibility_card_in_spanish(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+const sock = installIo();
+installFetch({
+  "GET /api/language": { status: 200, body: { setting: "es", current: "es" } },
+  "GET /api/accessibility": { status: 200, body: ACCESS },
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+const say = (key) => [...doc.body.descendants()].find((n) => n.dataset.i18n === key).textContent;
+assert.equal(doc.documentElement.lang, "es");
+assert.equal(say("access.title"), "Accesibilidad");
+assert.equal(say("access.hint"), "Cambian el proyector y la voz para todo el salón.");
+assert.equal(say("access.captions"), "Dejar los subtítulos hasta la siguiente pregunta");
+assert.equal(say("access.calm"), "Modo tranquilo (sin saltos ni destellos)");
+assert.equal(say("access.contrast"), "Alto contraste");
+assert.equal(say("access.size"), "Tamaño del texto en el pizarrón");
+assert.equal(say("access.rate"), "Velocidad de la voz");
+assert.equal($("access-size").getAttribute("aria-label"), "Tamaño del texto en el pizarrón");
+assert.equal($("access-rate").getAttribute("aria-label"), "Velocidad de la voz");
+assert.deepEqual(["normal", "large", "xlarge"].map((s) => $(`access-size-${s}`).textContent), ["Normal", "Grande", "Muy grande"]);
+assert.deepEqual(["slower", "normal", "faster"].map((r) => $(`access-rate-${r}`).textContent), ["Más lenta", "Normal", "Más rápida"]);
+""",
+    )
+
+
+@needs_node
+def test_accessibility_card_polls_only_without_a_live_socket(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + TIMERS
+        + """
+// No socket.io: the 2 s status poll is the only news of a change made on a phone.
+let room = { ...ACCESS };
+installFetch({ "GET /api/accessibility": () => ({ status: 200, body: room }) });
+await import("./dashboard/main.js");
+await settle();
+assert.deepEqual(card(), shows(ACCESS));
+room = { ...ACCESS, text_size: "large" };
+runTimer(2000);
+await settle();
+assert.deepEqual(card(), shows(room));
+""",
+    )
+    run_node(
+        tmp_path / "live",
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + TIMERS
+        + """
+// A live socket brings every change as an event, so the poll leaves the card alone.
+const sock = installIo();
+const http = installFetch({ "GET /api/accessibility": { status: 200, body: ACCESS } });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+const asked = () => http.calls.filter((c) => c.path === "/api/accessibility").length;
+const seen = asked();
+runTimer(2000);
+await settle();
+assert.equal(asked(), seen);
+""",
+    )
+
+
+@needs_node
+def test_camera_view_toggle_only_switches_its_own_buttons(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+installIo();
+installFetch({ "GET /api/accessibility": { status: 200, body: ACCESS } });
+// The template nests the camera's two buttons in #camera-view; the fake DOM lists every node flat, so nest them.
+const [linedUp, raw] = [...doc.body.descendants()].filter((n) => Object.hasOwn(n.dataset, "view"));
+$("camera-view").append(linedUp, raw);
+await import("./dashboard/main.js");
+await settle();
+await raw.fire("click");
+assert.deepEqual([linedUp, raw].map((b) => b.getAttribute("aria-pressed")), ["false", "true"]);
+// The accessibility groups are .seg too, and keep their own state and their one handler.
+assert.equal($("access-size-normal").getAttribute("aria-pressed"), "true");
+assert.equal($("access-size-large").listeners.click.length, 1);
+""",
+    )
