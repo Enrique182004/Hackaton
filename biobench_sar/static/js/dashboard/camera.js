@@ -17,8 +17,10 @@ function svgNode(tag, attrs) {
 function startFrames() {
   const img = $("frame");
   const next = (delay) => setTimeout(load, delay);
+  let started = false;
   const load = () => {
-    if (document.hidden) return next(FRAME_MS * 4);
+    if (started && document.hidden) return next(FRAME_MS * 4);
+    started = true;
     img.onload = () => next(FRAME_MS);
     img.onerror = () => next(FRAME_MS * 4);
     img.src = `/api/frame.jpg?warped=${warped ? 1 : 0}&t=${Date.now()}`;

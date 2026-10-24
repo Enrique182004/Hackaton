@@ -43,22 +43,28 @@ export function setNote(node, text, tone = "") {
 }
 
 // Self-scheduling loop: the next tick waits for the previous one, so slow responses never pile up.
+// Hidden tabs skip work but always render once, and catch up the moment they become visible again.
 export function every(ms, fn, { backoffMs = ms * 4 } = {}) {
   let stopped = false;
+  let timer = null;
+  let first = true;
   const tick = async () => {
+    clearTimeout(timer);
     if (stopped) return;
     let delay = ms;
-    if (!document.hidden) {
+    if (first || !document.hidden) {
+      first = false;
       try {
         await fn();
       } catch {
         delay = backoffMs;
       }
     }
-    setTimeout(tick, delay);
+    timer = setTimeout(tick, delay);
   };
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
   tick();
-  return () => { stopped = true; };
+  return () => { stopped = true; clearTimeout(timer); };
 }
 
 export function formatDuration(seconds) {
