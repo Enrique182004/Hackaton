@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from biobench_sar.accessibility import AccessibilityStore, parse_changes
 from biobench_sar.config import Settings
 from biobench_sar.jsonfile import save_json
 from biobench_sar.rag.quiz_bank import QuizBank, QuizProblem, pick_progressive
@@ -176,8 +177,10 @@ StartTask = Callable[..., Any]
 Task = dict[str, Any]
 
 
-def estimate_speech_seconds(text: str) -> float:
-    return len(text.split()) / WORDS_PER_SECOND + 1.0
+def estimate_speech_seconds(text: str, rate: float = 1.0) -> float:
+    """Seconds the voice needs for `text` at `rate` x its normal speed, plus one; a rate that isn't positive is 1."""
+    rate = rate if rate > 0 else 1.0
+    return len(text.split()) / (WORDS_PER_SECOND * rate) + 1.0
 
 
 @dataclass(frozen=True)
@@ -286,6 +289,8 @@ class Assistant:
         self._next_id = 1
         self.selection = DocumentSelection(settings.selection_file)
         self.quiz_bank = QuizBank(settings.quiz_bank_file)
+        # Captions, text size, voice speed, calm mode, high contrast: one set for the whole room, kept as JSON.
+        self.accessibility = AccessibilityStore(settings.accessibility_file)
         self.tutor = TutorSession()
         self._tutor_lock = threading.Lock()
         self._tutor_pushed = self.tutor.to_dict()
@@ -295,6 +300,29 @@ class Assistant:
         # The language of the last reply: what "auto" falls back on when a question leans neither way.
         self._reply_language = self._language if self._language in LANGUAGES else "en"
         self._typed = threading.local()
+
+    # ---- accessibility -----------------------------------------------------
+    def accessibility_body(self) -> dict[str, bool | str]:
+        """The room's five accessibility settings, every key."""
+        return self.accessibility.current.to_dict()
+
+    def set_accessibility(self, body: object) -> dict[str, bool | str]:
+        """Apply a partial change ({"speech_rate": "slower"}, ...); ValueError, with nothing saved or pushed, for
+        anything else. The voice takes the new speed and every open page gets every key."""
+        saved = self.accessibility.update(parse_changes(body)).to_dict()
+        self.push_speech_rate()
+        self._emit("accessibility", saved)
+        return saved
+
+    def push_speech_rate(self) -> None:
+        """Hand the saved voice speed to the TTS service; one without set_rate (older fakes) keeps its own."""
+        tts = getattr(self.services, "tts", None)
+        set_rate = getattr(tts, "set_rate", None)
+        if callable(set_rate):
+            try:
+                set_rate(self.accessibility.current.rate_factor)
+            except Exception:
+                log.exception("could not set the voice speed")
 
     # ---- language ----------------------------------------------------------
     @property
@@ -547,7 +575,9 @@ class Assistant:
             audio_name = svc.tts.speak(action.spoken_text, lang=language)
             url = f"/tts/{audio_name}" if audio_name else None
             self._emit("speak", {"url": url, "text": action.spoken_text, **said})
-            self._speaking_until = time.monotonic() + estimate_speech_seconds(action.spoken_text)
+            # A slower voice talks for longer: the wake-word loop stays deaf until it is done.
+            rate = self.accessibility.current.rate_factor
+            self._speaking_until = time.monotonic() + estimate_speech_seconds(action.spoken_text, rate)
             self._replied_in(language)
             self._record(
                 text,

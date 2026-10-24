@@ -169,6 +169,7 @@ def create_app(
     assistant = Assistant(settings, socketio.emit, socketio.start_background_task)
     svc = services or build_services(settings, assistant.handle_query, assistant.on_state, assistant.should_listen)
     assistant.services = svc
+    assistant.push_speech_rate()  # the voice starts at the room's saved speed
     if services is None:
         assistant.calibrated = _load_initial_calibration(settings)
     _prune_quiz_bank(assistant, svc.store)
@@ -278,6 +279,8 @@ def create_app(
             projector_width=settings.projector_width,
             projector_height=settings.projector_height,
             lan_enabled=lan_on,
+            # The projector's first paint already has the room's text size, captions, calm mode and contrast.
+            access=assistant.accessibility_body(),
         )
 
     @app.get("/")
@@ -541,6 +544,20 @@ def create_app(
             return jsonify({"error": f"language must be one of: {', '.join(LANGUAGE_SETTINGS)}"}), 400
         return jsonify(assistant.set_language(setting))
 
+    # Joined phones may change these too (no only_the_laptop): the teacher walks the room with one.
+    @app.get("/api/accessibility")
+    def api_accessibility() -> Any:
+        return jsonify(assistant.accessibility_body())
+
+    @app.put("/api/accessibility")
+    def api_set_accessibility() -> Any:
+        body = request.get_json(silent=True)
+        try:
+            saved = assistant.set_accessibility(body)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(saved)
+
     @app.get("/api/history")
     def api_history() -> Any:
         return jsonify({"interactions": assistant.history()})
@@ -734,6 +751,7 @@ def create_app(
         socketio.emit("status", {"state": assistant.state}, to=request.sid)
         socketio.emit("tutor", assistant.tutor.to_dict(), to=request.sid)
         socketio.emit("language", assistant.language_body(), to=request.sid)
+        socketio.emit("accessibility", assistant.accessibility_body(), to=request.sid)
 
     @socketio.on("disconnect")
     def on_disconnect(*_args: Any) -> None:

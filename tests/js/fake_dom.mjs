@@ -193,6 +193,10 @@ const DEFAULT_ROUTES = {
   "GET /api/ink": { status: 200, body: { regions: [], size: [1920, 1080] } },
   "GET /api/tutor": { status: 200, body: { mode: "help", learn_topic: null, quiz: null } },
   "GET /api/language": { status: 200, body: { setting: "auto", current: "en" } },
+  "GET /api/accessibility": {
+    status: 200,
+    body: { captions_stay: false, text_size: "normal", speech_rate: "normal", calm: false, high_contrast: false },
+  },
   "POST /api/query": { status: 202, body: { accepted: true } },
   "POST /api/listen": { status: 202, body: { accepted: true } },
 };

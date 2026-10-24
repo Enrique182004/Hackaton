@@ -1102,6 +1102,118 @@ def test_set_language_works_without_an_audio_service(h: Harness) -> None:
     assert h.assistant.set_language("en") == {"setting": "en", "current": "en"}
 
 
+# ---- accessibility ----------------------------------------------------------------------------------------------
+
+ACCESS_DEFAULTS = {
+    "captions_stay": False,
+    "text_size": "normal",
+    "speech_rate": "normal",
+    "calm": False,
+    "high_contrast": False,
+}
+
+
+class RatedTTS(TTS):
+    """A voice with TTSEngine.set_rate. The plain TTS fake above has none, like a voice that can't change speed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rates: list[float] = []
+
+    def set_rate(self, factor: float) -> None:
+        self.rates.append(factor)
+
+
+def _rated(h: Harness) -> RatedTTS:
+    tts = RatedTTS()
+    h.tts = tts
+    h.assistant.services.tts = tts
+    return tts
+
+
+def test_estimate_speech_seconds_scales_with_the_voice_speed() -> None:
+    text = "one two three four five"
+    assert estimate_speech_seconds(text) == estimate_speech_seconds(text, 1.0) == pytest.approx(5 / 2.5 + 1.0)
+    assert estimate_speech_seconds(text, 0.75) == pytest.approx(5 / (2.5 * 0.75) + 1.0)
+    assert estimate_speech_seconds(text, 1.25) == pytest.approx(5 / (2.5 * 1.25) + 1.0)
+    for broken in (0.0, -1.0):
+        assert estimate_speech_seconds(text, broken) == estimate_speech_seconds(text), broken
+    assert estimate_speech_seconds("", 0.75) == 1.0
+
+
+def test_a_slower_speech_rate_keeps_the_microphone_closed_longer(h: Harness, clock: FakeClock) -> None:
+    start = clock.now
+    h.assistant.set_accessibility({"speech_rate": "slower"})
+    h.assistant.handle_query("q")  # "one two three four" at 0.75x: 4 / 1.875 + 1 = 3.13 s instead of 2.6 s
+    window = estimate_speech_seconds("one two three four", 0.75)
+    assert window == pytest.approx(4 / 1.875 + 1.0)
+    clock.now = start + estimate_speech_seconds("one two three four") + 0.01
+    assert h.assistant.should_listen() is False, "a normal-speed answer would be over; the slower one is not"
+    clock.now = start + window + 0.01
+    assert h.assistant.should_listen() is True
+
+
+def test_set_accessibility_saves_sets_the_voice_speed_and_emits_every_key(h: Harness) -> None:
+    tts = _rated(h)
+    expected = {**ACCESS_DEFAULTS, "captions_stay": True, "speech_rate": "slower"}
+    assert h.assistant.set_accessibility({"captions_stay": True, "speech_rate": "slower"}) == expected
+    assert h.payloads("accessibility") == [expected], "one push, with every key, for every open page"
+    assert tts.rates == [0.75]
+    assert h.assistant.accessibility_body() == expected
+    assert json.loads(Settings().accessibility_file.read_text(encoding="utf-8")) == expected
+    later = h.assistant.set_accessibility({"text_size": "large"})
+    assert later == {**expected, "text_size": "large"}, "a partial change keeps the other settings"
+    assert tts.rates == [0.75, 0.75] and len(h.payloads("accessibility")) == 2
+
+
+@pytest.mark.parametrize(
+    "body",
+    [None, ["calm"], {}, {"font": "big"}, {"calm": 1}, {"speech_rate": "Slower"}, {"calm": True, "text_size": "huge"}],
+)
+def test_set_accessibility_rejects_bad_changes_without_saving_or_pushing(h: Harness, body: Any) -> None:
+    tts = _rated(h)
+    with pytest.raises(ValueError):
+        h.assistant.set_accessibility(body)
+    assert h.payloads("accessibility") == [] and tts.rates == []
+    assert h.assistant.accessibility_body() == ACCESS_DEFAULTS, "not even the valid key of a bad body"
+    assert not Settings().accessibility_file.exists()
+
+
+def test_set_accessibility_works_with_a_voice_without_set_rate(h: Harness) -> None:
+    assert not hasattr(h.tts, "set_rate"), "the plain fake stands for a voice that can't change speed"
+    assert h.assistant.set_accessibility({"speech_rate": "faster"})["speech_rate"] == "faster"
+    assert h.payloads("accessibility")[-1]["speech_rate"] == "faster"
+    h.assistant.handle_query("q")
+    assert len(h.tts.langs) == 1, "and it still speaks"
+
+
+def test_set_accessibility_survives_a_voice_that_cannot_change_speed(h: Harness) -> None:
+    class BrokenRate(TTS):
+        def set_rate(self, factor: float) -> None:
+            raise RuntimeError("voice busy")
+
+    h.assistant.services.tts = BrokenRate()
+    assert h.assistant.set_accessibility({"speech_rate": "slower"})["speech_rate"] == "slower"
+    assert h.payloads("accessibility")[-1]["speech_rate"] == "slower", "every page still hears it"
+
+
+def test_push_speech_rate_gives_the_voice_the_saved_speed() -> None:
+    Settings().accessibility_file.write_text(json.dumps({"speech_rate": "faster", "calm": True}), encoding="utf-8")
+    fresh = Harness()
+    assert fresh.assistant.accessibility_body() == {**ACCESS_DEFAULTS, "speech_rate": "faster", "calm": True}
+    tts = _rated(fresh)
+    fresh.assistant.push_speech_rate()
+    assert tts.rates == [1.25]
+
+
+def test_push_speech_rate_before_the_services_are_attached_is_harmless() -> None:
+    events: list[tuple[str, dict[str, Any]]] = []
+    assistant = Assistant(Settings(), lambda name, data: events.append((name, data)), lambda fn, *args: fn(*args))
+    assistant.push_speech_rate()  # services stays None until create_app attaches them
+    assert assistant.set_accessibility({"calm": True})["calm"] is True
+    assert [name for name, _ in events] == ["accessibility"]
+
+
 # ---- display text and spoken text -------------------------------------------------------------------------------
 
 

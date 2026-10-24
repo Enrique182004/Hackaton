@@ -141,10 +141,14 @@ class FakeAudio:
 class FakeTTS:
     def __init__(self) -> None:
         self.spoken: list[tuple[str, str | None]] = []
+        self.rates: list[float] = []  # every set_rate call: the voice speed from the accessibility settings
 
     def speak(self, text: str, lang: str | None = None) -> str | None:
         self.spoken.append((text, lang))
         return "fake.mp3"
+
+    def set_rate(self, factor: float) -> None:
+        self.rates.append(factor)
 
 
 @pytest.fixture(autouse=True)
