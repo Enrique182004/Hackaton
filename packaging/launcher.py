@@ -105,14 +105,23 @@ def bundled_models_dir() -> Path:
 
 
 def configure_bundled_models(models: Path) -> bool:
-    """Point sentence-transformers / Hugging Face at the models shipped in the build and keep them offline."""
-    if not models.is_dir() or not any(models.glob("models--*")):
-        return False
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
-    os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", str(models))
-    os.environ.setdefault("HF_HOME", str(models))
-    return True
+    """Point sentence-transformers / Hugging Face (and Whisper, if bundled) at the models shipped in the build.
+
+    Offline only when the embedding model is really there: otherwise the first run must download it.
+    """
+    found = False
+    if models.is_dir() and any(models.glob("models--*")):
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+        os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+        os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", str(models))
+        os.environ.setdefault("HF_HOME", str(models))
+        found = True
+    # whisper.load_model() takes a checkpoint path as well as a name.
+    whisper = models / "whisper" / f"{os.environ.get('SAR_WHISPER_MODEL', 'base')}.pt"
+    if whisper.is_file():
+        os.environ["SAR_WHISPER_MODEL"] = str(whisper)
+        found = True
+    return found
 
 
 def _sync_config_data_dir() -> None:

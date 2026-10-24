@@ -30,6 +30,7 @@ ENV_KEYS = (
     "HF_HOME",
     "SENTENCE_TRANSFORMERS_HOME",
     "ANONYMIZED_TELEMETRY",
+    "SAR_WHISPER_MODEL",
 )
 
 
@@ -128,6 +129,24 @@ def test_frozen_build_without_bundled_models_stays_online(folders: dict[str, Pat
     launcher.prepare_environment(frozen=True)
     assert "HF_HUB_OFFLINE" not in os.environ
     assert "SENTENCE_TRANSFORMERS_HOME" not in os.environ
+
+
+def test_bundled_whisper_checkpoint_replaces_the_download(folders: dict[str, Path]) -> None:
+    whisper = folders["bundle"] / "models" / "whisper"
+    whisper.mkdir(parents=True)
+    (whisper / "base.pt").write_bytes(b"checkpoint")
+    launcher.prepare_environment(frozen=True)
+    assert os.environ["SAR_WHISPER_MODEL"] == str(whisper / "base.pt")
+    assert "HF_HUB_OFFLINE" not in os.environ, "no embedding model bundled"
+
+
+def test_a_different_whisper_model_still_downloads(folders: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+    whisper = folders["bundle"] / "models" / "whisper"
+    whisper.mkdir(parents=True)
+    (whisper / "base.pt").write_bytes(b"checkpoint")
+    monkeypatch.setenv("SAR_WHISPER_MODEL", "small")
+    launcher.prepare_environment(frozen=True)
+    assert os.environ["SAR_WHISPER_MODEL"] == "small"
 
 
 def test_source_checkout_leaves_model_settings_alone(folders: dict[str, Path]) -> None:
