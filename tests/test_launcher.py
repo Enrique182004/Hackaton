@@ -31,6 +31,7 @@ ENV_KEYS = (
     "SENTENCE_TRANSFORMERS_HOME",
     "ANONYMIZED_TELEMETRY",
     "SAR_WHISPER_MODEL",
+    "SAR_HOST",
 )
 
 
@@ -430,6 +431,29 @@ def test_run_app_warns_about_ollama_and_still_starts(monkeypatch: pytest.MonkeyP
     assert launcher.run_app(open_browser=False, out=lines.append) == 0
     assert started == [True]
     assert any("https://ollama.com/download" in line for line in lines)
+
+
+def test_run_app_shows_the_network_address_when_serving_the_lan(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SAR_HOST", "0.0.0.0")
+    monkeypatch.setenv("SAR_VLM_BACKEND", "mock")
+    monkeypatch.setattr(launcher, "lan_address", lambda: "192.168.1.20")
+    monkeypatch.setattr(app_module, "main", lambda: None)
+    lines: list[str] = []
+    assert launcher.run_app(open_browser=False, out=lines.append) == 0
+    assert "  Dashboard    http://127.0.0.1:5050/dashboard" in lines
+    assert any(line.endswith("http://192.168.1.20:5050/dashboard") for line in lines)
+
+
+def test_run_app_keeps_quiet_about_the_lan_on_localhost(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SAR_VLM_BACKEND", "mock")
+    monkeypatch.setattr(launcher, "lan_address", lambda: pytest.fail("localhost only"))
+    monkeypatch.setattr(app_module, "main", lambda: None)
+    assert launcher.run_app(open_browser=False, out=lambda line: None) == 0
+
+
+def test_lan_address_is_never_loopback() -> None:
+    address = launcher.lan_address()
+    assert address is None or not address.startswith("127.")
 
 
 def test_run_app_skips_the_ollama_check_for_other_backends(monkeypatch: pytest.MonkeyPatch) -> None:

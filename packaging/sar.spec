@@ -8,6 +8,7 @@
 # macOS   -> dist/SAR Whiteboard Assistant.app (camera + microphone usage strings in Info.plist)
 # Smoke test either with `--self-test`; see docs/DESKTOP_BUILDS.md.
 
+import importlib.util
 import re
 import sys
 from pathlib import Path
@@ -23,6 +24,19 @@ VERSION = re.search(r'__version__\s*=\s*"([^"]+)"', (PACKAGE / "__init__.py").re
 IS_MAC = sys.platform == "darwin"
 IS_WIN = sys.platform == "win32"
 sys.path.insert(0, str(ROOT))  # collect_submodules("biobench_sar") imports the package from the checkout
+
+
+def _existing(*names):
+    """The modules among `names` that this environment has."""
+    found = []
+    for name in names:
+        try:
+            if importlib.util.find_spec(name) is not None:
+                found.append(name)
+        except ImportError:
+            pass
+    return found
+
 
 # ---- data files ----------------------------------------------------------------------------------------
 # Flask finds templates/static next to biobench_sar/app.py, and config.PACKAGE_DIR / "knowledge" holds the
@@ -78,12 +92,7 @@ hiddenimports = [
     # Flask-SocketIO(async_mode="threading") loads its driver by name.
     "engineio.async_drivers.threading",
     "simple_websocket",
-    # sentence-transformers -> transformers resolves the model class from config.json (BERT for MiniLM).
     "sentence_transformers",
-    "transformers.models.bert.configuration_bert",
-    "transformers.models.bert.modeling_bert",
-    "transformers.models.bert.tokenization_bert",
-    "transformers.models.bert.tokenization_bert_fast",
     "whisper",
     "tiktoken_ext",
     "tiktoken_ext.openai_public",
@@ -103,7 +112,17 @@ elif IS_MAC:
     hiddenimports += ["pyttsx3.drivers.nsss", "pyttsx3.drivers.avspeech"]
 else:
     hiddenimports += ["pyttsx3.drivers.espeak", "pyttsx3.drivers._espeak"]
-hiddenimports += collect_submodules("biobench_sar")
+
+
+# sentence-transformers -> transformers picks the model class from config.json (BERT for MiniLM) by name.
+# transformers 5 folded the *_fast tokenizer modules into the plain ones, so only list what exists.
+hiddenimports += _existing(
+    "transformers.models.bert.configuration_bert",
+    "transformers.models.bert.modeling_bert",
+    "transformers.models.bert.tokenization_bert",
+    "transformers.models.bert.tokenization_bert_fast",
+)
+hiddenimports += collect_submodules("biobench_sar", filter=lambda name: name != "biobench_sar.__main__")
 # chromadb picks its API, segment manager and telemetry classes from dotted-path strings in its Settings.
 hiddenimports += collect_submodules("chromadb", filter=lambda name: not name.startswith("chromadb.test"))
 
@@ -125,6 +144,10 @@ excludes = [
     "tensorboard",
     "torch.utils.tensorboard",
     "chromadb.test",
+    # Optional PyMuPDF add-ons (not in requirements.txt) that pymupdf imports when present; the app doesn't
+    # use them, and pymupdf.layout would need ~50 MB of ONNX models collected as well.
+    "pymupdf.layout",
+    "pymupdf4llm",
 ]
 
 a = Analysis(

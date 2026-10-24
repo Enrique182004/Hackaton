@@ -227,7 +227,7 @@ def ollama_advice(status: OllamaStatus, model: str) -> list[str]:
 
 
 def _connect_host(host: str) -> str:
-    return "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    return "127.0.0.1" if serves_network(host) else host
 
 
 def dashboard_url(host: str, port: int) -> str:
@@ -235,6 +235,20 @@ def dashboard_url(host: str, port: int) -> str:
     if ":" in host:
         host = f"[{host}]"
     return f"http://{host}:{port}/dashboard"
+
+
+def serves_network(host: str) -> bool:
+    return host in ("", "0.0.0.0", "::")
+
+
+def lan_address() -> str | None:
+    """This computer's address on the local network, for phones and tablets on the same Wi-Fi."""
+    with contextlib.suppress(OSError), socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.connect(("10.254.254.254", 1))  # UDP connect sends nothing; it only picks the outgoing interface
+        address = str(sock.getsockname()[0])
+        if not address.startswith(("127.", "0.")):
+            return address
+    return None
 
 
 def port_free(host: str, port: int) -> bool:
@@ -547,6 +561,10 @@ def run_app(open_browser: bool = True, out: Out = say) -> int:
     out(f"{APP_NAME} {__version__}")
     out(f"  Data folder  {os.environ.get('SAR_DATA_DIR', '')}")
     out(f"  Dashboard    {url}")
+    if serves_network(settings.host):
+        address = lan_address()
+        if address:
+            out(f"  On a phone or tablet (same Wi-Fi): http://{address}:{settings.port}/dashboard")
     if settings.vlm_backend == "ollama":
         advice = ollama_advice(check_ollama(settings.vlm_base_url, settings.vlm_model), settings.vlm_model)
         for line in advice:
