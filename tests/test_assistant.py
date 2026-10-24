@@ -1678,7 +1678,22 @@ def test_anything_but_yes_keeps_the_quiz_and_is_handled_as_usual(h: Harness) -> 
     assert _tutor_events(h)[-1]["confirm_stop"] is False
 
 
-@pytest.mark.parametrize("yes", ["yes", "yeah", "ok", "sure", "Sí", "claro", "dale", "stop the quiz"])
+@pytest.mark.parametrize("unsure", ["please", "fine", "Bueno", "por favor", "porfa"])
+def test_an_unsure_reply_to_the_question_keeps_the_quiz(h: Harness, unsure: str) -> None:
+    # Ending the quiz loses its progress, so only a clear yes ends it; this reply is handled as any other turn.
+    _bank(h, "a.md", ("1 + 1", "2", 1), ("2 + 2", "4", 1))
+    _ask(h, "quiz me")
+    h.assistant.handle_query("stop")
+    assert h.assistant.tutor.pending_stop
+    task = _ask(h, unsure, state="celebrating", ink=True)["task"]
+    tutor = h.assistant.tutor
+    assert task["stage"] == "check" and tutor.quiz_active and not tutor.pending_stop
+    assert "the quiz is over" not in h.payloads("speak")[-1]["text"]
+
+
+@pytest.mark.parametrize(
+    "yes", ["yes", "yeah", "yes please", "ok", "sure", "Sí", "Sí, termínalo", "claro", "dale", "stop the quiz"]
+)
 def test_yes_after_the_question_stops_with_the_score(h: Harness, yes: str) -> None:
     _bank(h, "a.md", ("1 + 1", "2", 1), ("2 + 2", "4", 1))
     _ask(h, "quiz me")
