@@ -305,7 +305,8 @@ def test_math_few_shot_examples_are_json_in_words(kind: str, states: set[str]) -
         assert e["animation_state"] in ANIMATION_STATES
         assert isinstance(e["target_x"], int) and isinstance(e["target_y"], int)
         assert not NOTATION.search(e["spoken_text"]), e["spoken_text"]
-        assert set(e) - {"board_answer", "board_problem"} == {"spoken_text", "animation_state", "target_x", "target_y"}
+        helpers = {"board_answer", "board_problem", "new_problem"}
+        assert set(e) - helpers == {"spoken_text", "animation_state", "target_x", "target_y"}
 
 
 def test_math_mode_rules() -> None:
@@ -1238,7 +1239,9 @@ def test_spanish_math_prompts_are_spanish_with_the_scan_rule(kind: str) -> None:
     assert "Responde SIEMPRE en español de Latinoamérica" in prompt and "háblale de tú" in prompt
     for phrase in ("dos tercios", "x al cuadrado", "tres x más cinco es igual a doce", "menos cuatro"):
         assert phrase in prompt
-    assert ("board_answer" in prompt) == (kind == "quiz") and ("board_problem" in prompt) == (kind == "practice")
+    assert ("board_answer" in prompt) == (kind == "quiz")
+    assert ("board_problem" in prompt) == (kind in ("help", "practice"))
+    assert ("new_problem" in prompt) == (kind in ("practice", "learn"))
     for example in _few_shot(prompt):
         assert set(example) >= {"spoken_text", "animation_state", "target_x", "target_y"}
         assert not _digits_or_symbols(example["spoken_text"]), example
@@ -1634,3 +1637,90 @@ def test_check_system_prompts_never_show_a_next_problem() -> None:
         prompt = system_prompt("math", "quiz", language)
         assert "Next problem" not in prompt and "Siguiente problema" not in prompt
         assert "2x = 14" not in prompt and "catorce" not in prompt and "fourteen" not in prompt
+
+
+# ---- the problem for the projector's card -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_prompts_ask_for_the_problem_in_symbols(language: str) -> None:
+    prompts = vc.MATH_PROMPTS_BY_LANGUAGE[language]
+    assert '"board_problem": str' in prompts["help"] and '"new_problem"' not in prompts["help"]
+    assert '"board_problem": str, "new_problem": str' in prompts["practice"]
+    assert '"new_problem": str' in prompts["learn"]
+    assert '"new_problem"' not in prompts["quiz"] and '"board_problem"' not in prompts["quiz"]
+
+
+def test_problem_schemas() -> None:
+    assert vc.HELP_SCHEMA.startswith('{"board_problem": str, "spoken_text"')
+    assert vc.PRACTICE_SCHEMA.startswith('{"board_problem": str, "new_problem": str, "spoken_text"')
+    assert vc.LEARN_SCHEMA.startswith('{"new_problem": str, "spoken_text"')
+
+
+def _client_replying(monkeypatch: pytest.MonkeyPatch, *replies: str) -> VLMClient:
+    client = VLMClient("ollama", "m", "http://x", profile="math")
+    queue = list(replies)
+    monkeypatch.setattr(client, "_ollama", lambda *a, **k: queue.pop(0))
+    return client
+
+
+def _card_ask(client: VLMClient, mode: str, task: dict[str, Any] | None = None, query: str = "help me") -> Any:
+    action = client.evaluate(query, b"jpg", [], [], (1920, 1080), mode=mode, task=task)
+    assert isinstance(action, vc.TutorAction)
+    return action
+
+
+def test_help_reply_keeps_the_board_problem(monkeypatch: pytest.MonkeyPatch) -> None:
+    reply = (
+        '{"board_problem": "2x + 3 = 11", "spoken_text": "Subtract three from both sides.", '
+        '"animation_state": "pointing", "target_x": 700, "target_y": 400}'
+    )
+    action = _card_ask(_client_replying(monkeypatch, reply), "help")
+    assert (action.board_problem, action.new_problem) == ("2x + 3 = 11", None)
+
+
+def test_practice_reply_keeps_the_new_problem(monkeypatch: pytest.MonkeyPatch) -> None:
+    reply = (
+        '{"board_problem": "2x + 3 = 11", "new_problem": "4x + 7 = 19", "spoken_text": "Try this one. Four x plus '
+        'seven equals nineteen. Write it down and solve it.", "animation_state": "idle", "target_x": 960, '
+        '"target_y": 540}'
+    )
+    action = _card_ask(_client_replying(monkeypatch, reply), "practice", {"kind": "practice"}, "another one")
+    assert (action.board_problem, action.new_problem) == ("2x + 3 = 11", "4x + 7 = 19")
+
+
+def test_missing_and_numeric_problem_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    reply = (
+        '{"board_problem": 12, "spoken_text": "Write the next step.", "animation_state": "idle", '
+        '"target_x": 1, "target_y": 1}'
+    )
+    action = _card_ask(_client_replying(monkeypatch, reply), "help")
+    assert (action.board_problem, action.new_problem) == ("12", None)
+
+
+def test_practice_read_back_shows_codes_problem(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Both replies read the board's problem back: code dictates a variant, and the card must show that one.
+    back = (
+        '{"board_problem": "2x + 3 = 11", "new_problem": "2x + 3 = 11", "spoken_text": "Two x plus three equals '
+        'eleven.", "animation_state": "idle", "target_x": 960, "target_y": 540}'
+    )
+    action = _card_ask(_client_replying(monkeypatch, back, back), "practice", {"kind": "practice"}, "another one")
+    assert action.new_problem and action.new_problem != "2x + 3 = 11"
+    assert action.new_problem in (action.display_text or "")
+
+
+def test_fallback_problem() -> None:
+    assert vc.fallback_problem("practice", {"kind": "practice"})
+    assert vc.fallback_problem("learn", {"kind": "learn", "stage": "example", "topic": "fractions"}) == "1/5 + 2/5"
+    assert vc.fallback_problem("learn", {"kind": "learn", "stage": "offer", "topic": "fractions"}) is None
+    assert vc.fallback_problem("help", None) is None
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_mock_dictates_a_problem_for_the_card(language: str) -> None:
+    client = VLMClient("mock", "m", "", profile="math")
+    task = {"kind": "learn", "stage": "example", "topic": "fractions"}
+    lesson = client.evaluate("make one up", None, [], [], (1920, 1080), mode="help", task=task, language=language)
+    practice = client.evaluate("another", None, [], [], (1920, 1080), mode="practice", task={"kind": "practice"})
+    assert lesson.new_problem == "1/5 + 2/5"
+    assert practice.new_problem == vc.fallback_problem("practice", {"kind": "practice"})
