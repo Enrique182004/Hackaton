@@ -1,18 +1,11 @@
 import { $, request } from "./api.js";
 import { sideNote } from "./ask.js";
+import { onLanguageChange, t } from "../i18n.js";
 import { logEvent } from "./log.js";
-import { MODE_LABELS, currentProfile, onProfileChange, profileKnown } from "./profile.js";
+import { currentProfile, modeLabel, onProfileChange, profileKnown } from "./profile.js";
 import { setIdleBadge } from "./status.js";
 
 export const MODES = ["help", "practice", "quiz"];
-
-const CHOSEN_NOTES = {
-  help: "Now write your problem on the board and ask for the next step.",
-  practice: "Now write a problem on the board and ask for one like it.",
-  quiz: "Press Start quiz, or just say or type “I'm ready”.",
-};
-const QUIZ_SOURCE = "Problems come from the worksheets you tick in step 1, or the assistant makes some up.";
-const OFFLINE_HINT = "Check the assistant's Terminal window is still open, then try again.";
 
 // Bumped on every render, so a GET that was in flight during a newer change can't roll the UI back.
 let version = 0;
@@ -20,10 +13,10 @@ let last = null;
 
 // The server's score counts only answers right on the first try: a fixed answer moves on but scores nothing.
 function quizSummary(quiz, active) {
-  if (active) return `Problem ${quiz.number} of ${quiz.total} · ${quiz.score} right on the first try`;
+  if (active) return t("tutor.progress", { n: quiz.number, total: quiz.total, score: quiz.score });
   // A quiz that never got past its first problem has nothing worth reporting.
-  if (quiz && (quiz.score > 0 || quiz.number > 1)) return `Last quiz: ${quiz.score} right on the first try. Press Start quiz to go again.`;
-  return QUIZ_SOURCE;
+  if (quiz && (quiz.score > 0 || quiz.number > 1)) return t("tutor.last", { score: quiz.score });
+  return t("tutor.quizSource");
 }
 
 export function renderTutor(data) {
@@ -45,10 +38,11 @@ export function renderTutor(data) {
   $("quiz-start-btn").hidden = active;
   $("quiz-stop-btn").hidden = !active;
   const learn = $("learn-line");
-  learn.textContent = data.learn_topic ? `Learning: ${data.learn_topic}` : "";
+  learn.textContent = data.learn_topic ? t("tutor.learning", { topic: data.learn_topic }) : "";
   learn.hidden = !math || !data.learn_topic;
-  if (!math) setIdleBadge("ready");
-  else setIdleBadge(active ? `quiz · ${quiz.number} of ${quiz.total}` : MODE_LABELS[mode]);
+  if (!math) setIdleBadge(null);
+  else if (active) setIdleBadge(() => t("tutor.badge.quiz", { n: quiz.number, total: quiz.total }));
+  else setIdleBadge(() => modeLabel(mode));
 }
 
 export async function refreshTutor() {
@@ -57,9 +51,10 @@ export async function refreshTutor() {
   if (seen === version) renderTutor(data);
 }
 
+// `what` is the tutor.fail.* key; the log keeps the server's raw reason.
 function failed(what, err) {
   logEvent("tutor", `${what}: ${err.message}`);
-  sideNote(`Couldn't ${what}. ${OFFLINE_HINT}`, "warn");
+  sideNote(() => t(`tutor.fail.${what}`, { hint: t("hint.offline") }), "warn");
 }
 
 async function chooseMode(mode) {
@@ -69,16 +64,13 @@ async function chooseMode(mode) {
     const data = await request("/api/tutor/mode", { method: "PUT", json: { mode } });
     renderTutor(data);
     const running = data.quiz && data.quiz.active;
-    sideNote(running ? "A quiz is already running. Write your answer on the board." : CHOSEN_NOTES[mode], "ok");
+    sideNote(() => t(running ? "tutor.running" : `tutor.chosen.${mode}`), "ok");
   } catch (err) {
-    failed("change how the assistant helps", err);
+    failed("mode", err);
   } finally {
     for (const b of buttons) b.disabled = false;
   }
 }
-
-// The assistant reads each problem out before it checks an answer, so the first step is always asking for it.
-const STARTED_NOTE = "Quiz started! Say or type “I'm ready” and the assistant will read out the first problem.";
 
 async function quizAction(kind) {
   const button = $(`quiz-${kind}-btn`);
@@ -86,9 +78,10 @@ async function quizAction(kind) {
   try {
     const data = await request(`/api/tutor/quiz/${kind}`, { method: "POST" });
     renderTutor(data);
-    sideNote(kind === "start" ? STARTED_NOTE : "Quiz stopped.", "ok");
+    // The assistant reads each problem out before it checks an answer, so the first step is always asking for it.
+    sideNote(() => t(kind === "start" ? "tutor.started" : "tutor.stopped"), "ok");
   } catch (err) {
-    failed(kind === "start" ? "start the quiz" : "stop the quiz", err);
+    failed(kind, err);
   } finally {
     button.disabled = false;
   }
@@ -99,6 +92,9 @@ export function initTutor() {
   $("quiz-start-btn").addEventListener("click", () => quizAction("start"));
   $("quiz-stop-btn").addEventListener("click", () => quizAction("stop"));
   onProfileChange(() => {
+    if (last) renderTutor(last);
+  });
+  onLanguageChange(() => {
     if (last) renderTutor(last);
   });
   // An older server has no tutor API: the picker simply stays hidden.

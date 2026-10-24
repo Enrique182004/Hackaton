@@ -2,6 +2,8 @@ import { $, request, every, setNote } from "./api.js";
 import { initAsk, addInteraction, showPending, loadHistory, onListenState } from "./ask.js";
 import { initCamera, setTarget } from "./camera.js";
 import { initFiles, refreshFiles, renderFiles } from "./files.js";
+import { t } from "../i18n.js";
+import { initLanguage, languageVersion, refreshLanguage, renderLanguage } from "./language.js";
 import { renderStatus, renderState, renderConnection } from "./status.js";
 import { initTabs } from "./tabs.js";
 import { logEvent, renderConfig } from "./log.js";
@@ -58,6 +60,7 @@ function initSocket() {
     loadHistory().catch(() => {});
     refreshFiles().catch(() => {});
     refreshTutor().catch(() => {});
+    refreshLanguage().catch(() => {});
   });
   socket.on("disconnect", () => {
     socketLive = false;
@@ -89,17 +92,20 @@ function initSocket() {
     renderTutor(d);
     logEvent("tutor", d);
   });
+  socket.on("language", (d) => {
+    renderLanguage(d);
+    logEvent("language", d);
+  });
 }
 
+// The calib.* key for a failed lining-up; the raw reason goes to the activity log.
 function calibrationError(res) {
   const reason = res.error || "";
-  if (res.status === 503 || /no camera frame/i.test(reason)) return "The camera isn't working yet, so it can't line up. Fix the camera first (see the checklist).";
-  if (res.status === 409) return "Already lining up, one moment…";
-  if (/not detected/i.test(reason)) {
-    return "Couldn't see the checkerboard. Check the projector page is open on the projector in full screen (press F there), the camera sees the whole board and the room isn't too bright, then try again.";
-  }
+  if (res.status === 503 || /no camera frame/i.test(reason)) return "calib.noCamera";
+  if (res.status === 409) return "calib.busy";
+  if (/not detected/i.test(reason)) return "calib.notDetected";
   logEvent("calibrate", reason || "unknown problem");
-  return "Couldn't line up. Check the projector page is open on the projector in full screen and the assistant's Terminal window is still open, then try again.";
+  return "calib.failed";
 }
 
 function initCalibration() {
@@ -107,25 +113,27 @@ function initCalibration() {
   const msg = $("calib-msg");
   btn.addEventListener("click", async () => {
     btn.disabled = true;
-    setNote(msg, "Showing the checkerboard on the board… keep the camera still.");
+    const say = (key, tone) => setNote(msg, () => t(key), tone);
+    say("calib.showing");
     try {
       const res = await request("/api/calibrate", { method: "POST", timeout: 15000 });
       if (res.ok && res.error) {
         logEvent("calibrate", res.error);
-        setNote(msg, "Lined up, but it couldn't be saved, so do this again after restarting the assistant.", "warn");
+        say("calib.notSaved", "warn");
       } else if (res.ok) {
-        setNote(msg, "Lined up! The assistant now knows where the board is.", "ok");
+        say("calib.ok", "ok");
       } else {
-        setNote(msg, calibrationError(res), "bad");
+        say(calibrationError(res), "bad");
       }
     } catch (err) {
-      setNote(msg, calibrationError({ status: err.status, error: err.body?.error || err.message }), "bad");
+      say(calibrationError({ status: err.status, error: err.body?.error || err.message }), "bad");
     } finally {
       btn.disabled = false;
     }
   });
 }
 
+initLanguage();
 initTabs();
 initSocket();
 loadHistory().catch(() => {});
@@ -135,7 +143,10 @@ initFiles();
 initTutor();
 initCalibration();
 every(STATUS_MS, async () => {
+  const seenLanguage = languageVersion();
   const status = await request("/api/status");
+  // The poll also catches a language change whose socket event was missed; an older reply never undoes a newer one.
+  if (seenLanguage === languageVersion()) renderLanguage({ setting: status.language, current: status.current_language });
   // /api/status names the subject too, so a failed /api/config can't leave the wrong one showing.
   if (status.profile) setProfile(status.profile);
   if (!configLoaded) loadConfig().catch(() => {});
@@ -146,3 +157,4 @@ every(STATUS_MS, async () => {
   if (!socketLive) refreshTutor().catch(() => {});
 });
 loadConfig().catch(() => {});
+refreshLanguage().catch(() => {});

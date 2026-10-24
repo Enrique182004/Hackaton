@@ -1,9 +1,13 @@
 import { $, el, request, setNote } from "./api.js";
+import { has, onLanguageChange, t } from "../i18n.js";
 import { logEvent } from "./log.js";
-import { MODE_LABELS, currentProfile, onProfileChange, words } from "./profile.js";
-import { LISTENING_NOTE } from "./status.js";
+import { currentProfile, modeLabel, onProfileChange, words } from "./profile.js";
+import { listeningNote } from "./status.js";
 
 let pending = null;
+let pendingText = "";
+// The turns on screen, newest first, so a language switch can re-write their notes.
+let turns = [];
 let serverState = "idle";
 // The push-to-talk phase the ask note currently shows, so status events never clear an unrelated note.
 let micNote = null;
@@ -11,15 +15,15 @@ let micNote = null;
 // A 202 from /api/listen only queues the recording (in wake mode it starts after the current chunk),
 // so "speak now" waits for the server's own "listening" status.
 const MIC_NOTES = {
-  starting: ["Getting the microphone ready…", ""],
-  listening: [LISTENING_NOTE, "ok"],
-  transcribing: ["Writing down what you said…", ""],
+  starting: [() => t("mic.starting"), ""],
+  listening: [listeningNote, "ok"],
+  transcribing: [() => t("state.transcribing"), ""],
 };
 
 function modeNote(item) {
   if (currentProfile() !== "math") return null;
-  if (item.task_kind === "learn") return "learning something new";
-  return MODE_LABELS[item.mode] || null;
+  if (item.task_kind === "learn") return t("note.learning");
+  return has(`mode.${item.mode}`) ? modeLabel(item.mode) : null;
 }
 
 // The server's own texts for a model call or pipeline that failed, for servers that send no `failed` flag.
@@ -32,10 +36,10 @@ function failedTurn(item) {
 }
 
 function errorNote(item, sawDrawing) {
-  if (failedTurn(item)) return "something went wrong, so this isn't a real answer";
+  if (failedTurn(item)) return t("note.failed");
   // A quiz answer can be given by voice, with nothing on the board.
-  if (item.task_kind === "quiz") return "that answer isn't right yet";
-  return sawDrawing ? `found a mistake in ${words().work}` : "found a mistake";
+  if (item.task_kind === "quiz") return t("note.quizWrong");
+  return sawDrawing ? t("note.mistakeIn", { work: words().work }) : t("note.mistake");
 }
 
 function marginNote(item) {
@@ -48,27 +52,40 @@ function marginNote(item) {
   if (item.animation_state === "error") {
     parts.push(errorNote(item, sawDrawing));
   } else if (sawDrawing && item.animation_state === "pointing") {
-    parts.push(`pointed at ${work}`);
+    parts.push(t("note.pointed", { work }));
   } else if (sawDrawing && item.animation_state === "celebrating") {
-    parts.push("all correct!");
+    parts.push(t("note.correct"));
   }
-  if (item.sources.length) parts.push(`read ${item.sources.join(", ")}`);
-  else parts.push("didn't use your files");
-  if (!item.had_frame) parts.push("couldn't see the board");
-  parts.push(`took ${Math.round(item.latency_s)} s`);
+  if (item.sources.length) parts.push(t("note.read", { sources: item.sources.join(", ") }));
+  else parts.push(t("note.noFiles"));
+  if (!item.had_frame) parts.push(t("note.noBoard"));
+  parts.push(t("note.took", { n: Math.round(item.latency_s) }));
   return parts.join(" · ");
 }
 
 function turnNode(item) {
+  // In math, spoken_text spells notation out for the voice; display_text keeps "3x + 5 = 20" for reading.
+  const answer = el("p", { className: "a", textContent: item.display_text || item.spoken_text });
+  // The answer's own language, so a screen reader reads a Spanish answer in Spanish on an English page.
+  if (item.language) answer.setAttribute("lang", item.language);
   return el(
     "li",
     { className: "entry", dataset: { state: item.animation_state } },
-    el("p", { className: "who", textContent: "You asked" }),
+    el("p", { className: "who", textContent: t("turn.you") }),
     el("p", { className: "q", textContent: item.query }),
-    el("p", { className: "who", textContent: "Assistant" }),
-    // In math, spoken_text spells notation out for the voice; display_text keeps "3x + 5 = 20" for reading.
-    el("p", { className: "a", textContent: item.display_text || item.spoken_text }),
+    el("p", { className: "who", textContent: t("turn.assistant") }),
+    answer,
     el("span", { className: "margin-note", textContent: marginNote(item) }),
+  );
+}
+
+function pendingNode(text) {
+  return el(
+    "li",
+    { className: "entry pending" },
+    el("p", { className: "who", textContent: t("turn.you") }),
+    el("p", { className: "q", textContent: text }),
+    el("p", { className: "a", textContent: t("turn.thinking") }),
   );
 }
 
@@ -76,30 +93,33 @@ function showEmpty() {
   $("timeline-empty").hidden = $("timeline").children.length > 0;
 }
 
+function renderTimeline() {
+  pending = pending ? pendingNode(pendingText) : null;
+  $("timeline").replaceChildren(...(pending ? [pending] : []), ...turns.map(turnNode));
+  showEmpty();
+}
+
 export function addInteraction(item) {
   if (pending) {
     pending.remove();
     pending = null;
   }
+  turns.unshift(item);
   $("timeline").prepend(turnNode(item));
   showEmpty();
 }
 
 export function showPending(text) {
   if (pending) pending.remove();
-  pending = el(
-    "li",
-    { className: "entry pending" },
-    el("p", { className: "who", textContent: "You asked" }),
-    el("p", { className: "q", textContent: text }),
-    el("p", { className: "a", textContent: "Thinking…" }),
-  );
+  pendingText = text;
+  pending = pendingNode(text);
   $("timeline").prepend(pending);
   showEmpty();
 }
 
 export async function loadHistory() {
   const { interactions } = await request("/api/history");
+  turns = interactions;
   $("timeline").replaceChildren(...interactions.map(turnNode));
   showEmpty();
 }
@@ -127,7 +147,7 @@ function showMicNote(phase) {
   // "Getting ready" waits for the server's "listening" status; if that never comes, don't leave it up forever.
   if (phase === "starting") {
     micTimer = setTimeout(() => {
-      if (micNote === "starting") note("The microphone didn't start. Try Talk again, or type your question.", "warn");
+      if (micNote === "starting") note(() => t("mic.didntStart"), "warn");
     }, MIC_START_TIMEOUT_MS);
   }
 }
@@ -142,10 +162,10 @@ export function onListenState(state) {
 }
 
 function listenError(err) {
-  if (err.status === 503) return "No microphone found. Plug one in and restart the app, or type your question.";
-  if (err.status === 409) return "Already listening.";
+  if (err.status === 503) return () => t("mic.none");
+  if (err.status === 409) return () => t("mic.already");
   logEvent("listen", err.message);
-  return "The microphone isn't working right now. Try Talk again, or type your question.";
+  return () => t("mic.broken");
 }
 
 function renderExamples() {
@@ -158,7 +178,7 @@ function renderExamples() {
     });
     return button;
   });
-  $("examples").replaceChildren(el("span", { className: "scribble", textContent: "try:" }), ...buttons);
+  $("examples").replaceChildren(el("span", { className: "scribble", textContent: t("ask.try") }), ...buttons);
 }
 
 export function initAsk() {
@@ -169,6 +189,10 @@ export function initAsk() {
     // Margin notes depend on the subject, and history can load before /api/config answers.
     loadHistory().catch(() => {});
   });
+  onLanguageChange(() => {
+    renderExamples();
+    renderTimeline();
+  });
   $("ask-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = input.value.trim();
@@ -177,13 +201,13 @@ export function initAsk() {
     try {
       await request("/api/query", { method: "POST", json: { text } });
       input.value = "";
-      note("Sent! Watch the board for the answer.", "ok");
+      note(() => t("ask.sent"), "ok");
     } catch (err) {
       if (err.status === 409) {
-        note("Still answering the last question. Try again in a moment.", "warn");
+        note(() => t("ask.stillAnswering"), "warn");
       } else {
         logEvent("query", err.message);
-        note("Couldn't send your question. Check the assistant's Terminal window is still open, then try again.", "warn");
+        note(() => t("ask.sendFailed", { hint: t("hint.offline") }), "warn");
       }
     } finally {
       $("ask-btn").disabled = false;

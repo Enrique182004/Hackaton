@@ -1,4 +1,5 @@
 import { $ } from "./api.js";
+import { bindText } from "../i18n.js";
 
 const STEPS = ["files", "board", "ask", "more"];
 const STORAGE_KEY = "sar.dashboard.step";
@@ -34,8 +35,9 @@ export function selectStep(step, { focus = false, byUser = false } = {}) {
   }
 }
 
+// `text` may be a function of the current language (see bindText).
 export function setBadge(step, text, tone = "") {
-  $(`badge-${step}`).textContent = text;
+  bindText($(`badge-${step}`), text);
   $(`tab-${step}`).dataset.tone = tone;
 }
 

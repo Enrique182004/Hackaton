@@ -74,6 +74,19 @@ h1 { margin: 0; font: 700 1.45rem/1.1 var(--font-head); letter-spacing: -0.01em;
 .status-line[data-state="speaking"] .status-dot { background: var(--accent); animation: pulse 0.9s ease-in-out infinite; }
 .status-line[data-state="offline"] .status-dot { background: var(--ink-faint); }
 
+/* Language switch: a small segmented control, like the camera view toggle under More tools. */
+.lang { display: inline-flex; border: 2px solid var(--ink); border-radius: 6px; overflow: hidden; }
+.lang[hidden] { display: none; }
+.lang button {
+  min-height: 44px; padding: 0 var(--s3); border: 0; border-left: 1px solid var(--rule);
+  background: var(--card); color: var(--ink); font: 700 0.88rem var(--font-body); cursor: pointer;
+}
+.lang button:first-child { border-left: 0; }
+.lang button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.lang button:disabled { cursor: progress; }
+.lang-note { flex-basis: 100%; margin: 0; }
+.lang-note:empty { display: none; }
+
 /* ---- step tabs ---------------------------------------------------------- */
 .steps { display: grid; grid-template-columns: repeat(3, 1fr) auto; gap: var(--s2); margin: var(--s4) 0 var(--s3); }
 @media (max-width: 720px) { .steps { grid-template-columns: 1fr 1fr; } }
@@ -174,7 +187,8 @@ input::placeholder { color: var(--ink-faint); }
 .camera { margin: 0; }
 .camera figcaption { margin-top: var(--s2); font-size: 0.88rem; color: var(--ink-soft); }
 .viewport {
-  position: relative; aspect-ratio: 16 / 9; overflow: hidden;
+  /* camera.js sets the projector's own shape (Settings); 16:10 is the classroom kit's WXGA projector. */
+  position: relative; aspect-ratio: 16 / 10; overflow: hidden;
   background: var(--paper-edge); border: 2px solid var(--ink); border-radius: 4px;
   box-shadow: 4px 4px 0 var(--rule);
 }

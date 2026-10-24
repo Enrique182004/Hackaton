@@ -1,48 +1,30 @@
-import { $ } from "./api.js";
+import { setContext, t } from "../i18n.js";
 
-// Subject-specific wording. The template ships the math text (the server's default profile) so the
-// first paint is right; biology swaps in once /api/config answers.
-const WORDS = {
-  math: {
-    examples: ["I want to learn how to solve fractions", "Help me with the next step", "Quiz me on equations"],
-    placeholder: "Ask about the math on your board, or what you want to learn…",
-    filesTab: "Worksheets & notes",
-    filesHint: "Add your worksheets and notes. Before answering, the assistant looks in the files you tick, and quiz problems come from them too. Untick a file to leave it out.",
-    dropSub: "PDF · Word · CSV quiz banks · text · photos of worksheets",
-    searchHint: "e.g. fractions",
-    noFiles: "No worksheets or notes yet. The assistant answers from what it already knows and makes up quiz problems.",
-    noneTicked: "No files ticked. The assistant won't look at your worksheets or notes.",
-    filesBadge: "add worksheets",
-    filesMissing: "No worksheets or notes yet",
-    filesNoneTicked: "No worksheets or notes ticked",
-    work: "your work",
-  },
-  biology: {
-    examples: ["Is my flowchart missing a sterile step?", "Why does Leptosol runoff make the water cloudy?", "Where should I take my water samples?"],
-    placeholder: "Ask about your drawing or your notes…",
-    filesTab: "Study files",
-    filesHint: "Add your notes, protocols or papers. Before answering, the assistant looks in the files you tick. Untick a file to leave it out.",
-    dropSub: "PDF · Word · PowerPoint · CSV · text · photos of notes",
-    searchHint: "e.g. autoclave",
-    noFiles: "No files yet. The assistant answers from what it already knows.",
-    noneTicked: "No files ticked. The assistant won't look at your notes.",
-    filesBadge: "add your notes",
-    filesMissing: "No study files yet",
-    filesNoneTicked: "No study files ticked",
-    work: "your drawing",
-  },
-};
-
-// The math tutor modes as the student sees them (Ask badge, margin notes).
-export const MODE_LABELS = { help: "step-by-step help", practice: "similar problem", quiz: "quiz" };
+// The subject decides the wording; i18n.js holds it for each language. The template ships the math text (the
+// server's default profile) so the first paint is right; biology swaps in once /api/config answers.
+const PROFILES = ["math", "biology"];
 
 let profile = "math";
 // False until the server has said which subject it runs; the math mode picker waits for it.
 let known = false;
 const listeners = [];
 
+// Read at render time, so the words follow both the subject and the language.
 export function words() {
-  return WORDS[profile];
+  return {
+    examples: [1, 2, 3].map((n) => t(`examples.${profile}.${n}`)),
+    noFiles: t(`files.noFiles.${profile}`),
+    noneTicked: t(`files.noneTicked.${profile}`),
+    filesBadge: t(`files.badge.add.${profile}`),
+    filesMissing: t(`check.files.missing.${profile}`),
+    filesNoneTicked: t(`check.files.noneTicked.${profile}`),
+    work: t(`work.${profile}`),
+  };
+}
+
+// The math tutor modes as the student sees them (Ask badge, margin notes).
+export function modeLabel(mode) {
+  return t(`mode.${mode}`);
 }
 
 export function currentProfile() {
@@ -62,12 +44,9 @@ export function setProfile(name) {
   const previous = profile;
   const first = !known;
   known = true;
-  profile = Object.hasOwn(WORDS, name) ? name : "math";
-  const w = words();
-  $("ask-input").placeholder = w.placeholder;
-  $("files-tab-name").textContent = w.filesTab;
-  $("files-hint").textContent = w.filesHint;
-  $("drop-sub").textContent = w.dropSub;
-  $("search-input").placeholder = w.searchHint;
-  if (first || profile !== previous) for (const fn of listeners) fn(profile);
+  profile = PROFILES.includes(name) ? name : "math";
+  if (!first && profile === previous) return;
+  // The template's data-i18n="….{profile}" texts (tab name, hints, placeholders) follow the subject.
+  setContext({ profile });
+  for (const fn of listeners) fn(profile);
 }
