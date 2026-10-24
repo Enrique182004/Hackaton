@@ -52,6 +52,7 @@ from biobench_sar.lan import (
     local_ip_addresses,
     looks_like_navigation,
 )
+from biobench_sar.ports import BROWSER_BLOCKED_PORTS
 from biobench_sar.tutor import MODES
 
 log = logging.getLogger("biobench_sar.app")
@@ -1151,6 +1152,12 @@ def main() -> None:
     for noisy in ("httpx", "httpx2", "httpcore", "sentence_transformers", "werkzeug", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     settings = Settings()
+    if settings.port in BROWSER_BLOCKED_PORTS:
+        log.error(
+            "Browsers refuse to open port %d, so no page could load. Set SAR_PORT to another port (5050 is the default).",
+            settings.port,
+        )
+        raise SystemExit(1)
     if not _port_free(settings.host, settings.port):
         log.error("Port %d is already in use. Stop the other server or set SAR_PORT to a free port.", settings.port)
         raise SystemExit(1)

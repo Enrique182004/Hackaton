@@ -45,7 +45,7 @@ All paths are inside `biobench_sar/`.
 
 | Area | Files |
 | --- | --- |
-| Server | `app.py` (routes, Socket.IO, the phone PIN gate), `assistant.py` (Sense → Think → Act pipeline, status, history, file selection, language, target snapping, UI masking), `config.py`, `envfile.py` (`sar.env`), `paths.py` (checkout vs desktop build), `schemas.py` |
+| Server | `app.py` (routes, Socket.IO, the phone PIN gate), `assistant.py` (Sense → Think → Act pipeline, status, history, file selection, language, target snapping, UI masking), `config.py`, `envfile.py` (`sar.env`), `paths.py` (checkout vs desktop build), `ports.py` (ports browsers refuse to open), `schemas.py` |
 | Tutor | `tutor.py` (modes, learn-a-topic requests, voice commands, quiz progress, stop confirmation, conversation memory), `grading.py` (quiz answers graded with sympy), `lang.py` (English/Spanish detection and Spanish intents) |
 | Phones | `lan.py` (PIN, device cookies, host checks, Socket.IO gate), `templates/join.html`, `static/js/dashboard/phone.js`, `static/sw.js`, `static/manifest.webmanifest` |
 | Vision | `core/homography.py`, `core/vision_loop.py`, `core/ink_crop.py`, `core/glare.py` |
