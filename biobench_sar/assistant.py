@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
-import os
 import re
-import tempfile
 import threading
 import time
 from collections import deque
@@ -18,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from biobench_sar.config import Settings
+from biobench_sar.jsonfile import save_json
 from biobench_sar.rag.quiz_bank import QuizBank, QuizProblem, pick_progressive
 from biobench_sar.schemas import AvatarAction, error_action
 from biobench_sar.tutor import (
@@ -264,19 +262,8 @@ class DocumentSelection:
 
     def _save(self) -> None:
         payload = {"all": True} if self._sources is None else {"sources": sorted(self._sources)}
-        tmp = ""
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=self._path.parent, prefix=f".{self._path.name}.", suffix=".tmp")
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh)
-            os.replace(tmp, self._path)
-        except OSError as exc:
-            # The in-memory selection still applies; it just won't survive a restart.
-            log.warning("could not save document selection to %s: %s", self._path, exc)
-            if tmp:
-                with contextlib.suppress(OSError):
-                    os.unlink(tmp)
+        # A failed save is logged; the in-memory selection still applies, it just won't survive a restart.
+        save_json(self._path, payload, "document selection")
 
 
 class Assistant:
