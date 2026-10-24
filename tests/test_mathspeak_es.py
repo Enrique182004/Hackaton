@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import re
+import sys
+import time
+import types
 
 import pytest
 
+from biobench_sar.llm import mathspeak_es
 from biobench_sar.llm.mathspeak_es import fraction_to_words_es, has_math_symbols, number_to_words_es, to_speech_es
 
-FORBIDDEN = re.compile(r"[\d^/*=+<>×·÷√∛%≤≥≠≈±²³½¼¾π\ue000-\uf8ff]")
+# No symbol may reach the voice, and no raw hyphen may sit between operands ("cinco - menos tres" sounds like 5-3).
+# Word-internal hyphens ("auto-evaluación") and a leading "- " list bullet are prose and allowed.
+FORBIDDEN = re.compile(r"[\d^/*=+<>×·÷√∛%≤≥≠≈±²³½¼¾π|$#\ue000-\uf8ff]|(?<![^\W\d_])-|-(?![^\W\d_])")
+_BULLET = re.compile(r"(?m)^[ \t]*- ")
+
+
+def _symbol(spoken: str) -> re.Match[str] | None:
+    return FORBIDDEN.search(_BULLET.sub("", spoken))
+
 
 CASES = [
     # contract examples
@@ -126,6 +138,191 @@ CASES = [
     ("x-y", "x menos ye"),
 ]
 
+# Review regressions (feat/mathspeak-es). Each group fails on the code before the fix.
+POWERED_GROUPS = [
+    # (-3)² and -3² are the distinction a teacher stresses: the base is the whole group, never "por al cuadrado".
+    ("(-3)^2", "la cantidad menos tres, al cuadrado"),
+    ("(-3)² = 9", "la cantidad menos tres, al cuadrado es igual a nueve"),
+    ("-3^2", "menos tres al cuadrado"),
+    ("(3x)² = 9x²", "la cantidad tres x, al cuadrado es igual a nueve x al cuadrado"),
+    ("(1/2)²", "la cantidad un medio, al cuadrado"),
+    ("(-1)^n", "la cantidad menos uno, a la n"),
+    ("(x)^2", "la cantidad x, al cuadrado"),
+    ("(2a)^2", "la cantidad dos a, al cuadrado"),
+    ("(ab)^2", "la cantidad a b, al cuadrado"),
+    ("((x+1))^2", "la cantidad x más uno, al cuadrado"),
+    ("|x|^2", "el valor absoluto de x, al cuadrado"),
+]
+NEGATIVE_OPERANDS = [
+    ("2 * -3", "dos por menos tres"),
+    ("2*-3", "dos por menos tres"),
+    ("-2*-3", "menos dos por menos tres"),
+    ("2 · -3", "dos por menos tres"),
+    ("x * -1", "x por menos uno"),
+    ("5 - -3", "cinco menos menos tres"),
+    ("x - - 3", "x menos menos tres"),
+    ("x = - 4", "x es igual a menos cuatro"),
+    ("2 ** 3", "dos al cubo"),
+    ("x ** 2", "x al cuadrado"),
+    ("**3** y **4**", "tres y cuatro"),
+]
+DASHES = [
+    ("8 – 3 = 5", "ocho menos tres es igual a cinco"),
+    ("x – 1", "x menos uno"),
+    ("x — 1", "x menos uno"),
+    ("x ‒ 1", "x menos uno"),
+    ("x – 1 = 0", "x menos uno es igual a cero"),
+    ("x² – 1", "x al cuadrado menos uno"),
+    ("x = –3", "x es igual a menos tres"),
+    ("Calcula 8–3", "Calcula ocho menos tres"),
+    ("1990–2000", "mil novecientos noventa a dos mil"),
+    ("Hay 3 opciones —1, 2 o 3— para elegir", "Hay tres opciones —uno, dos o tres— para elegir"),
+]
+INCLUSIVE = [
+    ("¿Estás listo/a?", "¿Estás listo o lista?"),
+    ("¿Estás atorado/a? Te ayudo.", "¿Estás atorado o atorada? Te ayudo."),
+    ("Bienvenido/a", "Bienvenido o Bienvenida"),
+    ("Eres muy bueno/a", "Eres muy bueno o buena"),
+    ("¡Eres un campeón/a!", "¡Eres un campeón o campeona!"),
+    ("Pregúntale a tu maestro/a", "Pregúntale a tu maestro o maestra"),
+    ("alumno/a", "alumno o alumna"),
+    ("los/las", "los o las"),
+    ("los/las alumnos/as", "los o las alumnos o alumnas"),
+    ("¿Estás seguro(a)?", "¿Estás seguro o segura?"),
+    ("Los niño(a)s ganaron 3 puntos", "Los niños o niñas ganaron tres puntos"),
+    ("Revisa tu(s) respuesta(s).", "Revisa tu respuesta."),
+    ("x/a", "x sobre a"),
+    ("cos(a)", "coseno de a"),
+]
+AGREEMENT = [
+    # Plain contract form unless a known noun follows: never "una da", "un entonces", "doscientas representa".
+    ("3 + 1 da 4", "tres más uno da cuatro"),
+    ("Si restas 1 queda 4", "Si restas uno queda cuatro"),
+    ("El 1 representa el total", "El uno representa el total"),
+    ("Si 200 representa el total", "Si doscientos representa el total"),
+    ("x = 1 entonces", "x es igual a uno entonces"),
+    ("Divide entre 1 ambos lados", "Divide entre uno ambos lados"),
+    ("Pon 1 arriba", "Pon uno arriba"),
+    ("Suma 1 otra vez", "Suma uno otra vez"),
+    ("x = 1 nunca", "x es igual a uno nunca"),
+    ("200 + 300 da 500", "doscientos más trescientos da quinientos"),
+    ("El 21 está bien", "El veintiuno está bien"),
+    ("Multiplica por 1 cada lado", "Multiplica por uno cada lado"),
+    ("x = 1 significa", "x es igual a uno significa"),
+    ("Haz 1 resta", "Haz una resta"),
+    ("1 sola vez", "una sola vez"),
+    ("21 alumnas", "veintiuna alumnas"),
+    ("1 ecuación", "una ecuación"),
+    ("1000000 personas", "un millón de personas"),
+]
+CURRENCY = [
+    ("Juan tiene $50 y gasta $15.", "Juan tiene cincuenta dólares y gasta quince dólares."),
+    ("Cuesta $3.50", "Cuesta tres dólares con cincuenta centavos"),
+    ("$1", "un dólar"),
+    ("$21", "veintiún dólares"),
+    ("$0.75", "setenta y cinco centavos"),
+    ("$1.01", "un dólar con un centavo"),
+    ("$1,000,000", "un millón de dólares"),
+    ("$5 - $3 = $2", "cinco dólares menos tres dólares es igual a dos dólares"),
+    ("$50 pesos", "cincuenta pesos"),
+    ("$50 MXN", "cincuenta pesos"),
+]
+GROUPS_AND_POINTS = [
+    ("la solución (x = 3)", "la solución x es igual a tres"),
+    ("Sustituye (x = 2) en la ecuación", "Sustituye x es igual a dos en la ecuación"),
+    ("(x > 2)", "x es mayor que dos"),
+    ("el intervalo (2, 5)", "el intervalo de dos a cinco"),
+    ("el intervalo [2, 5]", "el intervalo de dos a cinco"),
+    ("el intervalo (-∞, 3)", "el intervalo de menos infinito a tres"),
+    ("El punto A(2, 3)", "El punto A de coordenadas dos, tres"),
+    ("P(1, -2)", "P de coordenadas uno, menos dos"),
+    ("x = (2, 3)", "x es igual al punto dos, tres"),
+    ("De (0, 0) a (3, 4)", "Del punto cero, cero al punto tres, cuatro"),
+    ("f(2, 3)", "f de dos, tres"),
+]
+VARIABLE_Y = [
+    ("despeja la y", "despeja la ye"),
+    ("el valor de la y", "el valor de la ye"),
+    ("¿cuánto vale y?", "¿cuánto vale ye?"),
+    ("Encuentra x y y.", "Encuentra x y ye."),
+    ("Los ejes son x, y", "Los ejes son x, ye"),
+    ("Y = 2x", "ye es igual a dos x"),
+    ("Encuentra y en 2x + y = 5", "Encuentra ye en dos x más ye es igual a cinco"),
+    ("√y", "la raíz cuadrada de ye"),
+    ("2√y", "dos por la raíz cuadrada de ye"),
+]
+UNITS_AND_FUNCTIONS = [
+    ("El área es 12 cm²", "El área es doce centímetros cuadrados"),
+    ("12 m²", "doce metros cuadrados"),
+    ("1 m²", "un metro cuadrado"),
+    ("8 cm³", "ocho centímetros cúbicos"),
+    ("60 km/h", "sesenta kilómetros por hora"),
+    ("9.8 m/s²", "nueve punto ocho metros por segundo al cuadrado"),
+    ("21 km", "veintiún kilómetros"),
+    ("3m + 2", "tres m más dos"),
+    ("sen(x)", "seno de x"),
+    ("3sen(x)", "tres seno de x"),
+    ("sen x", "seno de x"),
+    ("log(100)", "logaritmo de cien"),
+    ("ln(e) = 1", "logaritmo natural de e es igual a uno"),
+    ("cos(30°)", "coseno de treinta grados"),
+    ("sen²(x) + cos²(x) = 1", "seno cuadrado de x más coseno cuadrado de x es igual a uno"),
+    ("2pi", "dos pi"),
+]
+ORDINAL_DEGREES = [
+    ("3° de secundaria", "tercero de secundaria"),
+    ("1° grado", "primer grado"),
+    ("2° lugar", "segundo lugar"),
+    ("Estoy en 1° de prepa", "Estoy en primero de prepa"),
+]
+HALVES = [
+    ("1/2 taza", "media taza"),
+    ("1/2 hora", "media hora"),
+    ("1/2 cucharada", "media cucharada"),
+    ("1/2 pizza", "media pizza"),
+    ("1/2 kilo", "medio kilo"),
+    ("2 1/2 tazas", "dos y media tazas"),
+    ("3/4 taza", "tres cuartos de taza"),
+    ("2/3 partes", "dos terceras partes"),
+]
+NOTATION = [
+    ("|x| = 3", "el valor absoluto de x es igual a tres"),
+    ("|x - 2| = 5", "el valor absoluto de la cantidad x menos dos es igual a cinco"),
+    ("2|x|", "dos por el valor absoluto de x"),
+    ("2[x + (3 - 1)]", "dos por la cantidad x más la cantidad tres menos uno"),
+    ("{x + 1}", "la cantidad x más uno"),
+    ("2:3", "dos es a tres"),
+    ("4 : 2", "cuatro es a dos"),
+    ("2:3 = 4:6", "dos es a tres como cuatro es a seis"),
+    ("8 : 2 = 4", "ocho entre dos es igual a cuatro"),
+    ("a las 3:30", "a las tres y treinta"),
+    ("a la 1:15", "a la una y quince"),
+    ("Paso 1: 3x = 6", "Paso uno: tres x es igual a seis"),
+    ("Ejercicio #2", "Ejercicio número dos"),
+    ("páginas 1-5", "páginas uno a cinco"),
+    ("Haz los ejercicios 3–7", "Haz los ejercicios tres a siete"),
+]
+MARKDOWN = [
+    ("**ojo**: 3x = 6", "ojo: tres x es igual a seis"),
+    ("**mal**", "mal"),
+    ("*Nota:* 3x = 6", "Nota: tres x es igual a seis"),
+]
+REVIEW_CASES = (
+    POWERED_GROUPS
+    + NEGATIVE_OPERANDS
+    + DASHES
+    + INCLUSIVE
+    + AGREEMENT
+    + CURRENCY
+    + GROUPS_AND_POINTS
+    + VARIABLE_Y
+    + UNITS_AND_FUNCTIONS
+    + ORDINAL_DEGREES
+    + HALVES
+    + NOTATION
+    + MARKDOWN
+)
+
 PROSE = [
     "¿y ahora?",
     "No entiendo, ¿me ayudas?",
@@ -133,6 +330,13 @@ PROSE = [
     "Piensa (sin prisa) en el siguiente paso.",
     "¡Excelente trabajo!",
     "",
+    "Bien – sigue así.",
+    "Juan y María fueron al mercado.",
+    "Encuentra y anota el resultado.",
+    "¿Y?",
+    "Y luego, ¿qué sigue?",
+    "Lo hiciste sin(querer)",
+    "| Paso | Resultado |",
 ]
 
 NUMBERS = [
@@ -261,11 +465,16 @@ def test_table_is_large_enough() -> None:
     assert len(CASES) >= 60
 
 
-@pytest.mark.parametrize("text", [c[0] for c in CASES])
+@pytest.mark.parametrize(("text", "expected"), REVIEW_CASES)
+def test_review_regressions(text: str, expected: str) -> None:
+    assert to_speech_es(text) == expected
+
+
+@pytest.mark.parametrize("text", [c[0] for c in CASES + REVIEW_CASES])
 def test_idempotent_and_symbol_free(text: str) -> None:
     once = to_speech_es(text)
     assert to_speech_es(once) == once
-    assert not FORBIDDEN.search(once), once
+    assert not _symbol(once), once
 
 
 @pytest.mark.parametrize("text", PROSE)
@@ -306,7 +515,7 @@ def test_corpus_is_spoken_cleanly() -> None:
     assert len(CORPUS) >= 30
     for sentence in CORPUS:
         spoken = to_speech_es(sentence)
-        assert not FORBIDDEN.search(spoken), (sentence, spoken)
+        assert not _symbol(spoken), (sentence, spoken)
         assert to_speech_es(spoken) == spoken, sentence
         for word in re.findall(r"[^\W\d_]{4,}", sentence):
             assert word in spoken, (word, spoken)
@@ -320,7 +529,7 @@ def test_corpus_spot_checks() -> None:
     assert spoken[26] == "Paso dos: divide doce entre cuatro es igual a tres."
 
 
-@pytest.mark.parametrize("text", ["3x", "x^2", "x - y", "½", "2 + 2", "-4", "√9"])
+@pytest.mark.parametrize("text", ["3x", "x^2", "x - y", "½", "2 + 2", "-4", "√9", "|x|"])
 def test_has_math_symbols(text: str) -> None:
     assert has_math_symbols(text)
 
@@ -332,3 +541,56 @@ def test_has_no_math_symbols(text: str) -> None:
 
 def test_private_use_input_is_not_trusted_as_markup() -> None:
     assert to_speech_es("x\ue000 = 2\ue00a") == "x es igual a dos"
+
+
+def test_negative_base_is_not_the_negated_power() -> None:
+    assert to_speech_es("(-3)^2") != to_speech_es("-3^2")
+    assert "por al" not in to_speech_es("(-3)^2 = 9 y (3x)^2 = 9x^2")
+
+
+def test_currency_word_is_configurable() -> None:
+    assert to_speech_es("$50", currency="peso") == "cincuenta pesos"
+    assert to_speech_es("$1.50", currency="peso") == "un peso con cincuenta centavos"
+    with pytest.raises(ValueError):
+        to_speech_es("$5", currency="euro")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("1" * 5000, " ".join(["uno"] * 5000)),
+        ("x^" + "9" * 5000, "x a la " + " ".join(["nueve"] * 5000)),
+        ("1/" + "9" * 5000, "uno sobre " + " ".join(["nueve"] * 5000)),
+    ],
+    ids=["digits", "exponent", "denominator"],
+)
+def test_huge_digit_runs_are_read_digit_by_digit(text: str, expected: str) -> None:
+    assert to_speech_es(text) == expected
+
+
+def test_internal_failure_falls_back_to_the_raw_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(text: str, currency: tuple[str, str]) -> str:
+        raise RuntimeError(text)
+
+    monkeypatch.setattr(mathspeak_es, "_speak", boom)
+    assert to_speech_es("2 + 2") == "2 + 2"
+
+
+def test_deep_nesting_stays_fast() -> None:
+    text = "(" * 1000 + "x" + ")" * 1000
+    start = time.perf_counter()
+    to_speech_es(text)
+    assert time.perf_counter() - start < 0.5
+
+
+def test_has_math_symbols_defers_to_the_shared_detector(monkeypatch: pytest.MonkeyPatch) -> None:
+    shared = types.ModuleType("biobench_sar.llm.mathspeak")
+    shared.has_math_symbols = lambda text: "∑" in text  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "biobench_sar.llm.mathspeak", shared)
+    mathspeak_es._shared_detector.cache_clear()
+    try:
+        assert has_math_symbols("∑ k")
+        assert has_math_symbols("3x")
+        assert not has_math_symbols("hola")
+    finally:
+        mathspeak_es._shared_detector.cache_clear()
