@@ -151,6 +151,17 @@ CASES: list[tuple[str, str]] = [
     ("Problem #3", "Problem number three"),
     ("You got 7/10!", "You got seven out of ten!"),
     ("Problem 3/10", "Problem three of ten"),
+    ("Maria got 3/4 of the pizza.", "Maria got three fourths of the pizza."),
+    ("Try problems 1-5 first.", "Try problems one to five first."),
+    ("8-3", "eight minus three"),
+    ("3 – 5", "three minus five"),
+    ("4y ÷ 8x", "four y divided by eight x"),
+    ("2y / 8y", "two y over eight y"),
+    ("Plot (x, 5y).", "Plot the point x, five y."),
+    ("AB = 5", "A B equals five"),
+    ("1/2bh", "one half b h"),
+    ("count by 2s", "count by twos"),
+    ("2s + 3 = 7", "two s plus three equals seven"),
     ("x₁ + x_2", "x sub one plus x sub two"),
     # prose around expressions stays as written
     ("Solve 3x + 5 = 20 for x.", "Solve three x plus five equals twenty for x."),
@@ -177,6 +188,8 @@ PROSE = [
     "Do you have an exercise in mind, or should I make one up for you?",
     "Write the x-axis label (see above) first.",
     "e.g. this, i.e. that",
+    "I – a teacher – said so.",
+    "COVID",
     "",
 ]
 
@@ -235,6 +248,12 @@ def test_prose_unchanged(text: str) -> None:
 def test_idempotent(text: str) -> None:
     once = to_speech(text)
     assert to_speech(once) == once
+
+
+@pytest.mark.parametrize("text", [t for t, _ in CASES] + CORPUS)
+def test_single_pass_is_stable(text: str) -> None:
+    once = mathspeak._convert(text)
+    assert mathspeak._convert(once) == once
 
 
 @pytest.mark.parametrize("text", CORPUS)

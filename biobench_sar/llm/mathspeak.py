@@ -161,7 +161,9 @@ _SHORT_WORDS = frozenset(
     )
 )
 _POINT_WORDS = frozenset({"point", "points", "coordinate", "coordinates", "pair"})
+# "Problem 3/10" is a position and "You got 7/10" a score, not fractions; "problems 1-5" is a range.
 _OF_WORDS = {"problem": "of", "question": "of", "exercise": "of", "step": "of", "got": "out of", "scored": "out of"}
+_RANGE_WORDS = frozenset({"problems", "questions", "exercises", "pages", "steps", "items", "numbers", "ages"})
 
 _WS_RE = re.compile(r"\s+")
 _WORD_RE = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
@@ -178,7 +180,7 @@ _EMPHASIS_RE = re.compile(r"(?<![\w*])\*{1,2}(?=\S)([^*\n]*?\S)\*{1,2}(?![\w*])"
 
 _SUPER_RUN_RE = re.compile(f"[{_SUPERSCRIPTS}]+")
 _VULGAR_RE = re.compile(f"(\\d?)([{''.join(_VULGAR)}])(?=(\\d)?)")
-_EN_DASH_RE = re.compile(r"(?<=[\d)])(\s*)[–—](\s*)(?=[\d(√])|(?<=\b[A-Za-z])(\s+)[–—](\s+)(?=[\d(]|[A-Za-z]\b)")
+_EN_DASH_RE = re.compile(r"(?<=[\d)])(\s*)[–—](\s*)(?=[\d(√])|(?<=\b[A-Za-z])(\s*)[–—](\s*)(?=[\d(])")
 _XY_PLANE_RE = re.compile(r"\b([xyz])-([xyz])(?=[- ]plane\b)")
 _POW_STARS_RE = re.compile(r"(?<=[\w)])\s*\*\*\s*(?=[\w(-])")
 _UNIT_PER_RE = re.compile(r"(\d\s?)([A-Za-z]+)/([A-Za-z]+)\b")
@@ -302,8 +304,8 @@ def _ordinal_fraction(num: str, den: str) -> str | None:
     return f"{_number_words(num)} {_denominator(d, int(num) != 1)}"
 
 
-def _money_words(dollars: str, cents: str | None) -> str:
-    if cents is not None and len(cents) != 2:
+def _money_words(dollars: str, cents: str) -> str:
+    if cents and len(cents) != 2:
         return f"{_number_words(dollars + '.' + cents)} dollars"
     d = int(dollars.replace(",", ""))
     c = int(cents) if cents else 0
@@ -322,7 +324,7 @@ def _money_words(dollars: str, cents: str | None) -> str:
 class _Tok:
     kind: str  # ws num mixed ratio money time ord plural hash var letter word op other
     text: str
-    value: object = None
+    parts: tuple[str, ...] = ()  # var: (spoken name,); mixed: (whole, num, den); ratio: terms; money: (dollars, cents)
 
 
 def _prepass(text: str) -> str:
@@ -385,7 +387,7 @@ def _tokenize(text: str) -> list[_Tok]:
             toks.append(tok)
             continue
         if c == "$" and (m := _MONEY_RE.match(text, i)):
-            toks.append(_Tok("money", m.group(), (m.group(1), m.group(2))))
+            toks.append(_Tok("money", m.group(), (m.group(1), m.group(2) or "")))
             i = m.end()
             continue
         if c == "#" and i + 1 < n and text[i + 1].isdigit():
@@ -393,7 +395,7 @@ def _tokenize(text: str) -> list[_Tok]:
             i += 1
             continue
         if c in _GREEK:
-            toks.append(_Tok("var", c, _GREEK[c]))
+            toks.append(_Tok("var", c, (_GREEK[c],)))
             i += 1
             continue
         if c.isalpha():
@@ -416,11 +418,11 @@ def _number_token(text: str, i: int, prev: str) -> tuple[_Tok, int]:
     if free and (m := _TIME_RE.match(text, i)):
         return _Tok("time", m.group()), m.end()
     if free and (m := _RATIO_RE.match(text, i)):
-        return _Tok("ratio", m.group(), re.split(r"\s?:\s?", m.group())), m.end()
+        return _Tok("ratio", m.group(), tuple(re.split(r"\s?:\s?", m.group()))), m.end()
     if free and (m := _MIXED_RE.match(text, i)):
-        whole, num, den = m.groups()
+        _, num, den = m.groups()
         if 0 < int(num) < int(den):
-            return _Tok("mixed", m.group(), (whole, num, den)), m.end()
+            return _Tok("mixed", m.group(), m.groups()), m.end()
     if m := _ORD_RE.match(text, i):
         return _Tok("ord", m.group()), m.end()
     if m := _PLURAL_RE.match(text, i):
@@ -440,7 +442,8 @@ def _word_tokens(toks: list[_Tok], text: str, m: re.Match[str]) -> int:
         sub = _SUBSCRIPT_RE.match(text, end)
         if sub:
             index = sub.group(1)
-            toks.append(_Tok("var", w + sub.group(), f"{w} sub {_number_words(index) if index.isdigit() else index}"))
+            spoken = f"{w} sub {_number_words(index) if index.isdigit() else index}"
+            toks.append(_Tok("var", w + sub.group(), (spoken,)))
             return sub.end()
         toks.append(_Tok("letter", w))
         return end
@@ -456,7 +459,7 @@ class _Node:
     kind: str  # num mixed ratio money var word neg bin imp frac pow root abs func pct deg group list
     text: str = ""
     kids: tuple[_Node, ...] = ()
-    value: object = None
+    parts: tuple[str, ...] = ()
 
 
 class _Fail(Exception):
@@ -508,29 +511,29 @@ class _Parser:
         left = self.additive()
         while True:
             tok, j, _ = self._peek()
-            if not self._is_op(tok, _REL):
+            if tok is None or not self._is_op(tok, _REL):
                 return left
             save, self.i = self.i, j + 1
             right = self._try(self.additive)
             if right is None:
                 self.i = save
                 return left
-            left = _Node("bin", tok.text, (left, right))  # type: ignore[union-attr]
+            left = _Node("bin", tok.text, (left, right))
 
     def additive(self) -> _Node:
         left = self.product()
         while True:
             tok, j, ws_before = self._peek()
-            if not self._is_op(tok, _ADD):
+            if tok is None or not self._is_op(tok, _ADD):
                 return left
-            if tok.text == "-" and not self._binary_minus(left, j, ws_before):  # type: ignore[union-attr]
+            if tok.text == "-" and not self._binary_minus(left, j, ws_before):
                 return left
             save, self.i = self.i, j + 1
             right = self._try(self.product)
             if right is None:
                 self.i = save
                 return left
-            left = _Node("bin", tok.text, (left, right))  # type: ignore[union-attr]
+            left = _Node("bin", tok.text, (left, right))
 
     def _binary_minus(self, left: _Node, j: int, ws_before: bool) -> bool:
         k = self._skip(j + 1)
@@ -600,18 +603,18 @@ class _Parser:
 
     def unary(self) -> _Node:
         tok, j, _ = self._peek()
-        if not self._is_op(tok, _UNARY):
+        if tok is None or not self._is_op(tok, _UNARY):
             return self.power()
         k = self._skip(j + 1)
         nxt = self.toks[k] if k < len(self.toks) else None
-        if not self._starts_operand(nxt):
+        if nxt is None or not self._starts_operand(nxt):
             raise _Fail
-        if nxt.kind == "word" and nxt.text.lower() not in _FUNCS:  # type: ignore[union-attr]
+        if nxt.kind == "word" and nxt.text.lower() not in _FUNCS:
             raise _Fail
-        if k > j + 1 and nxt.kind in ("letter", "word"):  # type: ignore[union-attr]
+        if k > j + 1 and nxt.kind in ("letter", "word"):
             raise _Fail  # "- a list item", not "negative a"
         self.i = j + 1
-        return _Node("neg", tok.text, (self.unary(),))  # type: ignore[union-attr]
+        return _Node("neg", tok.text, (self.unary(),))
 
     def power(self) -> _Node:
         base = self.postfix()
@@ -652,9 +655,9 @@ class _Parser:
         if tok.kind == "num":
             return _Node("num", tok.text)
         if tok.kind in ("mixed", "ratio", "money"):
-            return _Node(tok.kind, tok.text, value=tok.value)
+            return _Node(tok.kind, tok.text, parts=tok.parts)
         if tok.kind == "var":
-            return _Node("var", str(tok.value))
+            return _Node("var", tok.parts[0])
         if tok.kind == "letter":
             if tok.text in _FUNC_LETTERS and self._is_op(self._adjacent(), {"("}):
                 return _Node("func", tok.text, (self._group(),))
@@ -780,13 +783,13 @@ def _render(n: _Node) -> tuple[str, bool]:
     if k == "word":
         return (" ".join(n.text) if _is_letter_product(n.text) else n.text), False
     if k == "mixed":
-        whole, num, den = n.value  # type: ignore[misc]
+        whole, num, den = n.parts
         frac = _ordinal_fraction(num, den) or f"{_number_words(num)} over {_number_words(den)}"
         return f"{_number_words(whole)} and {frac}", False
     if k == "ratio":
-        return " to ".join(_number_words(p) for p in n.value), False  # type: ignore[union-attr]
+        return " to ".join(_number_words(p) for p in n.parts), False
     if k == "money":
-        return _money_words(*n.value), False  # type: ignore[misc]
+        return _money_words(*n.parts), False
     if k == "neg":
         text, is_open = _render(n.kids[0])
         return f"{_UNARY[n.text]} {text}", is_open
@@ -883,13 +886,15 @@ def _power(base: _Node, exp: _Node) -> tuple[str, bool]:
     return _join(rendered, "to the power of", _operand(exp))
 
 
-def _render_root(node: _Node, prev_word: str) -> str:
+def _render_root(node: _Node, prev_word: str, next_word: str) -> str:
     if node.kind == "group" and _is_point(node.kids[0]) and prev_word in _POINT_WORDS:
         return _list(node.kids[0], point=False)[0]
-    if node.kind == "frac" and prev_word in _OF_WORDS:
-        num, den = _unwrap(node.kids[0]), _unwrap(node.kids[1])
-        if num.kind == "num" and den.kind == "num" and num.text.isdigit() and den.text.isdigit():
-            return f"{_number_words(num.text)} {_OF_WORDS[prev_word]} {_number_words(den.text)}"
+    a, b = (_unwrap(k) for k in node.kids) if len(node.kids) == 2 else (node, node)
+    whole_numbers = a.kind == b.kind == "num" and a.text.isdigit() and b.text.isdigit()
+    if whole_numbers and node.kind == "frac" and prev_word in _OF_WORDS and next_word != "of":
+        return f"{_number_words(a.text)} {_OF_WORDS[prev_word]} {_number_words(b.text)}"
+    if whole_numbers and node.kind == "bin" and node.text == "-" and prev_word in _RANGE_WORDS:
+        return f"{_number_words(a.text)} to {_number_words(b.text)}"
     return _render(node)[0]
 
 
@@ -957,7 +962,7 @@ def _emit_token(out: _Out, tok: _Tok) -> None:
     elif tok.kind == "hash":
         out.generated("number")
     elif tok.kind == "var":
-        out.generated(str(tok.value))
+        out.generated(tok.parts[0])
     elif tok.kind == "op" and tok.text in _FALLBACK:
         word = _FALLBACK[tok.text]
         if word == tok.text:
@@ -968,6 +973,12 @@ def _emit_token(out: _Out, tok: _Tok) -> None:
             out.last_generated = True  # dropped symbol: keep "a|b" from fusing into "ab"
     else:
         out.verbatim(tok.text)
+
+
+def _next_word(toks: list[_Tok], i: int) -> str:
+    while i < len(toks) and toks[i].kind == "ws":
+        i += 1
+    return toks[i].text.lower() if i < len(toks) and toks[i].kind in ("word", "letter") else ""
 
 
 def _convert(text: str) -> str:
@@ -982,7 +993,7 @@ def _convert(text: str) -> str:
             except _Fail:
                 node = None
             if node is not None and not _trivial(node):
-                out.generated(_render_root(node, out.last_word()))
+                out.generated(_render_root(node, out.last_word(), _next_word(toks, parser.i)))
                 i = parser.i
                 continue
         _emit_token(out, toks[i])
@@ -991,7 +1002,6 @@ def _convert(text: str) -> str:
 
 
 def _crude(text: str) -> str:
-    text = _prepass(text)
     for sym, word in sorted(_FALLBACK.items(), key=lambda kv: -len(kv[0])):
         if sym not in "-()[]{},":
             text = text.replace(sym, f" {word} " if word else " ")
