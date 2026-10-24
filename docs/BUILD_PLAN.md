@@ -25,6 +25,9 @@ Run everything from the repo root:
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 ```
 
+Windows PowerShell: use `.\.venv\Scripts\python.exe` for `.venv/bin/python`, and set variables first, e.g.
+`$env:SAR_PROFILE='biology'; .\.venv\Scripts\python.exe -m biobench_sar` (the setting lasts for that window).
+
 ---
 
 ## Phase 1 — Build (parallel)
@@ -46,11 +49,15 @@ Run everything from the repo root:
 2. `SAR_VLM_BACKEND=mock SAR_TTS_BACKEND=none .venv/bin/python -m biobench_sar` — both pages load, a typed
    query moves the avatar.
 3. Knowledge base: on a fresh `SAR_DATA_DIR` the profile's seed files (`biobench_sar/knowledge/<profile>/`) are
-   ingested at startup — confirm they are listed on `/dashboard` → *Study files* and `doc_chunks` in
-   `/api/status` is > 0. Upload a new file and confirm `doc_chunks` grows and `/api/search` retrieves it.
-   To test seeding by upload instead, start with `SAR_SEED_KNOWLEDGE=0` and an empty `SAR_DATA_DIR`.
+   ingested at startup — confirm they are listed on `/dashboard` → step 1 (*Worksheets & notes* in math,
+   *Study files* in biology) and `doc_chunks` in `/api/status` is > 0. Upload a new file and confirm
+   `doc_chunks` grows and `/api/search` retrieves it. To test seeding by upload instead, start with
+   `SAR_SEED_KNOWLEDGE=0` and an empty `SAR_DATA_DIR`. Test each profile with its own `SAR_DATA_DIR` (both
+   share one knowledge base otherwise, see Shared below).
 4. Switch to a real VLM (`ollama pull qwen2.5vl:3b`, `SAR_VLM_BACKEND=ollama`); benchmark with
-   `.venv/bin/python -m scripts.bench_vlm -n 3` (add `--scenarios` for the biology cases).
+   `.venv/bin/python -m scripts.bench_vlm -n 3`. Pass/fail scenarios: `--scenarios --profile math` (math cases)
+   or `--scenarios` (`--profile biology` is the default: the flowchart cases); `--only H,QC` runs only those
+   scenarios, `--raw` grades the model without `evaluate`'s math post-processing.
 5. Math tutor: the math scenario test cases (below) pass with the mock backend for the control flow and with
    `qwen2.5vl:3b` for the wording.
 
@@ -82,8 +89,15 @@ All paths are inside the `biobench_sar` package. Imports are package-absolute
   - `profile: str` — env `SAR_PROFILE`, default `"math"`; allowed `"math" | "biology"`, anything else → `"math"`.
   - `knowledge_dir: Path` (property) — `PACKAGE_DIR / "knowledge" / profile`; the seed docs ingested at startup.
     Biology seed docs live in `knowledge/biology/`; math seed docs in `knowledge/math/` (`quiz_bank.csv` with
-    header `problem,answer,topic,level`, `tutoring_guide.md`, `worksheet_linear_equations.md`).
+    header `problem,answer,topic,level`, `tutoring_guide.md`, `worksheet_linear_equations.md` with `## Level N`
+    headings that match the CSV's levels).
+  - `seed_marker_file: Path` (property) — `chroma_dir / ".seeded"`: the profiles whose seed docs are already in
+    the store. Each profile is seeded once per store; deleting `chroma_dir` seeds it again.
   - `quiz_bank_file: Path` — env `SAR_QUIZ_BANK_FILE`, default `DATA_DIR / "quiz_bank.json"`.
+  - `quiz_length: int` — env `SAR_QUIZ_LENGTH`, default `10`: the most problems one quiz asks, and how many the
+    model makes up when no ticked file has any.
+  - Both profiles share one `SAR_DATA_DIR`: one store, one file selection, one quiz bank. Run each profile with
+    its own `SAR_DATA_DIR` (e.g. `data/biology`) to keep one subject's files out of the other's answers.
 
 ### A — `core/homography.py`
 ```python
@@ -162,8 +176,14 @@ class VLMClient:
 | --- | --- |
 | help | `None` |
 | practice | `{"kind": "practice"}` |
-| quiz | `{"kind": "quiz", "stage": "dictate" \| "check", "number": int, "total": int, "problem": str \| None, "answer": str \| None, "next_problem": str \| None}` — `problem` `None` = no worksheet problems, the model makes up a progressive problem itself |
+| quiz | `{"kind": "quiz", "stage": "dictate" \| "check" \| "hint", "number": int, "total": int, "problem": str \| None, "answer": str \| None, "next_problem": str \| None}` — `problem` `None` = no worksheet problems, the model makes up a progressive problem itself; `answer` is set only in stage `check` (`None` in `dictate` and `hint`); `next_problem` only in `check` |
 | learn | `{"kind": "learn", "topic": str, "stage": "offer" \| "example" \| "own"}` |
+
+- **Answers never reach the model except when checking.** The expected answer travels only as `task["answer"]`
+  in stage `check`, and even there a plain-number answer (`x = 5`, `2/3`, `-4`) is graded in code against the
+  model's `board_answer` rather than shown in the prompt. Profile `math` also removes answer keys from the RAG
+  context in every task (help and practice too): worksheet `Answer: ...` lines and quiz-bank answers are dropped
+  from retrieved chunks before the prompt is built.
 
 - Math semantics in the unchanged JSON schema `{spoken_text, animation_state, target_x, target_y}`
   (plain language for a middle/high-school student, short because it is spoken):
@@ -174,6 +194,7 @@ class VLMClient:
 | practice | Reads the board's equation and dictates a new one of the same difficulty (constants/variables swapped) | `idle` |
 | quiz `dictate` | Reads the problem out | `idle` |
 | quiz `check` | Correct: praise, and when `next_problem` is given also dictates it. Wrong: one hint, never the answer | `celebrating` if the ink answer is correct, `error` if wrong |
+| quiz `hint` | The student asked for help on the current problem ("I'm stuck", "hint", "help"): one hint for the next step, never the answer. Nothing is recorded and the quiz stays on the problem | `idle` |
 | learn `offer` | One or two plain sentences introducing the idea of the topic, then asks "Do you have an exercise in mind, or should I make one up for you?" | `idle` |
 | learn `example` | Dictates one easy starter problem on the topic and invites the student to write it and try the first step | `idle` |
 | learn `own` | Asks the student to write their exercise on the board and then ask for help | `idle` |
@@ -208,7 +229,8 @@ MODES = ("help", "practice", "quiz")
 def detect_mode(text: str) -> str | None
     # "quiz me" / "start a quiz" -> "quiz"; "stop the quiz" -> "help";
     # "similar problem" / "another one like this" / "more practice" -> "practice";
-    # "help" / "next step" / "I'm stuck" -> "help"; anything else -> None
+    # "help" / "next step" / "I'm stuck" / "hint" -> "help"; anything else -> None
+def is_quiz_stop(text: str) -> bool  # an explicit "stop / end / quit the quiz": the only words that leave a running quiz
 def detect_learn_request(text: str) -> str | None
     # topic: "I want to learn how to solve fractions" -> "solving fractions" (or "fractions"); "teach me equations";
     # "how do I add fractions?" only when it is a general how-to, not about the board
@@ -218,7 +240,8 @@ def detect_offer_reply(text: str) -> str | None
 class TutorSession:  # thread-safe
     mode: str
     def set_mode(self, mode: str) -> None
-    def start_quiz(self, problems: list[QuizProblem]) -> None
+    def start_quiz(self, problems: list[QuizProblem]) -> None  # at most Settings.quiz_length problems are asked;
+                                                               # none -> the model makes up quiz_length
     def stop_quiz(self) -> None
     def current(self) -> QuizProblem | None
     dictated: bool
@@ -233,15 +256,18 @@ class TutorSession:  # thread-safe
     def to_dict(self) -> dict
     # {"mode": str, "learn_topic": str | None,
     #  "quiz": None | {"active": bool, "number": int, "total": int, "score": int, "problem": str | None}}
+    # score = problems right on the first try (a fixed answer moves on but does not score)
 ```
 
 **Per question in the assistant (F), profile `math`:**
 1. If `offer_pending` and `detect_offer_reply(text)` → task learn stage `"example"` (generate) or `"own"`, then
    `resolve_offer()`.
 2. Elif `detect_learn_request(text)` → `start_learning(topic)` and task learn stage `"offer"`.
-3. Else the mode logic: `detect_mode` switches mode (quiz starts a quiz from the ticked files' problems,
-   "stop the quiz" stops it); in quiz mode a problem not yet dictated gets stage `"dictate"` +
-   `mark_dictated()`, otherwise stage `"check"` and the result is recorded with `record(correct)`
+3. Else the mode logic: `detect_mode` switches mode (quiz starts a quiz from the ticked files' problems, at
+   most `Settings.quiz_length` of them, easiest level first; "stop the quiz" stops it). While a quiz runs, only
+   `is_quiz_stop(text)` leaves it: "help" / "I'm stuck" / "hint" stay in the quiz. In quiz mode a problem not
+   yet dictated gets stage `"dictate"` + `mark_dictated()`; once dictated, a help request gets stage `"hint"`
+   (nothing recorded), anything else stage `"check"` and the result is recorded with `record(correct)`
    (`celebrating` = correct).
 4. Always pass `recent_turns=tutor.turns()` and call `add_turn(text, spoken_text)` after the answer.
 
@@ -254,14 +280,19 @@ class QuizProblem: problem: str; answer: str | None; topic: str; level: int; sou
 def parse_quiz_file(path: str | Path, source: str) -> list[QuizProblem]
     # CSV: problem (or question) + answer columns, optional topic and level (or difficulty) columns.
     # .md / .txt / .pdf / .docx worksheets: numbered lines like "1. 3x + 5 = 20" or "Problem 2: ...",
-    # each optionally followed by an "Answer: ..." line.
+    # each optionally followed by an "Answer: ..." line (or an "Answer key" section at the end).
+    # Only files that call themselves a worksheet count: the file name, first line or a heading contains
+    # worksheet / quiz / exercise / homework / assignment / practice / problem set / drill / test, so a guide's
+    # numbered tips never become problems. A numbered line counts only with a digit plus a math operator or a
+    # math verb (solve, simplify, find, ...). "## Level N: topic" headings (or a "Level N" line) set the level
+    # and topic of the problems below them; without one a problem is level 1.
 class QuizBank:  # persisted as JSON at Settings.quiz_bank_file
     def __init__(self, path: Path) -> None
     def replace_source(self, source: str, problems: list[QuizProblem]) -> None
     def remove_source(self, source: str) -> None
     def problems(self, sources: list[str] | None = None) -> list[QuizProblem]  # ordered by level, then file order
 ```
-Quiz problems come only from ticked (selected) files.
+Quiz problems come only from ticked (selected) files; one quiz asks at most `Settings.quiz_length` of them.
 
 ### I — `llm/mathspeak.py`
 ```python
@@ -291,7 +322,7 @@ HTTP (F implements, E calls):
 | GET | `/` | projector UI (`templates/index.html`) |
 | GET | `/dashboard`, `/precharge` | operator dashboard (`templates/precharge.html`, `static/js/dashboard/`) |
 | GET | `/api/config` | active non-secret settings, including `"profile"` |
-| GET | `/api/history` | `{"interactions": [...]}` newest first; each item `{id, at, query, spoken_text, animation_state, target_x, target_y, sources, ink_regions, had_frame, latency_s, error, mode, task_kind}` (`ink_regions` = count; `task_kind` = the task's `kind` or `null`) |
+| GET | `/api/history` | `{"interactions": [...]}` newest first; each item `{id, at, query, spoken_text, animation_state, target_x, target_y, sources, ink_regions, had_frame, latency_s, error, mode, task_kind}` (`ink_regions` = count; `task_kind` = the task's `kind` or `null`). Optional, for the dashboard's notes: `failed: bool` — the answer is an `error_action` because the model call or the pipeline failed (timeout, model unreachable, unreadable reply), not a mistake the model found; `display_text: str` — the answer before `mathspeak`, in normal notation. Without them the dashboard recognises the server's own failure texts and shows `spoken_text` |
 | GET | `/api/documents` | `{"documents": [{"source", "type", "chunks", "active": bool}], "total_chunks": int, "active_count": int, "all_active": bool}` — `active` = answers may use this file; `all_active` = no explicit selection (every file, default) |
 | PUT | `/api/documents/selection` | `{"all": true}` → every file active, or `{"sources": ["a.md", ...]}` → exactly those active (unknown names ignored; `[]` = none, answers skip RAG); non-list `sources` / other body → 400. Returns the `GET /api/documents` body. Persisted to `SAR_SELECTION_FILE` |
 | DELETE | `/api/documents/<source>` | `{"deleted": n}`; 404 if unknown. Also drops it from the selection |
@@ -301,7 +332,7 @@ HTTP (F implements, E calls):
 | GET | `/api/status` | `{"fps", "camera_running", "calibrated", "doc_chunks", "active_documents", "total_documents", "vlm_backend", "vlm_model", "audio_available", "tts_backend", "listen_mode", "state", "busy", "last_latency_s", "uptime_s", "profile", "mode"}` |
 | GET | `/api/tutor` | `TutorSession.to_dict()` |
 | PUT | `/api/tutor/mode` | `{"mode": "help" \| "practice" \| "quiz"}` → `to_dict()`; 400 otherwise. Quiz mode starts a quiz on the next question or via `POST /api/tutor/quiz/start` |
-| POST | `/api/tutor/quiz/start` | → `to_dict()`; starts even with 0 problems (the model invents problems); `total` = number of problems in the ticked files, or 10 |
+| POST | `/api/tutor/quiz/start` | → `to_dict()`; starts even with 0 problems (the model invents problems); `total` = number of problems in the ticked files capped at `SAR_QUIZ_LENGTH`, or `SAR_QUIZ_LENGTH` (default 10) when they have none |
 | POST | `/api/tutor/quiz/stop` | → `to_dict()` |
 | POST | `/api/query` | `{"text": str}` → `202 {"accepted": true}` (result arrives over socket) |
 | POST | `/api/listen` | push-to-talk trigger → `202` |
@@ -315,38 +346,50 @@ Socket.IO events (server → client): `avatar_update {animation_state, target_x,
 `transcript {text}`, `show_calibration {url}`, `hide_calibration {}`, `interaction {...history item}`,
 `documents_changed {...GET /api/documents body}` (after upload, delete and selection changes),
 `tutor {...TutorSession.to_dict()}` (whenever the mode, quiz or learn topic changes).
-On connect the server sends the current `status` to the new client.
+`avatar_update` and `speak` may also carry `display_text` (see `/api/history`); both pages show it in place of the
+spoken words when present.
+On connect the server sends the current `status` to the new client. The dashboard re-reads `/api/config` on
+every connect, and also takes the subject from `/api/status` `profile`, so a server restarted with another
+`SAR_PROFILE` is followed without a reload; the math mode picker stays hidden until the subject is known.
 Busy handling: `/api/query` → 409 while a query runs; `/api/listen` → 409 already recording, 503 no mic;
 `/api/calibrate` → 503 without a frame, 409 while another calibration runs.
 Client → server: `text_query {text}`, `trigger_listen {}`.
 Projector UI: hotkey **Space** = push-to-talk, **T** = type a query, **C** = toggle debug overlay, **F** =
 fullscreen. It also listens to `tutor` and shows the current quiz problem in normal notation (e.g.
-`3x + 5 = 20`) in a small top-left card, hidden when no quiz is running.
+`3x + 5 = 20`) in a small, faint top-left card (thin outline, no glow), hidden when no quiz is running and while
+the status is `listening`, `transcribing` or `thinking`, so the camera picture the model reads shows only the
+student's ink. For a typed question the frame can be taken before the card has gone, so the card stays faint.
 
 ---
 
 ## Scenario test cases — Math (default profile)
 Seed docs in `biobench_sar/knowledge/math/` (tick `quiz_bank.csv` and `worksheet_linear_equations.md` on the
-dashboard). For every case, `spoken_text` contains no `^`, `/`, `*` or `=`.
-1. **Next step, not the answer:** write `3x + 5 = 20`, say "I'm stuck" → `pointing` at the equation; explains
-   only the next operation ("subtract five from both sides"); never says "x equals five".
-2. **Phonetic speech:** write `x^2 + 5x + 6 = 0`, ask for help → the answer reads "x squared plus five x plus
-   six equals zero", and fractions on the board are read as "two thirds", "five halves".
-3. **Similar problem:** with `2x - 7 = 9` on the board, say "give me a similar problem" → `idle`, dictates a
-   new two-step equation with different numbers (e.g. "three x minus four equals eleven").
+dashboard). For every case, `spoken_text` contains no `^`, `/`, `*` or `=`. The help and practice cases use
+equations that are not in the seed files, so a pass never depends on an answer key the model should not see.
+1. **Next step, not the answer:** write `4x + 3 = 19`, say "I'm stuck" → `pointing` at the equation; explains
+   only the next operation ("subtract three from both sides"); never says "x equals four".
+2. **Phonetic speech:** write `x^2 + 7x + 10 = 0`, ask for help → the answer reads "x squared plus seven x plus
+   ten equals zero", and fractions on the board such as `2/3` are read as "two thirds".
+3. **Similar problem:** with `3x - 4 = 11` on the board, say "give me a similar problem" → `idle`, dictates a
+   new two-step equation with different numbers (e.g. "five x minus two equals thirteen").
 4. **Quiz, correct answer:** say "quiz me" → `idle`, dictates problem 1 of N, and the projector shows it
    top-left in normal notation; write the right answer and say "check my answer" → `celebrating`, then the
    next problem is dictated and the card advances.
 5. **Quiz, wrong answer:** write a wrong answer → `error`, one hint, the correct answer is never spoken; the
    card stays on the same problem.
-6. **Quiz without worksheets:** untick every quiz file, say "start a quiz" → the quiz starts with total 10 and
-   the model makes up progressive problems.
-7. **Stop the quiz:** say "stop the quiz" → back to help mode, the card is hidden.
-8. **Learn a topic, empty board:** say "I want to learn how to solve fractions" → `idle`, one or two plain
-   sentences on what a fraction is, then "Do you have an exercise in mind, or should I make one up for you?"
-9. **Learn → make one up:** reply "make one up" → `idle`, dictates an easy starter (e.g. "one fifth plus two
-   fifths") and invites the first step; then "I did it, what now?" continues from that problem.
-10. **Learn → own exercise:** after the offer, reply "I have one" → `idle`, asks the student to write it on the
+6. **Quiz, ask for a hint:** after a problem is dictated, say "I'm stuck" → one hint for the next step (stage
+   `hint`), never the answer; the quiz keeps going on the same problem and the score is unchanged.
+7. **Quiz length and order:** with both seed files ticked (43 problems), "quiz me" starts a quiz of 10
+   (`SAR_QUIZ_LENGTH`): the six level-1 fraction problems, then level-2 one-step equations, never back to an
+   easier level.
+8. **Quiz without worksheets:** untick every quiz file, say "start a quiz" → the quiz starts with total 10
+   (`SAR_QUIZ_LENGTH`) and the model makes up progressive problems.
+9. **Stop the quiz:** say "stop the quiz" → back to help mode, the card is hidden.
+10. **Learn a topic, empty board:** say "I want to learn how to solve fractions" → `idle`, one or two plain
+    sentences on what a fraction is, then "Do you have an exercise in mind, or should I make one up for you?"
+11. **Learn → make one up:** reply "make one up" → `idle`, dictates an easy starter (e.g. "one fifth plus two
+    fifths") and invites the first step; then "I did it, what now?" continues from that problem.
+12. **Learn → own exercise:** after the offer, reply "I have one" → `idle`, asks the student to write it on the
     board and then ask for help.
 
 ## Scenario test cases — Environmental Biology (`SAR_PROFILE=biology`)
@@ -359,15 +402,15 @@ Seed docs in `biobench_sar/knowledge/biology/`. The assistant must:
 ## Status (2026-10-23)
 | Area | Status | Verified |
 | --- | --- | --- |
-| Shared contracts | ✅ done; 🟡 `profile` / `knowledge_dir` / `quiz_bank_file` in progress | `config.py`, `schemas.py` |
+| Shared contracts | ✅ done, incl. `profile`, `knowledge_dir`, `seed_marker_file`, `quiz_bank_file`; 🟡 `quiz_length` (`SAR_QUIZ_LENGTH`) | `config.py`, `schemas.py` |
 | A Vision | ✅ built + hardened | box-level ink segmentation (#14), stale-frame/atomic calibration/tunable thresholds (#22); threshold sweep in `scripts/tune_ink.py` |
-| B RAG | ✅ built + hardened | non-blocking status (#15), content-addressed ids, list/delete documents, per-file selection; math seed docs added |
-| C VLM | ✅ built + tuned; 🟡 math profile, modes and conversation memory in progress | ~2 s warm answers, cold first answer 22.5 s → 8 s (#16); missing-step → `error` 5/5 (#18) |
+| B RAG | ✅ built + hardened | non-blocking status (#15), content-addressed ids, list/delete documents, per-file selection; math seed docs (worksheet levels match the quiz bank) |
+| C VLM | ✅ built + tuned, math profile, modes and conversation memory merged; 🟡 quiz stage `hint`, answer keys kept out of RAG context | ~2 s warm answers, cold first answer 22.5 s → 8 s (#16); missing-step → `error` 5/5 (#18); numeric quiz answers graded in code |
 | D Voice | ✅ built + hardened | wake self-trigger guard (#17), push-to-talk wins over wake loop, silence skip, offline TTS fallback (#20) |
-| E Frontend | ✅ built + polished; 🟡 quiz card in progress | projector reconnect/offline handling (#21); operator dashboard `/dashboard` with four tabs (#23) |
-| F Server & ops | ✅ built + polished; 🟡 tutor routes in progress | `Assistant` pipeline, new APIs, warm-up (#23, #24); CI tests + lint (#13, #25); scripts (#19) |
-| G Tutor / H Quiz bank / I Math speech | 🟡 in progress | contracts above |
-| Phase 2 integrate | ✅ biology profile | full suite green in CI; live loop verified in the browser with `qwen2.5vl:3b` |
+| E Frontend | ✅ built + polished; quiz card, mode picker and quiz bar merged | projector reconnect/offline handling (#21); operator dashboard `/dashboard` with four tabs (#23); dashboard follows the server's subject; pages show `display_text` when sent |
+| F Server & ops | ✅ built + polished, tutor routes merged; 🟡 `failed` / `display_text` in history and socket events | `Assistant` pipeline, new APIs, warm-up (#23, #24); CI tests + lint (#13, #25); scripts (#19) |
+| G Tutor / H Quiz bank / I Math speech | ✅ built and merged on `integration/math`; 🟡 review fixes (stage `hint`, quiz length) | contracts above |
+| Phase 2 integrate | ✅ biology profile; 🟡 math profile | biology: full suite green in CI, live loop verified in the browser with `qwen2.5vl:3b`; math: full suite green on `integration/math`, live scenarios pending |
 | Phase 3 hardware | 🟡 pending | camera + mic need macOS permissions; projector not yet connected |
 
 ## Open work — pick one up

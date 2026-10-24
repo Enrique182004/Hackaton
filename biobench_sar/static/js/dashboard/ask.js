@@ -22,15 +22,31 @@ function modeNote(item) {
   return MODE_LABELS[item.mode] || null;
 }
 
+// The server's own texts for a model call or pipeline that failed, for servers that send no `failed` flag.
+const FAILURE_TEXT = /couldn['’]t reach the AI model|took too long to answer|sent an unexpected reply|something went wrong|couldn['’]t understand my own answer|unknown VLM backend/i;
+
+// A failed call is no answer at all, whatever is on the board; "error" alone also means "the model found a mistake".
+function failedTurn(item) {
+  if (typeof item.failed === "boolean") return item.failed;
+  return FAILURE_TEXT.test(item.spoken_text || "");
+}
+
+function errorNote(item, sawDrawing) {
+  if (failedTurn(item)) return "something went wrong, so this isn't a real answer";
+  // A quiz answer can be given by voice, with nothing on the board.
+  if (item.task_kind === "quiz") return "that answer isn't right yet";
+  return sawDrawing ? `found a mistake in ${words().work}` : "found a mistake";
+}
+
 function marginNote(item) {
   const parts = [];
   const mode = modeNote(item);
   if (mode) parts.push(mode);
-  // "all correct" / "pointed at" / "a mistake" only mean something when the assistant actually saw a drawing.
+  // "all correct" / "pointed at" only mean something when the assistant actually saw a drawing.
   const sawDrawing = item.had_frame && item.ink_regions > 0;
   const work = words().work;
   if (item.animation_state === "error") {
-    parts.push(sawDrawing ? `found a mistake in ${work}` : "something went wrong, so this isn't a real answer");
+    parts.push(errorNote(item, sawDrawing));
   } else if (sawDrawing && item.animation_state === "pointing") {
     parts.push(`pointed at ${work}`);
   } else if (sawDrawing && item.animation_state === "celebrating") {
@@ -50,7 +66,8 @@ function turnNode(item) {
     el("p", { className: "who", textContent: "You asked" }),
     el("p", { className: "q", textContent: item.query }),
     el("p", { className: "who", textContent: "Assistant" }),
-    el("p", { className: "a", textContent: item.spoken_text }),
+    // In math, spoken_text spells notation out for the voice; display_text keeps "3x + 5 = 20" for reading.
+    el("p", { className: "a", textContent: item.display_text || item.spoken_text }),
     el("span", { className: "margin-note", textContent: marginNote(item) }),
   );
 }
@@ -90,10 +107,17 @@ export async function loadHistory() {
 const MIC_START_TIMEOUT_MS = 10000;
 let micTimer = null;
 
-// The Ask step's one note line, shared with the mode picker so the step stays one screen tall.
-export function note(text, tone) {
+// The Ask step's one note line. Writing it ends whatever push-to-talk phase it showed.
+function note(text, tone) {
   micNote = null;
   clearTimeout(micTimer);
+  setNote($("ask-msg"), text, tone);
+}
+
+// The same line for the mode picker and quiz buttons, so the step stays one screen tall. A microphone that is
+// still starting keeps its watchdog, so one that never comes up is still reported.
+export function sideNote(text, tone) {
+  if (micNote !== "starting") micNote = null;
   setNote($("ask-msg"), text, tone);
 }
 

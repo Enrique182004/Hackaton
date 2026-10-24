@@ -20,6 +20,9 @@
     speaking: "Answering…",
   };
   const BUSY_LABEL = "Still busy – wait a moment";
+  // While the student asks and the assistant reads the board, the quiz card steps aside: projected text in the
+  // camera picture looks like ink, and the model would read the printed problem as the student's work.
+  const CAPTURE_STATES = ["listening", "transcribing", "thinking"];
   const OFFLINE_LABEL = "Not connected";
 
   const $ = (id) => document.getElementById(id);
@@ -131,12 +134,15 @@
     } else {
       setState(finalState);
     }
-    showBubble(d.spoken_text || "", d.spoken_text ? Math.max(4000, d.spoken_text.length * 80) : 0);
+    // display_text keeps math in normal notation (3x + 5 = 20); spoken_text spells it out for the voice.
+    const text = d.display_text || d.spoken_text || "";
+    showBubble(text, text ? Math.max(4000, text.length * 80) : 0);
   }
 
   function onSpeak(d) {
     releaseAudio();
-    if (d.text) showBubble(d.text); else armBubbleTimer(0);
+    const text = d.display_text || d.text;
+    if (text) showBubble(text); else armBubbleTimer(0);
     if (!d.url) { armBubbleTimer(4000); return; }
     const a = new Audio(d.url);
     audio = a;
@@ -160,6 +166,7 @@
     clearTimeout(offlineHintTimer);
     statusEl.dataset.state = s;
     statusLabel.textContent = d.detail === "busy" ? BUSY_LABEL : STATUS_LABELS[s] || s;
+    quizCard.classList.toggle("capturing", CAPTURE_STATES.includes(s));
   }
 
   function onTutor(d) {

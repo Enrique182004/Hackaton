@@ -20,9 +20,10 @@ Non-negotiables:
 - **Math is spoken in words** — never `^ / * =` in `spoken_text` ("two thirds", "x squared", "three x plus
   five equals twelve"); `llm/mathspeak.py` is the safety net, not an excuse to skip it in the prompt.
 - **Help mode never gives the final answer** — only the next operation, pointing at that part of the ink.
-- **No monoliths** — build one module at a time in the `/biobench_sar` layout.
+- **No monoliths** — build one module at a time in the `/biobench_sar` layout; wait for the user to name it.
 - **Concurrency first** — the camera loop stays at ~30 FPS (hardware check passes at ≥ 28) whatever the LLM is doing.
-- **Setup commands first** — give install commands (pip + system binaries like Tesseract, PortAudio) before Python code.
+- **Setup commands first** — give Windows PowerShell install commands (and the macOS equivalents) for pip and
+  system binaries like Tesseract and PortAudio before Python code.
 - **Defensive JSON parsing** — `try/except` around VLM output; strip markdown fences before `json.loads`.
 - VLM output schema: `{spoken_text, animation_state: idle|walking|pointing|celebrating|error, target_x, target_y}`.
 
@@ -47,7 +48,20 @@ SAR_VLM_BACKEND=mock SAR_TTS_BACKEND=none .venv/bin/python -m biobench_sar   # n
 .venv/bin/ruff check . && .venv/bin/ruff format --check .  # `ruff format .` fixes formatting
 .venv/bin/python scripts/hardware_check.py
 .venv/bin/python -m scripts.bench_vlm -n 3
+.venv/bin/python -m scripts.bench_vlm --scenarios --profile math   # pass/fail cases (--profile biology is the default)
 ```
+
+Windows PowerShell (after `scripts/setup_windows.ps1`, which prints the first and the mock line too; a `$env:`
+setting lasts until the window closes):
+```powershell
+.\.venv\Scripts\python.exe -m biobench_sar
+$env:SAR_PROFILE='biology'; .\.venv\Scripts\python.exe -m biobench_sar
+$env:SAR_VLM_BACKEND='mock'; $env:SAR_TTS_BACKEND='none'; .\.venv\Scripts\python.exe -m biobench_sar
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Both profiles share `SAR_DATA_DIR` (knowledge base, ticked files, quiz bank); give each its own
+(`SAR_DATA_DIR=data/biology`) to keep them apart. Deleting `data/chroma_db` loads the bundled documents again.
 
 ## Code rules
 - Be terse. No preamble, no summaries unless asked. Output code only.

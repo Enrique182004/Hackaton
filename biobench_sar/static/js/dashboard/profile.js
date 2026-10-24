@@ -37,6 +37,8 @@ const WORDS = {
 export const MODE_LABELS = { help: "step-by-step help", practice: "similar problem", quiz: "quiz" };
 
 let profile = "math";
+// False until the server has said which subject it runs; the math mode picker waits for it.
+let known = false;
 const listeners = [];
 
 export function words() {
@@ -47,12 +49,19 @@ export function currentProfile() {
   return profile;
 }
 
+export function profileKnown() {
+  return known;
+}
+
 export function onProfileChange(fn) {
   listeners.push(fn);
 }
 
+// Safe to call on every status poll: listeners only run when the subject is first known or changes.
 export function setProfile(name) {
   const previous = profile;
+  const first = !known;
+  known = true;
   profile = Object.hasOwn(WORDS, name) ? name : "math";
   const w = words();
   $("ask-input").placeholder = w.placeholder;
@@ -60,5 +69,5 @@ export function setProfile(name) {
   $("files-hint").textContent = w.filesHint;
   $("drop-sub").textContent = w.dropSub;
   $("search-input").placeholder = w.searchHint;
-  if (profile !== previous) for (const fn of listeners) fn(profile);
+  if (first || profile !== previous) for (const fn of listeners) fn(profile);
 }

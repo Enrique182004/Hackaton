@@ -22,7 +22,15 @@ bash scripts/setup_mac.sh --pull-model   # brew deps, Python 3.12 venv, requirem
 SAR_PROFILE=biology .venv/bin/python -m biobench_sar    # biology research assistant
 ```
 
-Windows: run `scripts/setup_windows.ps1` in PowerShell.
+Windows: run `scripts/setup_windows.ps1` in PowerShell, then:
+
+```powershell
+.\.venv\Scripts\python.exe -m biobench_sar                                      # math tutor (default)
+$env:SAR_PROFILE='biology'; .\.venv\Scripts\python.exe -m biobench_sar          # biology research assistant
+$env:SAR_VLM_BACKEND='mock'; .\.venv\Scripts\python.exe -m biobench_sar         # no model needed
+```
+
+A `$env:` setting lasts until that PowerShell window closes (`Remove-Item Env:SAR_PROFILE` undoes it).
 
 Then open:
 
@@ -31,8 +39,22 @@ Then open:
 | Projector | `http://localhost:5050/` | Fullscreen (`F`) on the projector. Pure black = invisible on the board. |
 | Operator dashboard | `http://localhost:5050/dashboard` | Your laptop. |
 
-The profile's bundled documents (`biobench_sar/knowledge/<profile>/`) are loaded into the knowledge base on
-first run (`SAR_SEED_KNOWLEDGE=0` to skip). For math that is a quiz bank, a worksheet and a tutoring guide.
+The profile's bundled documents (`biobench_sar/knowledge/<profile>/`) are loaded into the knowledge base the
+first time that profile starts (`SAR_SEED_KNOWLEDGE=0` to skip). For math that is a quiz bank, a worksheet and
+a tutoring guide. Each profile is loaded once per knowledge base (remembered in `data/chroma_db/.seeded`), so
+removing a bundled file keeps it removed.
+
+**Both profiles share one knowledge base**, file selection and quiz bank in `SAR_DATA_DIR`: after running both,
+math answers also search the biology files and the other way round, unless you untick them. To keep the
+subjects apart, give each its own data folder:
+
+```bash
+SAR_PROFILE=biology SAR_DATA_DIR=data/biology .venv/bin/python -m biobench_sar
+```
+
+To load the bundled documents again, stop the app and delete `data/chroma_db` (your uploads are then gone from
+the knowledge base too; upload them again).
+
 The default port is 5050 because macOS AirPlay uses 5000. Grant **Camera** and **Microphone** access to the
 terminal that runs the server (System Settings → Privacy & Security), then restart it.
 
@@ -51,7 +73,8 @@ Check the hardware any time with `.venv/bin/python scripts/hardware_check.py`.
    into regions (one per equation line or flowchart box).
 2. **Think** — the question retrieves the top chunks from your ticked files; the question, board image, ink
    regions, context and the current tutor mode go to the VLM, which must answer with strict JSON
-   `{spoken_text, animation_state, target_x, target_y}`.
+   `{spoken_text, animation_state, target_x, target_y}`. In math, answer keys are removed from those chunks:
+   an answer reaches the model only when it checks a quiz answer, and a plain-number answer is graded in code.
 3. **Act** — the answer is spoken and the avatar glides to the target with the matching state
    (`idle`, `walking`, `pointing`, `celebrating`, `error`).
 
@@ -67,7 +90,7 @@ The tutor has three modes. Say one of the phrases (or type it on the dashboard) 
 | --- | --- | --- |
 | **Help** (default) | "help", "next step", "I'm stuck", "stop the quiz" | Explains **only the next operation** in simple words, points (`pointing`) at that part of your equation and waits for you to write the step. It never says the final answer. |
 | **Practice** | "similar problem", "another one like this", "more practice" | Reads the equation on the board, swaps the numbers or letters to keep the same difficulty and dictates the new equation for you to write (`idle`). |
-| **Quiz** | "quiz me", "start a quiz" | Dictates problem 1 of N (also shown top-left on the projector in normal notation, e.g. `3x + 5 = 20`). Write your answer and talk again ("check my answer"): `celebrating` and the next problem if it is right, `error` and one hint if it is wrong — never the answer. |
+| **Quiz** | "quiz me", "start a quiz" | Dictates problem 1 of N (also shown top-left on the projector in normal notation, e.g. `3x + 5 = 20`). Write your answer and talk again ("check my answer"): `celebrating` and the next problem if it is right, `error` and one hint if it is wrong — never the answer. "I'm stuck", "hint" or "help" during a quiz gives one hint on the same problem without leaving the quiz or costing a try; only "stop the quiz" ends it. The score counts problems right on the first try. |
 
 **Learning a topic** works in any mode, even with an empty board. Say what you want to learn ("I want to
 learn how to solve fractions", "teach me equations", "how do I add fractions?"): the avatar introduces the
@@ -86,8 +109,8 @@ the pages as a `tutor` Socket.IO event.
 
 ### Quiz banks
 
-Quiz problems come **only from ticked files** on the dashboard's *Study files* tab, in order of level, then
-file order. Two formats are recognised:
+Quiz problems come **only from ticked files** on the dashboard's step 1 tab (*Worksheets & notes*), easiest
+level first, then file order. Two formats are recognised:
 
 - **CSV** with a `problem` (or `question`) and an `answer` column, plus optional `topic` and `level` (or
   `difficulty`) columns — see [`knowledge/math/quiz_bank.csv`](biobench_sar/knowledge/math/quiz_bank.csv):
@@ -100,16 +123,34 @@ file order. Two formats are recognised:
 - **Worksheets** (`.md`, `.txt`, `.pdf`, `.docx`) with numbered problems (`1. 3x + 5 = 20` or
   `Problem 2: ...`), each optionally followed by an `Answer: ...` line — see
   [`knowledge/math/worksheet_linear_equations.md`](biobench_sar/knowledge/math/worksheet_linear_equations.md).
+  A file only counts as a worksheet when its **file name, first line or a heading says so**: worksheet, quiz,
+  exercise, homework, assignment, practice, problem set, drill or test (e.g. `unit3_worksheet.md`, or a first
+  line `# Quiz: fractions`); that keeps the numbered tips in a guide out of quizzes. A worksheet called
+  `chapter3.md` with no such title can give no problems, and the model then makes the quiz up, so name or
+  title it. A numbered line needs a number plus a math sign or word (`=`, `+`, `/`, "solve", "simplify", …).
+  `## Level N: topic` headings set the level and topic of the problems below them, so problems from several
+  files stay in order of difficulty; without one, a problem counts as level 1:
 
-The parsed problems are kept in `SAR_QUIZ_BANK_FILE`. With no problems ticked, a quiz still starts: the model
-makes up ten progressive problems itself.
+  ```md
+  # Worksheet: two-step equations
+
+  ## Level 3: two-step equations
+
+  1. 4x + 3 = 19
+  Answer: x = 4
+  ```
+
+The parsed problems are kept in `SAR_QUIZ_BANK_FILE`. A quiz asks at most `SAR_QUIZ_LENGTH` problems (default
+10): the first ones from the ticked files. With no problems ticked, a quiz still starts: the model makes up
+`SAR_QUIZ_LENGTH` progressive problems itself.
 
 ## The dashboard
 
 Open `http://localhost:5050/dashboard` on your laptop. It has four tabs:
 
-1. **Study files** — drag in PDFs, Word or PowerPoint files, CSVs, notes or photos of notes (quiz banks and
-   worksheets too). Tick the files the assistant should use; unticked files are kept but ignored.
+1. **Worksheets & notes** (called *Study files* in the biology profile) — drag in PDFs, Word or PowerPoint
+   files, CSVs, notes or photos of notes (quiz banks and worksheets too). Tick the files the assistant should
+   use; unticked files are kept but ignored.
 2. **Board** — see what the camera sees, check the list (each problem says how to fix it), and press
    **Line up camera and projector** once after moving either one.
 3. **Ask** — type a question, press **Talk**, or click an example. Every answer is written into the notebook
@@ -119,15 +160,19 @@ Open `http://localhost:5050/dashboard` on your laptop. It has four tabs:
 
 ## Configuration
 
-Everything is an environment variable (see `biobench_sar/config.py`). The ones you are most likely to change:
+Everything is an environment variable (see `biobench_sar/config.py`). They can also go in a `sar.env` file in
+the repo root (copy `sar.env.example`; `SAR_ENV_FILE` points at another file), which `python -m biobench_sar`
+loads at startup; a real environment variable wins over the file. Room and hardware settings:
+[docs/HARDWARE_SETUP.md](docs/HARDWARE_SETUP.md). The ones you are most likely to change:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SAR_PROFILE` | `math` | Subject: `math` (tutor) or `biology` (research assistant); anything else means `math` |
 | `SAR_PORT` / `SAR_HOST` | `5050` / `127.0.0.1` | Server port and bind address |
-| `SAR_DATA_DIR` | `data/` | Where calibration, the knowledge base, uploads, speech and selections are kept |
-| `SAR_SEED_KNOWLEDGE` | `1` | Load `biobench_sar/knowledge/<profile>/` into an empty knowledge base at startup |
+| `SAR_DATA_DIR` | `data/` | Where calibration, the knowledge base, uploads, speech and selections are kept; shared by both profiles unless you give each its own |
+| `SAR_SEED_KNOWLEDGE` | `1` | Load `biobench_sar/knowledge/<profile>/` at startup, once per profile and knowledge base |
 | `SAR_QUIZ_BANK_FILE` | `data/quiz_bank.json` | Quiz problems parsed from uploaded CSVs and worksheets |
+| `SAR_QUIZ_LENGTH` | `10` | The most problems one quiz asks, and how many the model makes up when no ticked file has any |
 | `SAR_SELECTION_FILE` | `data/selection.json` | Which files are ticked |
 | `SAR_CAMERA_INDEX` | `0` | Which camera |
 | `SAR_PROJECTOR_WIDTH` / `_HEIGHT` | `1920` / `1080` | Projector resolution |
@@ -152,8 +197,13 @@ Everything is an environment variable (see `biobench_sar/config.py`). The ones y
 .venv/bin/python -m pytest -q        # unit tests, no hardware or network needed
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 SAR_VLM_BACKEND=mock SAR_TTS_BACKEND=none .venv/bin/python -m biobench_sar   # UI without a model
-.venv/bin/python -m scripts.bench_vlm -n 3   # VLM latency against Ollama (--scenarios: biology flowchart cases)
+.venv/bin/python -m scripts.bench_vlm -n 3   # VLM latency against Ollama
+.venv/bin/python -m scripts.bench_vlm --scenarios --profile math      # math pass/fail scenarios
+.venv/bin/python -m scripts.bench_vlm --scenarios --profile biology   # biology flowchart cases (the default profile)
 ```
+
+`--only H,QC` runs only those scenarios, `--runs N` repeats each one, `--raw` grades the model without the
+VLM client's math post-processing.
 
 CI runs lint and tests on every pull request. Every change goes through its own branch and PR — see
 [CONTRIBUTING.md](CONTRIBUTING.md). AI agents start at [AGENTS.md](AGENTS.md).

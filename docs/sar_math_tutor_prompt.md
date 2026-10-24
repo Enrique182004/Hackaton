@@ -64,6 +64,14 @@ When generating the VLM prompt and backend logic, enforce these core tutoring be
 - **Quiz Mode:** The AI queries the local ChromaDB for progressive math problems from uploaded worksheets,
   dictates the problem, and evaluates the student's physical ink answer.
 
+  > **How this is built:** the problems are not searched in ChromaDB. When a CSV quiz bank or a worksheet is
+  > uploaded, its problems and answers are parsed into the quiz bank (`rag/quiz_bank.py`, JSON at
+  > `SAR_QUIZ_BANK_FILE`); a quiz takes them from the ticked files, easiest level first, at most
+  > `SAR_QUIZ_LENGTH` (default 10) per quiz, and the model makes problems up when none are ticked. ChromaDB
+  > holds the files' text for answering questions; answer keys are removed before that text reaches the
+  > model, so an answer reaches it only when a quiz answer is checked. Asking for help during a quiz ("I'm stuck", "hint") gives one hint
+  > on the same problem without ending the quiz. Details: [BUILD_PLAN.md](BUILD_PLAN.md) contracts C, G and H.
+
 ### C. Learning a Topic (works with an empty board)
 
 A student does not need anything on the board to start. They can say, for example, "I want to learn how to

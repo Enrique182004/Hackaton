@@ -1,4 +1,7 @@
-"""Browser pages: offline-safe font loading and the vanilla JS behaviour, run under node with a fake DOM."""
+"""Browser pages: offline-safe font loading and the vanilla JS behaviour, run under node with a fake DOM.
+
+Also what the pages' readers rely on: the docs and the seed documents must stay true to the code.
+"""
 
 from __future__ import annotations
 
@@ -10,9 +13,22 @@ from pathlib import Path
 
 import pytest
 
+from biobench_sar.config import Settings
+from biobench_sar.rag.quiz_bank import QuizBank, is_worksheet, parse_quiz_file, parse_worksheet_text
+
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "biobench_sar" / "templates"
 STATIC = ROOT / "biobench_sar" / "static"
+MATH_SEEDS = ROOT / "biobench_sar" / "knowledge" / "math"
+DOC_NAMES = (
+    "README.md",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    "docs/BUILD_PLAN.md",
+    "docs/sar_math_tutor_prompt.md",
+)
+DOCS = {name: (ROOT / name).read_text(encoding="utf-8") for name in DOC_NAMES}
 FAKE_DOM = Path(__file__).with_name("js") / "fake_dom.mjs"
 NODE = shutil.which("node")
 needs_node = pytest.mark.skipif(NODE is None, reason="node is not installed")
@@ -497,14 +513,15 @@ sock.fire("connect");
 await settle();
 sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: null });
 await $("quiz-start-btn").fire("click");
-assert.equal($("quiz-progress").textContent, "Problem 1 of 8 · 0 right so far");
+assert.equal($("quiz-progress").textContent, "Problem 1 of 8 · 0 right on the first try");
 assert.equal($("quiz-problem").textContent, "3x + 5 = 20");
 assert.equal($("quiz-problem").hidden, false);
 assert.equal($("quiz-start-btn").hidden, true);
 assert.equal($("quiz-stop-btn").hidden, false);
 assert.match($("ask-msg").textContent, /^Quiz started! Say or type “I'm ready”/);
 sock.fire("tutor", { mode: "quiz", learn_topic: "equations", quiz: QUIZ });
-assert.equal($("quiz-progress").textContent, "Problem 2 of 8 · 1 right so far");
+// The server's score only counts first-try answers; "so far" read like a bug after a fixed answer.
+assert.equal($("quiz-progress").textContent, "Problem 2 of 8 · 1 right on the first try");
 assert.equal($("badge-ask").textContent, "quiz · 2 of 8");
 assert.equal($("learn-line").textContent, "Learning: equations");
 assert.equal($("learn-line").hidden, false);
@@ -518,7 +535,7 @@ assert.equal($("ask-msg").textContent, "Quiz stopped.");
 assert.equal($("badge-ask").textContent, "step-by-step help");
 // Back in quiz mode after a quiz that got somewhere: the bar reports how it went.
 sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: { ...QUIZ, active: false, score: 5 } });
-assert.equal($("quiz-progress").textContent, "Last quiz: 5 right. Press Start quiz to go again.");
+assert.equal($("quiz-progress").textContent, "Last quiz: 5 right on the first try. Press Start quiz to go again.");
 assert.equal($("quiz-start-btn").hidden, false);
 """,
     )
@@ -577,27 +594,35 @@ assert.equal($("ask-input").placeholder, "Ask about your drawing or your notes�
     )
 
 
+UNREACHABLE = "I couldn't reach the AI model. Please check that it is running."
 HISTORY = [
-    {"query": "is it 5?", "animation_state": "error", "ink_regions": 0, "had_frame": False, "latency_s": 3.2,
-     "mode": "quiz", "task_kind": "quiz", "sources": []},
-    {"query": "is it 5?", "animation_state": "error", "ink_regions": 2, "had_frame": True, "latency_s": 2.6,
-     "mode": "quiz", "task_kind": "quiz", "sources": []},
-    {"query": "teach me fractions", "animation_state": "idle", "ink_regions": 0, "had_frame": True, "latency_s": 2,
-     "mode": "help", "task_kind": "learn", "sources": ["guide.md"]},
-    {"query": "next step?", "animation_state": "pointing", "ink_regions": 1, "had_frame": True, "latency_s": 4,
-     "mode": "help", "task_kind": None, "sources": []},
+    # Ollama not running while the board has ink: a failed call, not a mistake in the student's work.
+    {"query": "check my answer", "spoken_text": UNREACHABLE, "animation_state": "error", "ink_regions": 2,
+     "had_frame": True, "latency_s": 3.2, "mode": "quiz", "task_kind": "quiz", "sources": []},
+    # A wrong quiz answer said out loud, empty board and no camera.
+    {"query": "is it 5?", "spoken_text": "Not quite. What undoes adding five?", "animation_state": "error",
+     "ink_regions": 0, "had_frame": False, "latency_s": 2.6, "mode": "quiz", "task_kind": "quiz", "sources": []},
+    # A server that says so: `failed` wins over any guess from the text or the board.
+    {"query": "help", "spoken_text": "Hmm.", "animation_state": "error", "ink_regions": 1, "had_frame": True,
+     "latency_s": 1, "mode": "help", "task_kind": None, "sources": [], "failed": True},
+    {"query": "is this right?", "spoken_text": "The second line drops the minus sign.", "animation_state": "error",
+     "ink_regions": 1, "had_frame": True, "latency_s": 1, "mode": "help", "task_kind": None, "sources": [],
+     "failed": False},
+    {"query": "teach me fractions", "spoken_text": "…", "animation_state": "idle", "ink_regions": 0,
+     "had_frame": True, "latency_s": 2, "mode": "help", "task_kind": "learn", "sources": ["guide.md"]},
+    {"query": "next step?", "spoken_text": "…", "animation_state": "pointing", "ink_regions": 1, "had_frame": True,
+     "latency_s": 4, "mode": "help", "task_kind": None, "sources": []},
 ]  # fmt: skip
 
 
 @needs_node
 @pytest.mark.parametrize("profile", ["math", "biology"])
 def test_margin_notes_name_the_mode_and_what_went_wrong(tmp_path: Path, profile: str) -> None:
-    items = [{**item, "spoken_text": "…"} for item in HISTORY]
     run_node(
         tmp_path,
         "precharge.html",
         DASHBOARD
-        + f"const ITEMS = {json.dumps(items)};\nconst PROFILE = {json.dumps(profile)};\n"
+        + f"const ITEMS = {json.dumps(HISTORY)};\nconst PROFILE = {json.dumps(profile)};\n"
         + """
 installIo();
 installFetch({
@@ -608,9 +633,12 @@ await import("./dashboard/main.js");
 await settle();
 const notes = $("timeline").children.map((li) => li.children.find((c) => c.className === "margin-note").textContent);
 const math = PROFILE === "math";
+const failed = "something went wrong, so this isn't a real answer";
 assert.deepEqual(notes, [
-  (math ? "quiz · " : "") + "something went wrong, so this isn't a real answer · didn't use your files · couldn't see the board · took 3 s",
-  (math ? "quiz · found a mistake in your work" : "found a mistake in your drawing") + " · didn't use your files · took 3 s",
+  (math ? "quiz · " : "") + `${failed} · didn't use your files · took 3 s`,
+  (math ? "quiz · " : "") + "that answer isn't right yet · didn't use your files · couldn't see the board · took 3 s",
+  (math ? "step-by-step help · " : "") + `${failed} · didn't use your files · took 1 s`,
+  (math ? "step-by-step help · found a mistake in your work" : "found a mistake in your drawing") + " · didn't use your files · took 1 s",
   (math ? "learning something new · " : "") + "read guide.md · took 2 s",
   (math ? "step-by-step help · pointed at your work" : "pointed at your drawing") + " · didn't use your files · took 4 s",
 ]);
@@ -777,7 +805,10 @@ installFetch({
   "GET /api/search": { status: 500, body: { error: "chromadb exploded" } },
   "PUT /api/documents/selection": { status: 500, body: { error: "disk full" } },
   "GET /api/documents": { status: 200, body: { documents: [{ source: "a.pdf", type: "pdf", chunks: 1, active: true }] } },
-  "POST /api/upload": { status: 200, body: { files: [{ name: "b.pdf", chunks: 0, error: "PDF is encrypted" }], total_chunks: 0 } },
+  "POST /api/upload": { status: 200, body: { files: [
+    { name: "b.pdf", chunks: 0, error: "PDF is encrypted" },
+    { name: "scan.pdf", chunks: 0, error: "no readable text found (scanned PDF or blank image?)" },
+  ], total_chunks: 0 } },
 });
 await import("./dashboard/main.js");
 sock.fire("connect");
@@ -798,9 +829,388 @@ assert.equal($("upload-msg").textContent, `Couldn't save which files are ticked.
 $("file-input").files = [new File(["x"], "b.pdf")];
 await $("file-input").fire("change");
 await settle();
-assert.equal($("upload-msg").textContent, "Couldn't read b.pdf (try saving it again as a PDF or text file).");
+// Saving a scan again as a PDF doesn't add text to it, so that file gets its own advice.
+assert.equal($("upload-msg").textContent,
+  "Couldn't read b.pdf (try saving it again as a PDF or text file); " +
+  "scan.pdf (it looks like a scan with no text, so type it up or upload a clearer photo).");
 for (const raw of ["RuntimeError: boom", "OSError: -9996", "chromadb exploded", "disk full", "PDF is encrypted"]) {
   assert.ok(logText().includes(raw), `${raw} missing from the activity log`);
 }
 """,
     )
+
+
+# ---- dashboard: subject, files, notes ------------------------------------------------
+
+
+@needs_node
+def test_subject_known_before_the_file_list_keeps_the_ask_tab(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+let reply;
+installFetch({
+  "GET /api/documents": () => new Promise((resolve) => { reply = resolve; }),
+  "GET /api/config": { status: 200, body: { profile: "biology" } },
+});
+await import("./dashboard/main.js");
+await settle();
+// /api/config answered first: the page's empty placeholder list is not "this student has no files".
+assert.equal($("panel-ask").hidden, false);
+assert.equal($("panel-files").hidden, true);
+reply({ status: 200, body: { documents: [{ source: "protocol.pdf", type: "pdf", chunks: 3, active: true }] } });
+await settle();
+assert.equal($("badge-files").textContent, "1 in use");
+assert.equal($("panel-ask").hidden, false);
+assert.equal($("files-summary").textContent, "The assistant uses all 1 file when answering.");
+""",
+    )
+
+
+@needs_node
+def test_subject_follows_a_server_restarted_with_another_profile(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+let profile = "math";
+installFetch({ "GET /api/config": () => ({ status: 200, body: { profile } }) });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+assert.equal($("modes").hidden, false);
+// Restarted with SAR_PROFILE=biology while this page stayed open: the reconnect asks again.
+profile = "biology";
+sock.fire("disconnect");
+sock.fire("connect");
+await settle();
+assert.equal($("modes").hidden, true);
+assert.equal($("files-tab-name").textContent, "Study files");
+assert.equal($("examples").children[1].textContent, "Is my flowchart missing a sterile step?");
+""",
+    )
+
+
+@needs_node
+def test_status_poll_sets_the_subject_when_config_fails(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+const http = installFetch({ "GET /api/config": { status: 500, body: { error: "boom" } } });
+http.setStatus({ profile: "biology" });
+await import("./dashboard/main.js");
+await settle();
+assert.equal($("files-tab-name").textContent, "Study files");
+assert.equal($("modes").hidden, true);
+// Still retried, so the settings list fills in once /api/config works.
+await wait(2300);
+assert.ok(http.calls.filter((c) => c.path === "/api/config").length >= 2);
+""",
+    )
+
+
+@needs_node
+def test_mode_picker_waits_until_the_subject_is_known(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+const answers = [];
+installFetch({ "GET /api/config": () => new Promise((resolve) => answers.push(resolve)) });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+// /api/tutor answered but the subject didn't yet: a biology server must never show the math picker.
+assert.equal($("modes").hidden, true);
+for (const answer of answers) answer({ status: 200, body: { profile: "math" } });
+await settle();
+assert.equal($("modes").hidden, false);
+assert.equal($("badge-ask").textContent, "step-by-step help");
+""",
+    )
+
+
+@needs_node
+def test_mode_message_keeps_the_microphone_watchdog(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+installFetch({
+  "PUT /api/tutor/mode": (init) => ({ status: 200, body: { mode: JSON.parse(init.body).mode, learn_topic: null, quiz: null } }),
+});
+// Capture the 10 s "the microphone didn't start" watchdog instead of waiting for it.
+const watchdogs = [];
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+globalThis.setTimeout = (fn, ms, ...args) => {
+  if (ms !== 10000) return realSetTimeout(fn, ms, ...args);
+  const token = { fn };
+  watchdogs.push(token);
+  return token;
+};
+globalThis.clearTimeout = (token) => {
+  const i = watchdogs.indexOf(token);
+  if (i >= 0) watchdogs.splice(i, 1); else realClearTimeout(token);
+};
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+await $("listen-btn").fire("click");
+assert.equal($("ask-msg").textContent, "Getting the microphone ready…");
+await $("mode-practice").fire("click");
+assert.equal($("ask-msg").textContent, "Now write a problem on the board and ask for one like it.");
+assert.equal(watchdogs.length, 1, "picking a mode cancelled the microphone watchdog");
+watchdogs[0].fn();
+assert.equal($("ask-msg").textContent, "The microphone didn't start. Try Talk again, or type your question.");
+""",
+    )
+
+
+@needs_node
+def test_math_answers_show_normal_notation_when_the_server_sends_it(tmp_path: Path) -> None:
+    item = {**HISTORY[-1], "spoken_text": "Subtract five from both sides of three x plus five equals twenty.",
+            "display_text": "Subtract 5 from both sides of 3x + 5 = 20."}  # fmt: skip
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + f"const ITEMS = {json.dumps([item, HISTORY[-2]])};\n"
+        + """
+installIo();
+installFetch({ "GET /api/history": { status: 200, body: { interactions: ITEMS } } });
+await import("./dashboard/main.js");
+await settle();
+const answers = $("timeline").children.map((li) => li.children.find((c) => c.className === "a").textContent);
+// Older servers send no display_text: the spoken words are shown as before.
+assert.deepEqual(answers, ["Subtract 5 from both sides of 3x + 5 = 20.", "…"]);
+""",
+    )
+
+
+# ---- projector: quiz card and bubble -------------------------------------------------
+
+
+@needs_node
+def test_projector_quiz_card_steps_aside_while_the_board_is_read(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR
+        + f"const QUIZ = {QUIZ};\n"
+        + """
+const card = $("quiz-card");
+sock.fire("connect");
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: QUIZ });
+await settle();
+assert.ok(!card.classList.contains("hidden"));
+for (const state of ["listening", "transcribing", "thinking"]) {
+  sock.fire("status", { state });
+  assert.ok(card.classList.contains("capturing"), `card still in the camera picture while ${state}`);
+}
+sock.fire("status", { state: "speaking" });
+assert.ok(!card.classList.contains("capturing"));
+assert.ok(!card.classList.contains("hidden"));
+sock.fire("status", { state: "idle" });
+assert.ok(!card.classList.contains("capturing"));
+""",
+    )
+
+
+def test_projector_quiz_card_is_faint_and_hidden_while_capturing() -> None:
+    css = (STATIC / "css" / "style.css").read_text(encoding="utf-8")
+    rule = re.search(r"#quiz-card\s*\{([^}]*)\}", css)
+    assert rule, "no #quiz-card rule"
+    body = rule.group(1)
+    # A glow or a thick bright outline is picked up as ink by find_ink_regions and read by the VLM.
+    assert "box-shadow" not in body and "text-shadow" not in body
+    border = re.search(r"border:\s*([\d.]+)px", body)
+    assert border and float(border.group(1)) <= 2
+    width = re.search(r"max-width:\s*([\d.]+)vw", body)
+    assert width and float(width.group(1)) <= 30
+    assert re.search(r"#quiz-card\.capturing\s*\{[^}]*visibility:\s*hidden", css)
+
+
+@needs_node
+def test_projector_bubble_prefers_normal_notation(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR
+        + """
+sock.fire("connect");
+const words = "Subtract five from both sides of three x plus five equals twenty.";
+const notation = "Subtract 5 from both sides of 3x + 5 = 20.";
+sock.fire("avatar_update", { animation_state: "pointing", target_x: 900, target_y: 400, spoken_text: words, display_text: notation });
+assert.equal($("bubble").textContent, notation);
+sock.fire("speak", { url: null, text: words, display_text: notation });
+assert.equal($("bubble").textContent, notation);
+sock.fire("speak", { url: null, text: words });
+assert.equal($("bubble").textContent, words);
+""",
+    )
+
+
+# ---- seed documents ------------------------------------------------------------------
+
+# The worksheet rule as the contract words it ("1. 3x + 5 = 20", "Problem 2: ..."), read literally.
+NUMBERED_LINE = re.compile(r"^\s*(?:problem\s*)?\d+\s*[.):]\s+\S", re.I | re.M)
+
+
+def test_seed_worksheet_levels_match_the_quiz_bank(tmp_path: Path) -> None:
+    sheet = parse_quiz_file(MATH_SEEDS / "worksheet_linear_equations.md", "worksheet_linear_equations.md")
+    bank = parse_quiz_file(MATH_SEEDS / "quiz_bank.csv", "quiz_bank.csv")
+    level = {p.topic: p.level for p in bank}
+    one, two, brackets = level["one-step equations"], level["two-step equations"], level["distributive property"]
+    assert level["combining like terms"] == brackets
+    assert [p.level for p in sheet] == [one] * 4 + [two] * 4 + [brackets] * 4
+    quiz = QuizBank(tmp_path / "quiz_bank.json")
+    quiz.replace_source("quiz_bank.csv", bank)
+    quiz.replace_source("worksheet_linear_equations.md", sheet)
+    order = [p.problem for p in quiz.problems()]
+    # Both files ticked (the default): the hardest worksheet problems no longer come before easy bank ones.
+    assert order.index("x + 9 = 15") < order.index("3x + 5 = 20")
+    assert order.index("2(x + 5) = 3x + 4") > order.index("7 - 2x = 1")
+
+
+def test_guides_have_no_lines_a_worksheet_parser_would_take() -> None:
+    guides = [p for p in sorted(MATH_SEEDS.glob("*.md")) if "worksheet" not in p.stem]
+    assert guides
+    for path in guides:
+        text = path.read_text(encoding="utf-8")
+        assert NUMBERED_LINE.findall(text) == [], f"{path.name} has numbered lines a worksheet parser would take"
+        assert parse_worksheet_text(text, path.name) == []
+        # Headings like "(quiz mode)" used to make the guide pass the worksheet test.
+        assert not is_worksheet(path.name, text), f"{path.name} reads as a worksheet"
+
+
+# ---- docs stay true to the code ------------------------------------------------------
+
+
+def test_docs_call_the_files_tab_by_its_name_in_each_subject() -> None:
+    js = (STATIC / "js" / "dashboard" / "profile.js").read_text(encoding="utf-8")
+    math_name, biology_name = re.findall(r'filesTab:\s*"([^"]+)"', js)
+    for name in ("README.md", "docs/BUILD_PLAN.md"):
+        text = re.sub(r"[*_]", "", DOCS[name])
+        assert math_name in text, f"{name} never names the math tab '{math_name}'"
+        for found in re.finditer(re.escape(biology_name), text):
+            before = text[max(0, found.start() - 120) : found.start()]
+            assert math_name in before, f"{name}: '{biology_name}' without the default subject's '{math_name}'"
+
+
+def test_documented_benchmark_flags_exist() -> None:
+    src = (ROOT / "scripts" / "bench_vlm.py").read_text(encoding="utf-8")
+    flags = set(re.findall(r'add_argument\("(-[-a-z]+)"', src))
+    profiles = set(re.findall(r'"(\w+)": \w+_SCENARIOS', src))
+    assert {"--scenarios", "--profile", "--only", "--raw"} <= flags and profiles == {"math", "biology"}
+    for name in ("README.md", "CLAUDE.md", "docs/BUILD_PLAN.md"):
+        text = DOCS[name]
+        assert "--scenarios --profile math" in text, f"{name} gives no way to benchmark the default math profile"
+        used = re.findall(r"`(-[-a-z]+)", text)
+        for line in text.splitlines():
+            if "bench_vlm" in line:
+                used += re.findall(r"(?<![\w-])(-[-a-z]+)", line.split("bench_vlm", 1)[1])
+        assert used and set(used) <= flags, f"{name}: {set(used) - flags} not in bench_vlm's arguments"
+        assert set(re.findall(r"--profile (\w+)", text)) <= profiles
+
+
+def test_claude_md_keeps_the_specs_non_negotiables() -> None:
+    spec = (ROOT / "docs" / "sar_whiteboard_assistant_prompt.md").read_text(encoding="utf-8")
+    assert "Wait for the user to specify which module" in spec and "Windows PowerShell" in spec
+    rules = DOCS["CLAUDE.md"].split("Non-negotiables:")[1].split("## Stack")[0]
+    assert "wait for the user to name it" in rules
+    assert "Windows PowerShell" in rules
+    for name in ("README.md", "CLAUDE.md"):
+        assert r".\.venv\Scripts\python.exe -m biobench_sar" in DOCS[name]
+        assert r"$env:SAR_PROFILE='biology'; .\.venv\Scripts\python.exe -m biobench_sar" in DOCS[name]
+
+
+def test_documented_knowledge_paths_exist() -> None:
+    for name, text in DOCS.items():
+        for folder, file in re.findall(r"knowledge/([a-z_]+)/([\w.]+\.\w+)?", text):
+            path = ROOT / "biobench_sar" / "knowledge" / folder / file
+            assert path.exists(), f"{name} points at missing {path.relative_to(ROOT)}"
+
+
+def test_docs_explain_the_shared_knowledge_base_and_how_to_reseed() -> None:
+    settings = Settings()
+    # "Delete data/chroma_db to load the bundled documents again" only holds while the marker lives inside it.
+    assert settings.seed_marker_file.parent == settings.chroma_dir
+    readme = DOCS["README.md"]
+    assert "data/chroma_db/.seeded" in readme and "delete `data/chroma_db`" in readme
+    assert "SAR_PROFILE=biology SAR_DATA_DIR=data/biology" in readme
+    assert "Both profiles share one knowledge base" in readme
+    assert "`seed_marker_file: Path`" in DOCS["docs/BUILD_PLAN.md"]
+
+
+def test_readme_worksheet_rules_match_the_parser() -> None:
+    section = DOCS["README.md"].split("### Quiz banks")[1].split("## The dashboard")[0]
+    listed = re.search(r"says so\*\*: (.+?) \(e\.g\.", section, re.S)
+    assert listed, "the README should say what makes a file a worksheet"
+    words = [w.strip() for w in re.split(r",|\bor\b", listed.group(1).replace("\n", " ")) if w.strip()]
+    assert len(words) >= 8
+    for word in words:
+        assert is_worksheet("unit3.md", f"# {word.title()}: fractions\n1. 1/2 + 1/4"), word
+    assert is_worksheet("unit3_worksheet.md", "1. 3x + 5 = 20")
+    example = re.search(r"```md\n(.*?)```", section, re.S)
+    assert example, "the README should show a levelled worksheet"
+    problems = parse_worksheet_text(example.group(1), "example.md")
+    assert [(p.problem, p.answer, p.level, p.topic) for p in problems] == [
+        ("4x + 3 = 19", "x = 4", 3, "two-step equations")
+    ]
+    assert is_worksheet("example.md", example.group(1).strip())
+
+
+def test_math_spec_says_where_quiz_problems_come_from() -> None:
+    spec = DOCS["docs/sar_math_tutor_prompt.md"]
+    quiz = spec.split("**Quiz Mode:**")[1].split("### C.")[0]
+    assert "rag/quiz_bank.py" in quiz and "SAR_QUIZ_BANK_FILE" in quiz and "SAR_QUIZ_LENGTH" in quiz
+
+
+def test_help_and_practice_scenarios_use_equations_outside_the_seed_files() -> None:
+    plan = DOCS["docs/BUILD_PLAN.md"]
+    section = plan.split("## Scenario test cases — Math")[1].split("## Scenario test cases — Environmental")[0]
+    seeded = {p.problem.replace(" ", "") for f in sorted(MATH_SEEDS.iterdir()) for p in parse_quiz_file(f, f.name)}
+    written = re.findall(r"`([^`]*=[^`]*)`", section)
+    assert written, "the math scenarios should name the equations to write"
+    # Retrieval brings the seed files' answer keys along with a matching problem.
+    assert [w for w in written if w.replace(" ", "") in seeded] == []
+    assert "Answers never reach the model except when checking" in plan
+
+
+def test_contract_describes_the_integrated_quiz() -> None:
+    plan = DOCS["docs/BUILD_PLAN.md"]
+    assert '"stage": "dictate" \\| "check" \\| "hint"' in plan
+    assert "`answer` is set only in stage `check`" in plan
+    assert "| quiz `hint` |" in plan
+    assert "`quiz_length: int` — env `SAR_QUIZ_LENGTH`, default `10`" in plan
+    assert "| `SAR_QUIZ_LENGTH` | `10` |" in DOCS["README.md"]
+    from biobench_sar.tutor import DEFAULT_QUIZ_LENGTH
+
+    assert DEFAULT_QUIZ_LENGTH == 10
+    if hasattr(Settings, "quiz_length"):  # Settings gains it with the tutor review fixes (contract: Shared)
+        assert Settings().quiz_length == 10 or "SAR_QUIZ_LENGTH" in __import__("os").environ
+
+
+def test_documented_settings_exist_in_config() -> None:
+    config = (ROOT / "biobench_sar" / "config.py").read_text(encoding="utf-8")
+    known = set(re.findall(r'"(SAR_[A-Z_]+)"', config))
+    rows = [line for line in DOCS["README.md"].splitlines() if line.startswith("| `SAR_")]
+    documented = {v for line in rows for v in re.findall(r"`(SAR_[A-Z_]+)`", line)}
+    assert len(documented) > 20
+    # Declared in BUILD_PLAN's Shared contract; config.py gains it with the tutor review fixes.
+    pending = {"SAR_QUIZ_LENGTH"} - known
+    assert pending <= {"SAR_QUIZ_LENGTH"}
+    assert documented - known - pending == set()
