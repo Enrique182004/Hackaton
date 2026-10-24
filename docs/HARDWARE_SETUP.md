@@ -5,7 +5,7 @@ small symbols included. Budget about 15 minutes the first time.
 
 ## Checklist
 
-- [ ] Webcam **not** next to the projector lens: 20–30° to the side, or above or below it.
+- [ ] Webcam placed so the reflection of the projector lens falls **off** the projected image (section 1), checked with the one-eye test.
 - [ ] Matte (anti-glare) whiteboard, clean, no ghost writing.
 - [ ] Even room light, no sunlight or spotlight on the board.
 - [ ] Black or dark blue marker, not too thin.
@@ -15,49 +15,57 @@ small symbols included. Budget about 15 minutes the first time.
 
 ## 1. Projector and webcam placement
 
-**Why it matters.** A whiteboard is a weak mirror. Light from the projector bounces off it at the same
-angle it arrived, like a ball off a wall. If the webcam sits on that bounce path it sees the projector's
-bulb as a bright white blob (a *hotspot*). Inside the hotspot the camera is blinded: marker ink there
-disappears, so the assistant cannot read it, and drawings there go undetected.
+**Why it matters.** A whiteboard is a weak mirror. The webcam can see a reflection of the projector
+lens in it: a bright white blob (a *hotspot*). Inside the hotspot the camera is blinded, so marker ink
+there disappears and the assistant cannot read it.
 
-The bounce goes back on the mirror side of the board's straight-out line. With the projector straight in
-front of the board, the bounce comes right back at the projector, so a webcam sitting next to the lens
-gets the full glare. Move the webcam off that line:
+**Where the hotspot appears.** Treat the board as a mirror: the lens has a mirror image the same
+distance *behind* the board as the lens is in front of it. The camera sees the hotspot where its line of
+sight to that mirror image crosses the board. That point is always **between the camera and the lens**,
+pulled towards whichever of the two is closer to the board:
 
 ```
-                 whiteboard
-   ==================================
-                    |  \
-                    |    \
-                    |      \   25°
-                    |        \
-                    |          \
-               [projector]    [webcam]
+ side view (looking along the board)
 
-   The projector's light hits the board and bounces straight back down the
-   vertical line, into anything sitting beside the lens. The webcam, 20–30°
-   off that line, is out of the bounce.
+   lens' *            mirror image of the lens (as far behind the board as the lens is in front)
+          \
+ ==========\===================  whiteboard
+            \  <- hotspot: where the camera's line to lens' crosses the board
+             \
+              [webcam]
+                         [projector lens]
 ```
 
-Good set-ups, best first:
+For a camera at height *c* and distance *d_c* from the board, and a lens at height *p* and distance
+*d_p*, the hotspot is at height **(c·d_p + p·d_c) / (d_c + d_p)**; the same formula works sideways. With
+equal distances it is simply the midpoint between camera and lens. You only see it where the projector
+shows something bright there (the avatar, a speech bubble, the calibration checkerboard), but that is
+exactly where the assistant needs to read the board.
 
-1. **Webcam to one side.** Tripod 20–30° to the side of the projector's line, pointing back at the
-   middle of the board. Rough sideways distances:
+**So: put the camera on the same side as the lens, and further out.** Then the midpoint lands beyond the
+edge of the projected image:
 
-   | Camera distance from the board | Move the camera sideways by |
-   | --- | --- |
-   | 1.5 m | 55–85 cm |
-   | 2 m | 75–115 cm |
-   | 3 m | 1.1–1.7 m |
+1. **Projector on a table** (lens below the image): put the webcam **lower than the lens**, e.g. a low
+   tripod or the table edge closer to the board, tilted up. The hotspot then falls below the image.
+2. **Projector on the ceiling** (lens above the image): put the webcam **higher than the lens**, or on
+   the ceiling next to it, tilted down.
+3. **Webcam close to the wall, above the board**, looking down at it. Because the camera is much closer
+   to the board than the lens, the hotspot sits near the camera, above the image.
+4. **Sideways only if it is far enough.** Moving the webcam to the side by an angle of 20–30° only moves
+   the hotspot *towards* the edge (by half the sideways offset at equal distances); it stays on the image.
+   To push it off, the camera must be more than **about one image width** to the side of the lens at a
+   similar distance (image 1.5 m wide → camera more than 1.5 m sideways).
+5. **Short-throw projectors** (lens a few cm from the wall, below or above the board): the hotspot sits
+   next to the lens, at or beyond the image edge, so a webcam in front of the board is usually fine.
 
-2. **Webcam above or below.** If the projector is on a table, put the webcam high (top of a tripod,
-   on a shelf) looking down at the board. If the projector is on the ceiling, put the webcam low.
-3. **Short-throw or ceiling projector.** These already hit the board at a steep angle; the bounce goes
-   down to the floor or up to the ceiling, so a webcam in front of the board is usually fine.
+Avoid the opposite side: projector on a table with the webcam high up, or a ceiling projector with the
+webcam low, puts the hotspot **in the middle** of the board.
 
-**The one-eye test.** Before you fix the webcam in place, stand where it will go and look at the board
-with one eye at the webcam's height. If you can see a bright reflection of the projector lens, so will
-the camera. Move until it is gone.
+**The one-eye test (always do it).** Open the calibration checkerboard full screen on the projector
+(`http://127.0.0.1:5050/calibration.png`, then F11) so the whole image is bright. Stand where the webcam
+will go and look at the board with one eye at the webcam's height. If you can see a bright reflection of
+the projector lens anywhere on the image, so will the camera: move the webcam further out on the lens's
+side until it is gone. The dashboard's glare check confirms it once the camera is running.
 
 Also:
 
@@ -163,14 +171,14 @@ The result is saved and reused the next time the server starts.
   marked serious: fix it before you present. (The warning appears once the glare check is switched on
   in the server. Until then, use the two checks above.)
 
-To get rid of glare, in order of how much it helps: move the webcam sideways (or up or down), switch
+To get rid of glare, in order of how much it helps: move the webcam further out on the projector lens's side (section 1), switch
 the projector to eco mode, dim the room lights near the board, use a matte board.
 
 ## 8. Troubleshooting
 
 | What you see | Likely cause | What to do |
 | --- | --- | --- |
-| Bright white blob in the camera picture; writing there is ignored | Projector bulb reflecting into the camera (glare) | Move the webcam 20–30° sideways or above/below the projector; eco mode; matte board |
+| Bright white blob in the camera picture; writing there is ignored | Projector bulb reflecting into the camera (glare) | Move the webcam further out on the **same side as the projector lens** (section 1: lower than a table projector, higher than a ceiling one, or more than one image width sideways); eco mode; matte board |
 | "Checkerboard not detected" | Projector page not full screen; camera cannot see the whole board; glare over part of the checkerboard; someone in the way | Press `F` on the projector page, re-aim the camera, fix glare, step aside, try again |
 | Avatar points next to the drawing, not at it | Camera, projector or board moved since calibration | Run **Line up camera and projector** again |
 | Decimals, minus signs or exponents misread | Camera at 720p; thin or light marker; symbols too small | 1920×1080 camera; black marker; bigger, clearer symbols (section 4) |
