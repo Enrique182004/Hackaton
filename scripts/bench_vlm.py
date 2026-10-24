@@ -9,8 +9,8 @@ LO/LE/HF lesson offer, starter and follow-up. Quiz cases get the real seeded chu
 Spanish (replies in Spanish): ELO/ELE lesson offer and "invéntame uno", EH/EHA help on 3x + 5 = 20,
 EQD/EQC/EQW quiz dictate and check (right / wrong).
 Crop: a small "3.5 - x^2 = 0.25" on a big board sent as the high-res ink crop: CR what the model copies off the
-board (board_answer of a quiz check: "3.5", then the minus sign) and CRH a help reply that must say "three point
-five"; CRW / CRHW the same on the whole board, as before the crop.
+board (board_answer of a quiz check: "3.5", then the minus sign) and CRH a help reply whose first step fits the signs
+and decimals as written; CRW / CRHW the same on the whole board, as before the crop.
 Biology: A missing step, B complete, AB complete after an earlier "not yet".
 
 Example (the final-wiring live check): --scenarios --profile math --runs 2 --only ELO,ELE,EH,EHA,EQD,EQC,EQW,CR
@@ -625,7 +625,12 @@ CROP_TEXT_SCALE = 0.65  # digits ~14 camera px tall: about 7 px once the whole b
 BOARD = (1280, 800)
 # Copied off the board with the decimal point and the minus sign: "3.5 - x^2 = 0.25" / "3.5 - x squared equals 0.25".
 _COPIED_CROP_RE = re.compile(r"^\s*3\.5\s*[-−]\s*x\b")
-_SAYS_DECIMAL_RE = re.compile(r"\bthree\s+point\s+five\b|\bzero\s+point\s+two\s+five\b", re.IGNORECASE)
+# A first step that only fits the board as written: "add x squared" (the minus sign was seen) or a step on 3.5 / 0.25
+# (the decimal points were seen). "subtract x squared" or "add three point five" means a sign was misread.
+_RIGHT_STEP_RE = re.compile(
+    r"\badd\s+x\s+squared\b|\bthree\s+point\s+five\b|\bzero\s+point\s+two\s+five\b", re.IGNORECASE
+)
+_WRONG_SIGN_RE = re.compile(r"\bsubtract\s+x\s+squared\b|\badd\s+three\s+point\s+five\b", re.IGNORECASE)
 
 
 def _small_equation_frame() -> np.ndarray:
@@ -673,8 +678,10 @@ def _copied_crop(read: str) -> str | None:
     return None if _COPIED_CROP_RE.match(read or "") else f"copied {read!r}: not 3.5 and the minus sign"
 
 
-def _says_decimal(spoken: str) -> str | None:
-    return None if _SAYS_DECIMAL_RE.search(spoken) else "did not say three point five / zero point two five"
+def _step_fits_the_board(spoken: str) -> str | None:
+    if _WRONG_SIGN_RE.search(spoken):
+        return "a step for a misread sign"
+    return None if _RIGHT_STEP_RE.search(spoken) else "no step on x squared, 3.5 or 0.25"
 
 
 CROP_QUERY = "Check my answer."
@@ -710,7 +717,7 @@ CROP_SCENARIOS = {
         crop_board,
         "pointing",
         context=[],
-        check=_says_decimal,
+        check=_step_fits_the_board,
     ),
     "CRHW": Scenario(
         f"small {CROP_EQUATION} on a big board, whole board (before the crop): help",
@@ -718,7 +725,7 @@ CROP_SCENARIOS = {
         whole_board,
         "pointing",
         context=[],
-        check=_says_decimal,
+        check=_step_fits_the_board,
     ),
 }
 MATH_SCENARIOS.update(SPANISH_SCENARIOS)

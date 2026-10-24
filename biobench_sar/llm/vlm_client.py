@@ -1108,6 +1108,17 @@ def _starter(topic: str | None) -> str:
     return "x + 3 = 8"
 
 
+def _starter_missing(action: AvatarAction, task: Mapping[str, Any] | None, language: str) -> bool:
+    """A lesson starter on fractions or equations that dictates no problem at all (a story about apples instead):
+    the student has nothing to write. Other topics (square roots, angles) may start without an operation."""
+    if learn_stage(task) != "example":
+        return False
+    topic = _plain(str((task or {}).get("topic") or ""))
+    if not re.search(r"fraction|fracci|equation|ecuaci", topic):
+        return False
+    return not dictates_problem(action.spoken_text, None, language)
+
+
 def fallback_text(kind: str, task: Mapping[str, Any] | None, has_ink: bool, language: str = "en") -> str:
     """What to say when the model's reply is unusable even after a retry."""
     t = task or {}
@@ -1134,6 +1145,8 @@ RETRY_NOTES = {
         "not_whole": "Your last reply did not dictate a whole new problem like {board}. Say all of it in words.",
         "copied": 'Your last reply copied an earlier one ("{earlier}"). Answer the student\'s latest message.',
         "reveal": "Your last reply gave away the value of the letter. Explain only the next step, never the answer.",
+        "starter": "Your last reply did not dictate a problem. Dictate ONE easy problem on {topic} in words, with its "
+        "numbers and operation, not a story.",
     },
     "es": {
         "echo": "Tu respuesta anterior solo repitió las palabras del estudiante. Responde lo que preguntó.",
@@ -1143,6 +1156,8 @@ RETRY_NOTES = {
         "not_whole": "Tu respuesta anterior no dictó completo un problema nuevo como {board}. Dilo todo con palabras.",
         "copied": 'Tu respuesta anterior copió una anterior ("{earlier}"). Responde al último mensaje del estudiante.',
         "reveal": "Tu respuesta anterior dio el valor de la letra. Explica solo el siguiente paso, nunca la respuesta.",
+        "starter": "Tu respuesta anterior no dictó un problema. Dicta UN problema fácil de {topic} con palabras, con "
+        "sus números y su operación, no una historia.",
     },
 }
 
@@ -1174,6 +1189,8 @@ def _retry_note(
         return notes["copied"].format(earlier=_short(earlier))
     if kind in ("help", "quiz") and reveals_value(spoken, language):
         return notes["reveal"]
+    if kind == "learn" and _starter_missing(action, task, language):
+        return notes["starter"].format(topic=_clean((task or {}).get("topic")))
     return None
 
 
@@ -1216,6 +1233,8 @@ def _salvage(
         and in_language(s, language)
     ]
     out = " ".join(kept) if kept else fallback_text(kind, task, has_ink, language)
+    if kind == "learn" and _starter_missing(replace(action, spoken_text=_spoken(out, language)), task, language):
+        out = fallback_text(kind, task, has_ink, language)
     if kind == "learn" and learn_stage(task) == "offer":
         out = _with_offer_question(out, language)
     return replace(action, spoken_text=out)

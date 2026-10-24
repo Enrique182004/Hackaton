@@ -1189,7 +1189,11 @@ def test_bench_crop_scenario_uses_the_pipeline_crop(monkeypatch: pytest.MonkeyPa
     assert scenario.reads and scenario.check("3.5 - x squared equals 0.25") is None
     assert scenario.check("3.5 + x^2 = 0.25") and scenario.check("35 - x^2 = 0.25") and scenario.check("")
     assert b.judge(scenario, AvatarAction("ok", "walking", 1, 1), "3.5 - x^2 = 0.25") == []
-    assert b.MATH_SCENARIOS["CRH"].check("Add x squared to get three point five alone.") is None
+    help_check = b.MATH_SCENARIOS["CRH"].check
+    assert help_check("First, add x squared to both sides.") is None
+    assert help_check("Subtract three point five from both sides.") is None
+    assert help_check("Subtract x squared from both sides.") == "a step for a misread sign"
+    assert help_check("Find the value of x.") == "no step on x squared, 3.5 or 0.25"
 
 
 # ---- Spanish replies -------------------------------------------------------------------------------------------
@@ -1481,3 +1485,34 @@ def test_context_strips_an_answer_key_spread_over_chunks() -> None:
     ]
     prompt = build_prompt("help", chunks, [], SIZE, profile="math")
     assert "x = 14" not in prompt and "x = 6" not in prompt and "x/2 - 4 = 3" in prompt and "Show each step." in prompt
+
+
+def test_lesson_starter_without_a_problem_is_asked_again_then_falls_back() -> None:
+    story = {
+        "spoken_text": "Imagina que tienes cinco manzanas y las repartes en dos partes iguales. ¿Cuántas hay en cada parte?",
+        "animation_state": "idle",
+        "target_x": 1,
+        "target_y": 2,
+    }
+    task = {"kind": "learn", "topic": "resolver fracciones", "stage": "example"}
+    c = _math_client()
+    with patch.object(c.session, "post", return_value=_ollama_resp(json.dumps(story))) as post:
+        action = c.evaluate("Invéntame uno", None, [], [], SIZE, task=task, language="es")
+    assert post.call_count == 2 and "no dictó un problema" in post.call_args.kwargs["json"]["messages"][1]["content"]
+    assert (
+        action.display_text == "Empecemos con uno fácil. 1/5 + 2/5. Escríbelo en el pizarrón e intenta el primer paso."
+    )  # type: ignore[attr-defined]
+    assert action.spoken_text.startswith("Empecemos con uno fácil. un quinto más dos quintos.")
+    good = {**story, "spoken_text": "Empecemos con uno fácil. Un tercio más un tercio. Escríbelo."}
+    with patch.object(c.session, "post", return_value=_ollama_resp(json.dumps(good))) as post:
+        kept = c.evaluate("Invéntame uno", None, [], [], SIZE, task=task, language="es")
+    assert post.call_count == 1 and kept.spoken_text == good["spoken_text"]
+
+
+def test_lesson_starter_rule_only_for_fractions_and_equations() -> None:
+    reply = {"spoken_text": "Find the square root of sixteen.", "animation_state": "idle", "target_x": 1, "target_y": 2}
+    task = {"kind": "learn", "topic": "square roots", "stage": "example"}
+    c = _math_client()
+    with patch.object(c.session, "post", return_value=_ollama_resp(json.dumps(reply))) as post:
+        action = c.evaluate("make one up", None, [], [], SIZE, task=task)
+    assert post.call_count == 1 and action.spoken_text == "Find the square root of sixteen."
