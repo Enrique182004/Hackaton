@@ -1177,25 +1177,88 @@ def fallback_problem(kind: str, task: Mapping[str, Any] | None) -> str | None:
 _NO_PROBLEM = frozenset(
     {"n/a", "na", "none", "null", "nothing", "empty", "blank", "unknown", "nada", "ninguno", "vacio", "vacío"}
 )
-_MATH_LIKE = re.compile(r"\d|\w\s*[=+\-*/^<>]\s*\w")
+# A problem has an operation between two operands ("2x + 3", "x = 5", "1/2", "3(x+2)") or a root ("√9")...
+_OPERATION = re.compile(r"[\w)\]]\s*[=+\-*/^<>×÷]\s*[\w(\[√-]|√\s*[\w(]")
+# ...and a number or a lone letter: "not-visible" has an operation but no operand.
+_OPERAND = re.compile(r"\d|(?<![^\W\d_])[a-z](?![^\W\d_])", re.IGNORECASE)
+# The prompt's own ink-region line ("left=700 top=450 width=400 height=150, center=(900, 525)"), which the 3B model
+# copies into board_problem when the ink is not a readable problem.
+_PROMPT_BOX = re.compile(r"\b(?:left|top|width|height|center)\s*=", re.IGNORECASE)
 
 
 def _card_value(text: str | None) -> str | None:
-    """A problem the projector's card can show: math-looking, not a placeholder; None otherwise."""
+    """A problem the projector's card can show: an operation on numbers or letters, not a placeholder or the
+    prompt's own box coordinates; None otherwise."""
     clean = _clean(text) if text else None
-    if not clean or clean.strip(" .").lower() in _NO_PROBLEM or not _MATH_LIKE.search(clean):
+    if not clean or clean.strip(" .").lower() in _NO_PROBLEM or _PROMPT_BOX.search(clean):
         return None
-    return clean
+    return clean if _OPERATION.search(clean) and _OPERAND.search(clean) else None
+
+
+# The words the card compares on top of numbers and operations: a letter, or a power the voice must say too.
+_CARD_POWERS = frozenset({"squared", "cubed", "power", "root", "cuadrado", "cubo", "potencia", "raiz"})
+_CARD_FORMS = {"negative": "minus", "cuadrada": "cuadrado", "cubica": "cubo", "ye": "y"}
+_FRACTION_WORDS = frozenset(
+    {
+        "half",
+        "halves",
+        "third",
+        "thirds",
+        "fourth",
+        "fourths",
+        "quarter",
+        "quarters",
+        "fifth",
+        "fifths",
+        "sixth",
+        "sixths",
+        "seventh",
+        "sevenths",
+        "eighth",
+        "eighths",
+        "ninth",
+        "ninths",
+        "tenth",
+        "tenths",
+    }
+)
+
+
+def _card_seq(text: str, language: str = "en") -> list[str]:
+    """_math_seq plus letters and powers, in order, with "negative" read as "minus" and "a half" as "one half": what
+    the card compares between the problem it shows and the words the voice says."""
+    spanish = normalize_reply_language(language) == "es"
+    words, forms = (_NUMBER_WORDS_ES, _WORD_FORMS_ES) if spanish else (_NUMBER_WORDS, _WORD_FORMS)
+    tokens = _norm_words(text, language).split()
+    out: list[str] = []
+    for i, word in enumerate(tokens):
+        if not spanish and word == "a" and i + 1 < len(tokens) and tokens[i + 1] in _FRACTION_WORDS:
+            word = "one"
+        word = forms.get(word, word)
+        word = _CARD_FORMS.get(word, word)
+        if word.endswith("s") and word[:-1] in words:
+            word = word[:-1]
+        if word in words or word.isdigit() or word in _CARD_POWERS or (len(word) == 1 and word.isalpha()):
+            out.append(word)
+    return out
+
+
+def _card_reads(spoken: str, problem: str, language: str = "en") -> bool:
+    """Whether the voice reads out exactly this problem: its numbers, operations, letters and powers in the same
+    order. Other words may come in between ("three times x" for 3x), so this is looser than reads_back but, unlike
+    reads_problem, never passes a swapped or different problem."""
+    wanted, said = _card_seq(problem, language), iter(_card_seq(spoken, language))
+    return bool(wanted) and all(token in said for token in wanted)
 
 
 def _card_problems(action: AvatarAction, kind: str, task: Mapping[str, Any] | None, language: str) -> AvatarAction:
     """Keep only the problems the projector's card may show for this reply: board_problem in help and practice,
-    new_problem only when the reply dictates one (practice, a lesson's example) and its words read that problem out,
-    so the card never shows a problem the voice did not say."""
+    new_problem only when the reply dictates one (practice, a lesson's example) and its words read that problem out
+    in order (_card_reads), so the card never shows a problem the voice did not say."""
     board = _card_value(getattr(action, "board_problem", None)) if kind in ("help", "practice") else None
     new = _card_value(getattr(action, "new_problem", None))
     dictates = kind == "practice" or (kind == "learn" and learn_stage(task) == "example")
-    if not dictates or (new and not reads_problem(action.spoken_text, new, language)):
+    if not dictates or (new and not _card_reads(action.spoken_text, new, language)):
         new = None
     return _tutor(action, board_problem=board, new_problem=new)
 
