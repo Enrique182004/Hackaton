@@ -123,6 +123,10 @@ class Settings:
     quiz_bank_file: Path = field(
         default_factory=lambda: Path(os.environ.get("SAR_QUIZ_BANK_FILE", DATA_DIR / "quiz_bank.json"))
     )
+    # The room's accessibility settings (captions, text size, voice speed, calm mode, high contrast).
+    accessibility_file: Path = field(
+        default_factory=lambda: Path(os.environ.get("SAR_ACCESSIBILITY_FILE", DATA_DIR / "accessibility.json"))
+    )
     # Problems per quiz: more in the ticked files -> an even spread over their levels; none -> this many invented.
     quiz_length: int = field(default_factory=lambda: _env_pos_int("SAR_QUIZ_LENGTH", 10))
     embed_model: str = field(default_factory=lambda: os.environ.get("SAR_EMBED_MODEL", "all-MiniLM-L6-v2"))

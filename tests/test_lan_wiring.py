@@ -163,6 +163,18 @@ def test_a_phone_without_the_cookie_cannot_open_a_socket(lan_app: tuple[Flask, S
     assert len(flask_app.config["SAR_PHONES"]) == 0
 
 
+def test_a_phone_needs_the_pin_to_change_accessibility(lan_app: tuple[Flask, SocketIO]) -> None:
+    flask_app, _ = lan_app
+    client = phone(flask_app)
+    assert client.get("/api/accessibility").status_code == 401
+    refused = client.put("/api/accessibility", json={"high_contrast": True})
+    assert refused.status_code == 401 and refused.get_json() == {"error": "join with the PIN first"}
+    assert not flask_app.config["SAR_ASSISTANT"].settings.accessibility_file.exists(), "nothing saved"
+    join(client, gate_of(flask_app).pin)
+    changed = client.put("/api/accessibility", json={"high_contrast": True})
+    assert changed.status_code == 200 and changed.get_json()["high_contrast"] is True, "a joined phone may change it"
+
+
 # ---- joining ---------------------------------------------------------------------------------------
 def test_the_right_pin_sets_the_cookie_and_lets_the_phone_in(lan_app: tuple[Flask, SocketIO]) -> None:
     flask_app, socketio = lan_app
@@ -444,7 +456,15 @@ def test_every_api_response_is_no_store(
 ) -> None:
     flask_app, _ = make_app(settings, fakes, templates_dir, lan=lan_on, host="0.0.0.0" if lan_on else "127.0.0.1")
     client = laptop(flask_app)
-    for path in ("/api/status", "/api/lan", "/api/config", "/api/tutor", "/api/history", "/api/nope"):
+    for path in (
+        "/api/status",
+        "/api/lan",
+        "/api/config",
+        "/api/tutor",
+        "/api/history",
+        "/api/accessibility",
+        "/api/nope",
+    ):
         response = client.get(path)
         assert response.headers["Cache-Control"] == "no-store", path
         assert (lan.LAN_MODE_HEADER in response.headers) is lan_on, path

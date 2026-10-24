@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-import contextlib
 import csv
 import json
 import logging
-import os
 import random
 import re
-import tempfile
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
+
+from biobench_sar.jsonfile import save_json
 
 log = logging.getLogger(__name__)
 
@@ -829,15 +828,4 @@ class QuizBank:
 
     def _save(self) -> None:
         payload = {"sources": {name: [p.to_json() for p in items] for name, items in self._sources.items()}}
-        tmp = ""
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=self._path.parent, prefix=f".{self._path.name}.", suffix=".tmp")
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh)
-            os.replace(tmp, self._path)
-        except OSError as exc:
-            log.warning("could not save quiz bank to %s: %s", self._path, exc)
-            if tmp:
-                with contextlib.suppress(OSError):
-                    os.unlink(tmp)
+        save_json(self._path, payload, "quiz bank")

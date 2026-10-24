@@ -27,7 +27,8 @@ Fix what is cheap and safe in the same PR; anything bigger goes in the PR descri
 1. **Nothing dead.** No function, constant, parameter, route or JS export that only tests use, or that
    nothing uses: `git grep -nw <name> -- biobench_sar scripts` before you keep it. Wire it in or remove it.
 2. **Nothing duplicated.** Before adding a helper, constant or user-facing sentence, grep for an existing one
-   and import it. One home each: shared text like `NO_ANSWER_TEXT`, `config.PROFILES`, one atomic JSON write.
+   and import it. One home each: shared text like `NO_ANSWER_TEXT`, `config.PROFILES`, one atomic JSON write
+   (`jsonfile.save_json`).
 3. **No stand-ins for modules that exist.** No `try: from biobench_sar.x import … except ImportError`
    fallbacks, and no "once X lands" comments, for code that is already in the repo.
 4. **Settings in one place.** Every `SAR_*` variable is read in `config.py` through the forgiving `_env_*`
@@ -45,9 +46,10 @@ All paths are inside `biobench_sar/`.
 
 | Area | Files |
 | --- | --- |
-| Server | `app.py` (routes, Socket.IO, the phone PIN gate), `assistant.py` (Sense → Think → Act pipeline, status, history, file selection, language, target snapping, UI masking), `config.py`, `envfile.py` (`sar.env`), `paths.py` (checkout vs desktop build), `ports.py` (ports browsers refuse to open), `schemas.py` |
+| Server | `app.py` (routes, Socket.IO, the phone PIN gate), `assistant.py` (Sense → Think → Act pipeline, status, history, file selection, language, accessibility, target snapping, UI masking), `config.py`, `envfile.py` (`sar.env`), `jsonfile.py` (`save_json`, the one atomic JSON write), `paths.py` (checkout vs desktop build), `ports.py` (ports browsers refuse to open), `schemas.py` |
 | Tutor | `tutor.py` (modes, learn-a-topic requests, voice commands, quiz progress, stop confirmation, conversation memory), `grading.py` (quiz answers graded with sympy), `lang.py` (English/Spanish detection and Spanish intents) |
 | Phones | `lan.py` (PIN, device cookies, host checks, Socket.IO gate), `templates/join.html`, `static/js/dashboard/phone.js`, `static/sw.js`, `static/manifest.webmanifest` |
+| Accessibility | `accessibility.py` (the room's settings: captions, text size, voice speed, calm mode, high contrast), `static/js/dashboard/accessibility.js` (the dashboard card); the projector side is in `static/css/style.css` and `static/js/main.js` |
 | Vision | `core/homography.py`, `core/vision_loop.py`, `core/ink_crop.py`, `core/glare.py` |
 | Audio | `core/audio_trigger.py`, `llm/tts_engine.py` |
 | RAG | `rag/ingestor.py`, `rag/vector_store.py`, `rag/quiz_bank.py` |

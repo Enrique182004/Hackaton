@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+import dataclasses
 import errno
 import http.client
 import importlib.machinery
@@ -463,6 +464,16 @@ def test_self_test_gives_up_after_its_timeout(fakes: app_module.Services) -> Non
             if thread.name == "self-test":
                 thread.join(10)
     assert any("no result after" in line for line in lines)
+
+
+def test_self_test_keeps_every_data_file_in_its_temp_folder(tmp_path: Path) -> None:
+    data_dir = tmp_path / "self-test"
+    settings = launcher.self_test_settings(data_dir, 5051)
+    paths = {f.name: getattr(settings, f.name) for f in dataclasses.fields(settings)}
+    files = {name: path for name, path in paths.items() if isinstance(path, Path)}
+    assert "accessibility_file" in files
+    outside = sorted(name for name, path in files.items() if not path.is_relative_to(data_dir))
+    assert outside == [], "the self-test never reads or writes the teacher's own data folder"
 
 
 def test_page_checks_need_the_app_title() -> None:

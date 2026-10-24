@@ -31,6 +31,9 @@ six-digit PIN. The pieces:
   picker, and on most phones it can take a photo of a worksheet.
 - **English or Spanish**: the join page follows the phone's language, and the dashboard has the same
   English · Español · Auto switch.
+- **Accessibility** (under **More tools**): captions that stay up, text size on the board, voice speed, calm mode
+  and high contrast. A change applies to the whole room at once (the projector, the voice and every open
+  dashboard), so a teacher can set it from a phone without going back to the laptop.
 - **Add to Home Screen** gives the phone an icon that opens the dashboard full screen.
 
 ## What doesn't work, and the workarounds
@@ -153,8 +156,8 @@ six-digit PIN. The pieces:
 - **Known limits.**
   - **Open Wi-Fi.** On a network without a password, anyone can sniff the plain HTTP traffic, PIN and cookie
     included. WPA2/WPA3 networks encrypt each device's traffic, so use one of those, never public Wi-Fi.
-  - **A device with the cookie** has the dashboard's full powers: files, modes and quizzes. It never sees the
-    PIN, because `/api/lan` answers only the laptop.
+  - **A device with the cookie** has the dashboard's full powers: files, modes, quizzes and the accessibility
+    settings. It never sees the PIN, because `/api/lan` answers only the laptop.
   - **Blocking new joins.** A script spread over two or more addresses (or one that keeps changing its
     address) can use up the server-wide budget and keep the join form locked for everyone for up to an hour at
     a time. Joined devices are not affected. New PIN restarts the budget but also signs everyone out, so the

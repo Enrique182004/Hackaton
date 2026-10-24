@@ -4,6 +4,11 @@
 html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000000; overflow: hidden;
   font-family: "Segoe UI", system-ui, sans-serif; color: var(--white); }
 .hidden { display: none !important; }
+/* Text size from the room's accessibility settings (main.js sets body data-text-size): it scales what people read
+   from across the room, i.e. the bubble, the quiz card, the student's words and the status corner. */
+body { --text-scale: 1; }
+body[data-text-size="large"] { --text-scale: 1.25; }
+body[data-text-size="xlarge"] { --text-scale: 1.5; }
 
 #avatar {
   position: absolute; left: 0; top: 0; width: var(--frame); height: var(--frame);
@@ -40,8 +45,9 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0000
 
 #bubble {
   position: absolute; left: 0; bottom: 100%; /* horizontal offset is set by fitBubble() */
-  width: max-content; max-width: clamp(200px, 34vw, 680px); padding: 0.3em 0.55em; margin-bottom: 4px;
-  font-size: clamp(16px, 1.9vw, 40px); line-height: 1.25; overflow-wrap: anywhere; font-weight: 600; text-align: center;
+  width: max-content; max-width: min(50vw, calc(clamp(200px, 34vw, 680px) * var(--text-scale)));
+  padding: 0.3em 0.55em; margin-bottom: 4px; font-size: calc(clamp(16px, 1.9vw, 40px) * var(--text-scale));
+  line-height: 1.25; overflow-wrap: anywhere; font-weight: 600; text-align: center;
   color: var(--white); border: 3px solid var(--cyan); border-radius: 18px;
   text-shadow: 0 0 8px var(--cyan);
   box-shadow: 0 0 12px var(--cyan), inset 0 0 8px rgba(127, 252, 255, 0.5);
@@ -72,7 +78,7 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0000
 }
 
 #status { position: fixed; right: 16px; bottom: 14px; display: flex; align-items: center; gap: 8px;
-  font-size: 16px; color: var(--cyan); z-index: 20; text-shadow: 0 0 6px var(--cyan); }
+  font-size: calc(16px * var(--text-scale)); color: var(--cyan); z-index: 20; text-shadow: 0 0 6px var(--cyan); }
 #status[data-state="offline"] { color: var(--amber); text-shadow: 0 0 6px var(--amber); }
 #status[data-state="offline"] .ring { border-color: var(--amber); border-style: dashed; }
 #status .ring { width: 16px; height: 16px; border-radius: 50%; border: 3px solid var(--cyan); }
@@ -88,7 +94,8 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0000
 @keyframes dot { 0%,80%,100% { opacity: 0.25; transform: scale(0.7); } 40% { opacity: 1; transform: scale(1.2); } }
 
 #transcript { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: 70vw;
-  font-size: 22px; color: var(--white); text-shadow: 0 0 8px var(--cyan); z-index: 20; text-align: center; }
+  font-size: calc(22px * var(--text-scale)); color: var(--white); text-shadow: 0 0 8px var(--cyan); z-index: 20;
+  text-align: center; }
 #transcript::before { content: "\201C"; } #transcript::after { content: "\201D"; }
 
 /* Current quiz problem, written the normal way (3x + 5 = 20). It sits inside the camera's view for the whole
@@ -97,9 +104,10 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0000
 #quiz-card { position: fixed; left: 16px; top: 14px; max-width: 26vw; padding: 0.15em 0.5em; z-index: 5;
   color: rgba(255, 255, 255, 0.75); background: transparent; border: 1px solid rgba(127, 252, 255, 0.5);
   border-radius: 10px; }
-#quiz-card-count { display: block; font-size: clamp(11px, 0.85vw, 18px); color: rgba(127, 252, 255, 0.75); }
-#quiz-card-problem { display: block; font-size: clamp(16px, 1.7vw, 34px); font-weight: 600; line-height: 1.2;
-  overflow-wrap: anywhere; }
+#quiz-card-count { display: block; font-size: calc(clamp(11px, 0.85vw, 18px) * var(--text-scale));
+  color: rgba(127, 252, 255, 0.75); }
+#quiz-card-problem { display: block; font-size: calc(clamp(16px, 1.7vw, 34px) * var(--text-scale)); font-weight: 600;
+  line-height: 1.2; overflow-wrap: anywhere; }
 #quiz-card-problem:empty { display: none; }
 /* Out of the picture while the student asks and the assistant reads the board (main.js CAPTURE_STATES). */
 #quiz-card.capturing { visibility: hidden; }
@@ -130,3 +138,31 @@ body.offline::after { content: ""; position: fixed; inset: 0; border: 6px dashed
   #highlight { animation: none !important; transition-duration: 0.01s; }
   #status .ring, #status .dots i { animation: none !important; }
 }
+
+/* Calm mode (body data-calm="on", from the room's accessibility settings): the reduced-motion rules above for a
+   room whose computer doesn't ask for them, plus no sprite slide (the avatar only glides to where it points) and
+   soft glows. The calibration checkerboard is never touched. */
+body[data-calm="on"] #avatar { animation: none !important; transition-property: left, top;
+  filter: drop-shadow(0 0 4px rgba(127, 252, 255, 0.5)); }
+body[data-calm="on"] #avatar.state-error { filter: drop-shadow(0 0 4px rgba(255, 179, 71, 0.6)); }
+body[data-calm="on"] #avatar #bubble { animation: none !important; text-shadow: 0 0 3px var(--cyan);
+  box-shadow: 0 0 4px var(--cyan); }
+body[data-calm="on"] #avatar.state-error #bubble { text-shadow: 0 0 3px var(--amber);
+  box-shadow: 0 0 4px var(--amber); }
+body[data-calm="on"] #highlight { animation: none !important; transition-duration: 0.01s;
+  box-shadow: 0 0 4px var(--hl-glow); }
+body[data-calm="on"] #status .ring, body[data-calm="on"] #status .dots i { animation: none !important; }
+body[data-calm="on"] #status { text-shadow: 0 0 2px currentColor; }
+body[data-calm="on"] #transcript { text-shadow: 0 0 3px var(--cyan); }
+
+/* High contrast (body data-contrast="on"): thick borders, pure white text with no blurred glow, and a wrong or a
+   right answer told apart by the border's style as well as its colour. The outline is as thick as main.js measures
+   it (HIGHLIGHT_BORDER_CONTRAST). The quiz card keeps its thin, glow-free border, since the camera reads bright
+   lines as ink; only its words go to full strength. The background stays black. */
+body[data-contrast="on"] #avatar #bubble { border-width: 6px; color: var(--white); text-shadow: none; }
+body[data-contrast="on"] #avatar.state-error #bubble { border-style: dashed; text-shadow: none; }
+body[data-contrast="on"] #avatar.state-celebrating #bubble { border-style: double; }
+body[data-contrast="on"] #highlight { border-width: 6px; }
+body[data-contrast="on"] #quiz-card { color: var(--white); }
+body[data-contrast="on"] #quiz-card-count { color: var(--cyan); }
+body[data-contrast="on"] #transcript { text-shadow: none; }
