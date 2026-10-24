@@ -13,6 +13,65 @@ small symbols included. Budget about 15 minutes the first time.
 - [ ] Projector page full screen, then **Board → Line up camera and projector** on the dashboard.
 - [ ] No bright white blob on the board in the camera picture.
 
+## 0. This classroom's kit: Logitech C930e + Epson WXGA 3LCD
+
+**Settings file.** Copy `sar.env.example` to `sar.env` (already filled in for this kit). The app and the
+hardware check load it automatically:
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `SAR_CAMERA_WIDTH` / `SAR_CAMERA_HEIGHT` | `1920` / `1080` | The C930e's full HD; the high-res ink crop needs it to keep decimals and minus signs sharp |
+| `SAR_CAMERA_INDEX` | usually `1` | `0` is normally the laptop's own camera; the hardware check lists the camera names |
+| `SAR_PROJECTOR_WIDTH` / `SAR_PROJECTOR_HEIGHT` | `1280` / `800` | WXGA native resolution (16:10). A wrong size skews calibration and pointing |
+
+**First run with the devices plugged in:**
+
+```bash
+cp sar.env.example sar.env
+.venv/bin/python scripts/hardware_check.py
+```
+
+Look for `camera N  PASS  1920x1080 @ ~30 fps` (if it says 1280x720, the C930e is on a USB hub or a
+different index) and `projector  PASS  a display runs at 1280x800`. Fix `SAR_CAMERA_INDEX` in `sar.env` if
+the 1080p camera is not index 1.
+
+**Epson WXGA 3LCD projector**
+
+- Connect it as an **extended** display (not mirrored) at **1280 × 800**: on a Mac, System Settings →
+  Displays → the projector → *Use as: Extended display*, resolution 1280 × 800.
+- In the projector menu: aspect **Normal/Native** (no stretching); **keystone 0 and Quick Corner off**
+  (digital keystone resamples the picture; the camera calibration already corrects the geometry);
+  **Auto Iris / dynamic contrast off** (brightness pumping confuses the camera); power or light mode
+  **ECO** (less glare). Focus until the calibration checkerboard is crisp.
+- 3LCD has no colour wheel, so there is no rainbow flicker in the camera picture.
+- **Ultra-short-throw model mounted above the board** (Epson BrightLink style): the lens's reflection
+  lands near the top edge next to the lens, so the webcam can stand in front of the board, a little
+  below the centre. **Standard-throw model on a table or cart:** follow section 1 (webcam on the same
+  side as the lens, further out: lower than the lens).
+
+**Logitech C930e webcam**
+
+- Plug it **directly** into the laptop, not through a hub (hubs often limit it to 720p or 15 fps).
+- Open the privacy shutter. Leave the digital zoom at 1× (zoom throws away real pixels).
+- In Logitech's camera app (Logi Tune, or Logitech Camera Settings on Windows): **lock focus** (autofocus
+  hunts when the projected picture changes), turn **RightLight off**, lock exposure if offered, and set
+  **anti-flicker to 60 Hz** (Americas).
+- Mount it on a tripod (the clip has a 1/4" thread) so it never moves after calibration.
+
+**How far to put the camera.** The C930e sees about 82° across and 52° up-down. The projected image is
+16:10, so its height is what limits you: put the camera about **0.7 × the image width** from the board,
+square-on to it.
+
+| Projected image width | Camera distance from the board | Board detail the camera resolves |
+| --- | --- | --- |
+| 1.2 m | ≈ 0.85 m | ≈ 1.3 px per mm |
+| 1.5 m | ≈ 1.05 m | ≈ 1.05 px per mm |
+| 2.0 m | ≈ 1.4 m | ≈ 0.8 px per mm |
+
+At about 1 pixel per millimetre, write numbers **at least 4 cm tall**, make decimal points a solid dot
+**about 5 mm wide** (the size of a pea), and draw minus signs **as long as a digit is wide**. Exponents can be
+smaller, but not less than half the height of the number they belong to.
+
 ## 1. Projector and webcam placement
 
 **Why it matters.** A whiteboard is a weak mirror. The webcam can see a reflection of the projector

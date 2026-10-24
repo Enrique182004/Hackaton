@@ -14,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from biobench_sar.config import Settings
+from biobench_sar.envfile import env_file_path, load_env_file
 
 Result = tuple[str, str, str]  # (name, PASS|WARN|FAIL, detail)
 
@@ -31,16 +32,44 @@ def camera_status(fps: float) -> str:
     return "FAIL"
 
 
-def check_cameras(only: int | None, save_path: str | None) -> list[Result]:
+def camera_names() -> list[str]:
+    """Camera names the OS reports (macOS only); OpenCV can't name devices, so this guides SAR_CAMERA_INDEX."""
+    if platform.system() != "Darwin":
+        return []
+    try:
+        out = subprocess.run(["system_profiler", "SPCameraDataType"], capture_output=True, text=True, timeout=15).stdout
+    except Exception:
+        return []
+    return parse_camera_names(out)
+
+
+def parse_camera_names(system_profiler_output: str) -> list[str]:
+    names = []
+    for line in system_profiler_output.splitlines():
+        if line.startswith("    ") and not line.startswith("      ") and line.rstrip().endswith(":"):
+            names.append(line.strip().rstrip(":"))
+    return names
+
+
+def resolution_status(delivered: tuple[int, int], wanted: tuple[int, int]) -> str:
+    return "PASS" if delivered[0] >= wanted[0] and delivered[1] >= wanted[1] else "WARN"
+
+
+def check_cameras(only: int | None, save_path: str | None, wanted: tuple[int, int] = (1280, 720)) -> list[Result]:
     try:
         import cv2
     except ImportError:
         return [("camera", "FAIL", "opencv-python not installed")]
     results: list[Result] = []
+    names = camera_names()
+    if names:
+        results.append(("camera names", "PASS", "; ".join(names) + " (index order usually follows this list)"))
     indices = [only] if only is not None else range(4)
     saved = False
     for index in indices:
         cap = cv2.VideoCapture(index)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, wanted[0])
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, wanted[1])
         if not cap.isOpened():
             cap.release()
             if only is not None:
@@ -69,6 +98,14 @@ def check_cameras(only: int | None, save_path: str | None) -> list[Result]:
                 f"{w}x{h} @ {fps:.1f} fps (PASS >= {CAMERA_PASS_FPS:g}, FAIL < {CAMERA_FAIL_FPS:g})",
             )
         )
+        if resolution_status((w, h), wanted) != "PASS":
+            results.append(
+                (
+                    f"camera {index} size",
+                    "WARN",
+                    f"gives {w}x{h}, asked {wanted[0]}x{wanted[1]} (SAR_CAMERA_WIDTH/HEIGHT)",
+                )
+            )
         if save_path and not saved:
             cv2.imwrite(save_path, frame)
             saved = True
@@ -165,7 +202,38 @@ def check_ollama(settings: Settings) -> list[Result]:
     return results
 
 
-def check_displays() -> list[Result]:
+def parse_resolutions(system_profiler_output: str) -> list[tuple[int, int]]:
+    """'Resolution: 1280 x 800 (WXGA)' / '2560 x 1664 Retina' -> [(1280, 800), (2560, 1664)]."""
+    import re
+
+    found = []
+    for line in system_profiler_output.splitlines():
+        if line.strip().startswith("Resolution:"):
+            m = re.search(r"(\d+)\s*x\s*(\d+)", line)
+            if m:
+                found.append((int(m.group(1)), int(m.group(2))))
+    return found
+
+
+def projector_display_result(resolutions: list[tuple[int, int]], projector: tuple[int, int]) -> Result:
+    listed = "; ".join(f"{w}x{h}" for w, h in resolutions) or "none"
+    if len(resolutions) < 2:
+        return (
+            "projector",
+            "WARN",
+            f"only {len(resolutions)} display(s) ({listed}); connect the projector as an extended display",
+        )
+    if projector in resolutions:
+        return ("projector", "PASS", f"a display runs at {projector[0]}x{projector[1]} ({listed})")
+    return (
+        "projector",
+        "WARN",
+        f"no display at {projector[0]}x{projector[1]} ({listed}); set the projector display to its native "
+        "resolution or change SAR_PROJECTOR_WIDTH/HEIGHT",
+    )
+
+
+def check_displays(projector: tuple[int, int] = (1920, 1080)) -> list[Result]:
     system = platform.system()
     if system == "Darwin":
         try:
@@ -174,9 +242,7 @@ def check_displays() -> list[Result]:
             ).stdout
         except Exception as exc:
             return [("displays", "WARN", str(exc))]
-        res = [line.split(":", 1)[1].strip() for line in out.splitlines() if line.strip().startswith("Resolution:")]
-        status = "PASS" if len(res) >= 2 else "WARN"
-        return [("displays", status, f"{len(res)} display(s): {'; '.join(res) or 'unknown'} (projector needs a 2nd)")]
+        return [projector_display_result(parse_resolutions(out), projector)]
     try:
         from screeninfo import get_monitors
 
@@ -197,17 +263,27 @@ def main() -> int:
     parser.add_argument("--no-sound", action="store_true", help="skip audible TTS sample")
     parser.add_argument("--save-frame", metavar="PATH", help="save a camera snapshot (jpg)")
     args = parser.parse_args()
+    applied = load_env_file()
     settings = Settings()
 
     results: list[Result] = []
+    env_path = env_file_path()
+    if applied:
+        results.append(("settings file", "PASS", f"{env_path.name}: {len(applied)} setting(s)"))
+    else:
+        results.append(("settings file", "WARN", f"no {env_path.name} (copy sar.env.example to sar.env for your room)"))
     if not args.skip_camera:
-        results += check_cameras(args.camera if args.camera is not None else None, args.save_frame)
+        results += check_cameras(
+            args.camera if args.camera is not None else None,
+            args.save_frame,
+            (settings.camera_width, settings.camera_height),
+        )
     if not args.skip_mic:
         results += check_mic()
     results += check_tts(settings, args.no_sound)
     results += check_tesseract()
     results += check_ollama(settings)
-    results += check_displays()
+    results += check_displays(settings.projector_size)
 
     width = max(len(r[0]) for r in results)
     print(f"{'CHECK'.ljust(width)}  STATUS  DETAIL")
