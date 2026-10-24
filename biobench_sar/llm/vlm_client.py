@@ -874,11 +874,6 @@ class VLMClient:
             return reply.action
         try:
             kind = resolve_mode(mode, task)
-            t = task or {}
-            if kind == "quiz" and quiz_stage(t) == "dictate" and not _clean(t.get("problem")):
-                number, total = _as_int(t.get("number"), 1), _as_int(t.get("total"), DEFAULT_QUIZ_TOTAL)
-                task = {**t, "problem": _seed_problem(number, total)}
-                args = (query, image_jpeg, context, ink_regions, projector_size, mode, task, recent_turns)
             action, board = self._finish(reply, mode, task, query), reply.board_problem
             note = None if self.backend == "mock" else _retry_note(action, kind, task, query, recent_turns, board)
             if note is None:
