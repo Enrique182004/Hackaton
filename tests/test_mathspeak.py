@@ -228,6 +228,8 @@ REVIEW_CASES: list[tuple[str, str]] = [
     ("the 1900s", "the nineteen hundreds"),
     ("the 2010s", "the twenty tens"),
     ("the 2000s", "the two thousands"),
+    ("count by 100s", "count by hundreds"),
+    ("count by 1000s", "count by thousands"),
     ("a 50-50 chance", "a fifty-fifty chance"),
     ("15-35 meters", "fifteen to thirty five meters"),
     ("Score: 3-2", "Score: three to two"),

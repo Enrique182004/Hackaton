@@ -144,6 +144,7 @@ _FUNCS = {
     "ln": "natural log",
 }
 _ROOT_WORDS = {"sqrt": "square root", "cbrt": "cube root"}
+_ONE_SCALES = frozenset({"one hundred", "one thousand", "one million"})  # "count by 100s" -> "by hundreds"
 _FUNC_LETTERS = frozenset("fgh")
 _SCALES_TEMP = {"C": "Celsius", "F": "Fahrenheit"}
 # Kept whole after a number ("5cm", "3pm"); any other short letter run after a number is a product of variables.
@@ -184,7 +185,7 @@ _RANGE_AFTER = _RANGE_WORDS | frozenset(
 _LABEL_AFTER = frozenset({"triangle", "triangles"})  # "a 3-4-5 triangle"
 _ARTICLES = frozenset({"a", "A", "I"})
 _QUESTION_AUX = frozenset({"is", "are", "was", "were"})
-_DO_AUX = frozenset({"does", "do", "did"})
+_DO_AUX = frozenset({"does", "did"})  # not "do": "Do 2x + 3 = 11 next" is an instruction
 
 _WS_RE = re.compile(r"\s+")
 _WORD_RE = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
@@ -207,7 +208,7 @@ _RANGE_DASH_RE = re.compile(rf"(?<![\w.,–—-])({_DASH_NUM})[–—]({_DASH_NU
 _DASH_OPS = frozenset("+-*/^=<>×÷·±≤≥≠≈")
 _ROOT_WORD_RE = re.compile(r"\b(?:sqrt|cbrt)\b", re.IGNORECASE)
 _SECTION_RE = re.compile(r"\d+(?:\.\d+){2,}")
-_AUX_RE = re.compile(r"(?:^\s*|([.!?;:,(\n\"“])\s*)(is|are|was|were|does|do|did)\s+$", re.IGNORECASE)
+_AUX_RE = re.compile(r"(?:^\s*|([.!?;:,(\n\"“])\s*)(is|are|was|were|does|did)\s+$", re.IGNORECASE)
 _XY_PLANE_RE = re.compile(r"\b([xyz])-([xyz])(?=[- ]plane\b)")
 _POW_STARS_RE = re.compile(r"(?<=[\w)])\s*\*\*\s*(?=[\w(-])")
 _UNIT_PER_RE = re.compile(r"(\d\s?)([A-Za-z]+)/([A-Za-z]+)\b")
@@ -606,10 +607,10 @@ class _Parser:
             return False  # prose dash or hyphenated compound: "x-axis", "3-digit", "work - now"
         if not self._starts_operand(nxt):
             return False
-        if left.kind == "var" and nxt.kind == "num" and self.i == self.start + 1:
+        if left.kind == "var" and nxt.kind == "num" and self.i == self.start + 1 and self._ends_phrase(k):
             if ws_before and not ws_after and left.text in _ARTICLES:
-                return False  # "a -3": the article and a negative number
-            if not (ws_before or ws_after) and left.text.isupper() and self._label_number(k):
+                return False  # "You get a -3": the article and a negative number
+            if not (ws_before or ws_after) and left.text.isupper() and nxt.text.isdigit():
                 return False  # "Vitamin B-12"
         # After a word only "length - 2" subtracts: "COVID-19" is a label and "is -4" a negative number.
         return left.kind != "word" or (ws_before and ws_after)
@@ -617,9 +618,8 @@ class _Parser:
     def _ws_at(self, j: int) -> bool:
         return j < len(self.toks) and self.toks[j].kind == "ws"
 
-    def _label_number(self, k: int) -> bool:
-        if not self.toks[k].text.isdigit():
-            return False
+    def _ends_phrase(self, k: int) -> bool:
+        """The number at ``k`` is not followed by more math: "a -3 on the right", not "a -3 = -1"."""
         if k + 1 < len(self.toks) and self.toks[k + 1].kind in ("letter", "var"):
             return False
         nxt = self._skip(k + 1)
@@ -1157,7 +1157,8 @@ def _emit_token(out: _Out, tok: _Tok) -> None:
         out.generated(_ordinal(int(tok.text[:-2])))
     elif tok.kind == "plural":
         digits = tok.text[:-1]
-        out.generated(_plural(_decade_words(digits) or _number_words(digits)))
+        words = _decade_words(digits) or _number_words(digits)
+        out.generated(_plural(words.removeprefix("one ") if words in _ONE_SCALES else words))
     elif tok.kind == "section":
         out.generated(" point ".join(_number_words(part) for part in tok.text.split(".")))
     elif tok.kind == "word" and tok.text.lower() in _ROOT_WORDS:
