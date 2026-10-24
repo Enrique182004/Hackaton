@@ -20,7 +20,7 @@ SOFT = "\ue00b"  # a space we introduced: collapsible, dropped next to punctuati
 FN = "\ue00c"  # sits between "sen" and its "(" so the group reads "seno de x"
 ABS = "\ue00d"  # |x| -> "el valor absoluto de x"
 YV = "\ue00e"  # the variable y, read "ye" (a bare "y" is the conjunction "i" to a Spanish voice)
-PT = "\ue00f"  # the "el punto" label; contracts to "al punto" / "del punto"
+EL = "\ue00f"  # the article of "el punto" / "el intervalo" / "el conjunto"; contracts to "al" / "del"
 # Prose brackets parked while grouping, one sentinel per bracket so each comes back as written.
 _PARK = {"(": "\ue010", ")": "\ue011", "[": "\ue012", "]": "\ue013", "{": "\ue014", "}": "\ue015", "|": "\ue016"}
 _UNPARK = str.maketrans({v: k for k, v in _PARK.items()})
@@ -157,13 +157,51 @@ _UNIT_WORDS = {
     "ml": ("mililitro", "mililitros"),
     "mL": ("mililitro", "mililitros"),
     "L": ("litro", "litros"),
+    "µm": ("micrómetro", "micrómetros"),
+    "μm": ("micrómetro", "micrómetros"),
+    "µL": ("microlitro", "microlitros"),
+    "μL": ("microlitro", "microlitros"),
+    "µl": ("microlitro", "microlitros"),
+    "μl": ("microlitro", "microlitros"),
+    "µg": ("microgramo", "microgramos"),
+    "μg": ("microgramo", "microgramos"),
+    "min": ("minuto", "minutos"),
+    "h": ("hora", "horas"),
 }
-_LENGTH_UNITS = frozenset(["km", "cm", "mm", "m"])
-_PER_UNIT = {"h": "hora", "hr": "hora", "s": "segundo", "seg": "segundo", "min": "minuto"}
+_LENGTH_UNITS = frozenset(["km", "cm", "mm", "m", "µm", "μm"])
+_TIME_UNITS = frozenset(["h", "hr", "s", "seg", "min"])
+# The unit after "/" ("km/h", "células/mL", "$15/kg"); prices and doses say "por kilo".
+_PER_UNIT = {
+    "h": "hora",
+    "hr": "hora",
+    "s": "segundo",
+    "seg": "segundo",
+    "min": "minuto",
+    "km": "kilómetro",
+    "cm": "centímetro",
+    "mm": "milímetro",
+    "m": "metro",
+    "kg": "kilo",
+    "g": "gramo",
+    "mg": "miligramo",
+    "mL": "mililitro",
+    "ml": "mililitro",
+    "L": "litro",
+    "µL": "microlitro",
+    "μL": "microlitro",
+}
 
 
 def _word_set(words: str) -> frozenset[str]:
     return frozenset(words.split())
+
+
+_PER_WORDS = _word_set(
+    """
+    segundo minuto hora día semana mes año kilo kilogramo gramo litro mililitro metro kilómetro centímetro persona
+    pieza unidad habitante alumno muestra
+    """
+)
 
 
 def _with_plurals(words: str) -> frozenset[str]:
@@ -193,9 +231,10 @@ _MASC_NOUNS = _with_plurals(
     cuadrado triángulo círculo rectángulo vértice renglón capítulo tema sistema millón lugar semestre bimestre trimestre
     piso nivel grupo equipo juego partido gol voto salón organismo microorganismo habitante estudiante trozo pedazo
     billete bloque objeto elemento dato caso intervalo polígono cateto coeficiente exponente denominador numerador
-    divisor múltiplo conjunto solo único último nuevo
+    divisor múltiplo conjunto único último nuevo error acierto signo cuadro dibujo quiste trofozoíto microscopio río
+    lago animal color cilindro prisma cono hexágono pentágono dálmata ciclo cultivo tubo pozo micrómetro microlitro
     """
-) | frozenset(["mil"])
+) | frozenset(["mil", "paréntesis"])
 _FEM_NOUNS = _with_plurals(
     """
     vez manzana naranja pera fresa uva galleta canica moneda pregunta respuesta hora persona rebanada taza cucharada
@@ -203,16 +242,29 @@ _FEM_NOUNS = _with_plurals(
     suma resta alumna niña chica maestra profesora amiga hermana decena centena docena gráfica tabla columna fila letra
     cifra regla flor casa calle cuadra milla libra onza tonelada pulgada yarda gota papa tortilla paleta vuelta ronda
     manera medida variable incógnita ficha carta célula bacteria amiba especie planta semilla hormiga abeja mesa silla
-    raíz base mano noche fase luz ley red diagonal sola única última nueva
+    raíz base mano noche fase luz ley red diagonal sola única última nueva pista duda calculadora muestra laguna cara
+    forma idea cosa potencia décima centésima tortuga serie pieza placa colonia micra
     """
 ) | frozenset(["imagen", "imágenes"])
 _FEM_SUFFIXES = ("ción", "ciones", "sión", "siones", "dad", "dades", "tad", "tades", "tud", "tudes", "umbre", "umbres")
-# Imperatives that make "encuentra y anota" a conjunction rather than the variable.
-_IMPERATIVES = _word_set(
+# Nouns that are also verbs: "La figura 1 muestra que...", "1 suma 4" never agree.
+_VERB_NOUNS = _with_plurals("muestra forma suma resta duda potencia parte cuadra")
+_VERB_OBJECT = _word_set("que el la los las lo un una unos unas cómo como al")
+# "solo" is also the adverb ("vale 1 solo cuando..."): it agrees only in front of a noun ("1 solo paso").
+_SOLO = frozenset(["solo", "solos"])
+# A plain noun after an unspaced "3–5" makes it a range ("3–5 muestras", "24–48 horas"), not a subtraction.
+_RANGE_UNITS = _word_set("km cm mm m kg g mg ml mL L µm μm µL μL µl μl µg μg h hr hrs min seg s")
+_MONTHS = "enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre"
+# "Calcula 8–3", "¿cuánto es 8-3?", "el resultado de 8-3": a subtraction even without another operator.
+_SUBTRACT_CUES = _word_set(
     """
-    anota escribe comprueba verifica sustituye resuelve calcula simplifica despeja marca dibuja compara explica
-    justifica suma resta multiplica divide usa revisa grafica traza completa subraya redondea reemplaza evalúa
+    calcula calcular calcule calculen calculamos resuelve resolver resuelva resuelvan evalúa evaluar evalúe simplifica
+    simplificar efectúa efectuar opera realiza resta restar cuánto cuanto resultado haz intenta
     """
+)
+# Words that make "8-3 es 5" a statement about a subtraction.
+_EQUALS_WORD = re.compile(
+    r"[ \t]+(?:es|da|son|queda|vale|equivale(?:[ \t]+a)?|resulta(?:[ \t]+en)?|nos[ \t]+da|igual[ \t]+a)[ \t]+-?\d"
 )
 # fmt: off
 _KEEP_RUNS = frozenset([
@@ -227,7 +279,7 @@ _KEEP_RUNS = frozenset([
 
 _NUM = r"\d{1,3}(?:,\d{3})+(?!\d)(?:\.\d+)?|\d+(?:\.\d+)?"
 _COORD = r"-?[ \t]*(?:\d+(?:\.\d+)?(?:/\d+)?|[a-zA-Z])"
-_SYMBOLS = "^/*=+<>×·÷√∛∜≤≥≠≈±%π∞→⇒⁄∕⁰¹²³⁴⁵⁶⁷⁸⁹⁻" + "".join(_UNICODE_FRACTIONS)
+_SYMBOLS = "^/*=+<>×·÷√∛∜≤≥≠≈±%π∞→⇒⁄∕⁰¹²³⁴⁵⁶⁷⁸⁹⁻∈∉" + "".join(_UNICODE_FRACTIONS)
 _MATH_HINT = re.compile(
     r"[\d" + _SYMBOLS + r"]|-(?=\d)|\|[^|\n]+\||(?<![^\W\d_])[a-zA-Z][ \t]*-[ \t]*[a-zA-Z(](?![^\W\d_])"
 )
@@ -259,7 +311,18 @@ _NORMALIZE = (
     (re.compile(r"(?<![\w/])c/u(?![\w/])", re.I), "cada uno"),  # "$5 c/u" in word problems
     (re.compile(r"\b(ra[ií]z)(?:\s+cuadrada)?(?:\s+de)?\s*√", re.I), r"\1 cuadrada de "),
     (re.compile(r"(?<![\w&#])#(?=\d)"), "número "),
+    # "$2x$" is LaTeX inline math, not money; "$5 y $10" is money (a closing "$" never sits before a digit).
+    (re.compile(r"(?<![\w$])\$(?=[^\s$\d]|\d+(?:\.\d+)?[a-zA-Z^({\\])([^$\n]*?[^\s$])\$(?![\w$])"), r"\1"),
+    # "3 x 4 = 12", "3 m x 5 m", "3x10^5": the letter x between numbers is a times sign.
+    (re.compile(r"(\d(?:\.\d+)?(?:[ \t]*(?:km|cm|mm|m))?)[ \t]+[xX][ \t]+(?=\d)"), r"\1 × "),
+    (re.compile(r"(?<=\d)[xX](?=10[ \t]*\^)"), "×"),
 )
+# SEP / NOM-008 group thousands with a space, a no-break space or a narrow no-break space: "25 000" is one number.
+_SPACE_THOUSANDS = re.compile("(?<![\\d.,^/])(\\d{1,3})((?:[   ]\\d{3})+)(?!\\d|[.,]\\d{3})")
+_NUMBER_RANGE = re.compile(rf"(?<![\w.,^/])({_NUM})([-–—‒])({_NUM})(?![^\W\d_µμ]|\d|[.,]\d|[\^/(])")
+_SENTENCE_SPLIT = re.compile(r"((?:[!?;\n]|\.(?!\d))+)")
+_SENTENCE_OPS = re.compile(r"[=<>≤≥≠≈+*/×·÷±^]|[-–—‒](?=[ \t]*(?:\d|\(|[a-zA-Z](?![^\W\d_])))")
+_RANGE_TAIL = re.compile(rf"[ \t]*(?:[°%]|(?P<word>[^\W\d_]+)(?:[ \t]+(?P<month>{_MONTHS})(?![^\W\d_]))?)")
 _INCLUSIVE_SLASH = re.compile(r"(?<![\w/])([^\W\d_]{2,})/(as|os|a|o|es|s)(?![\w/])")
 _INCLUSIVE_PAREN = re.compile(r"(?<![\w(])([^\W\d_]{2,})\((as|os|a|o|es|s)\)(s?)(?![^\W\d_])")
 _RANGE = re.compile(
@@ -269,25 +332,52 @@ _RANGE = re.compile(
     re.I,
 )
 _DASH = re.compile("([ \t]*)[–—‒]([ \t]*)")
+_LATER_OPERATOR = re.compile(r"[=+*/×·÷±<>≤≥≠≈^]|[-–‒](?=[ \t]*[\d(])")
 _SUPERSCRIPT_RUN = re.compile("[⁰¹²³⁴⁵⁶⁷⁸⁹⁻ⁿ]+")
 _UNICODE_FRACTION = re.compile("(\\d?)([" + "".join(_UNICODE_FRACTIONS) + "])")
 _CURRENCY = re.compile(
-    r"\$[ \t]?(\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.(\d+))?"
-    r"(?:[ \t]+(?P<named>pesos?|d[óo]lar(?:es)?|dlls?|usd|mxn)(?![^\W\d_]))?",
+    r"\$[ \t]?(?P<neg>-[ \t]?)?(?P<whole>\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.(?P<frac>\d+))?(?![^\W\d_])"
+    r"(?:[ \t]+(?P<mag>mil(?:[ \t]+millones)?|mill[óo]n|millones)(?![^\W\d_]))?"
+    r"(?:[ \t]+(?:de[ \t]+)?(?P<named>pesos?|d[óo]lar(?:es)?|dlls?|usd|mxn)(?![^\W\d_]))?",
     re.I,
 )
 # "$50 pesos" / "$50 MXN" / "$50 USD": a currency written after the amount wins over the default.
 _NAMED_CURRENCY = {"peso": "peso", "pesos": "peso", "mxn": "peso"}
 _UNIT = re.compile(
-    rf"(?<![\w.,])(?:(?P<num>{_NUM})(?P<sp>[ \t]*))?(?<![^\W\d_])(?P<unit>km|cm|mm|kg|mg|ml|mL|m|g|L)"
-    r"(?:\^(?P<pow>[23]))?(?:/(?P<per>hr|h|seg|s|min)(?:\^(?P<perpow>2))?)?(?![^\W\d_]|\^|/)"
+    rf"(?<![\w.,])(?:(?P<num>{_NUM})(?P<sp>[ \t]*))?(?<![^\W\d_])"
+    r"(?P<unit>[µμ][mLlg]|km|cm|mm|kg|mg|ml|mL|min|m|g|L|h)(?:\^(?P<pow>[23]))?"
+    r"(?:/(?P<per>hr|h|seg|s|min|km|cm|mm|m|kg|mg|g|mL|ml|L|[µμ][Ll])(?:\^(?P<perpow>[23]))?)?(?![^\W\d_]|\^|/)"
+)
+# "3 m por 5 m", "1.5 m de profundidad", "1 L de leche": a one-letter unit in a measurement, not a variable.
+_UNIT_WORD_AFTER = re.compile(r"[ \t]+(?:de|por|x)(?![^\W\d_])|[ \t]*×")
+_UNIT_WORD_BEFORE = re.compile(r"\d[ \t]*(?:km|cm|mm|m|kg|g|mg|L|mL|ml)(?:[ \t]+(?:por|x)[ \t]+|[ \t]*×[ \t]*)$")
+_OPERATOR_AFTER = re.compile(r"[ \t]*[-–+*/×·÷=<>≤≥≠≈^(]")
+# "células/mL", "metros/segundo", "$15/kg": a word or an amount over a unit is a rate, read "por".
+_RATE = re.compile(
+    "(?<![^\\W\\d_])(?P<left>[^\\W\\d_]+|" + OE + r")[ \t]*/[ \t]*(?P<den>[^\W\d_]+)(?:\^(?P<pow>[23]))?"
+    r"(?![^\W\d_]|/|\^)"
 )
 _TIME = re.compile(
-    r"(?P<pre>(?<![^\W\d_])(?:a[ \t]+)?las?[ \t]+)?(?<![\d:.,/])(?P<h>[01]?\d|2[0-3]):(?P<m>[0-5]\d)(?![\d:/])"
+    r"(?P<pre>(?<![^\W\d_])(?:a[ \t]+)?las?[ \t]+)?(?<![\d:.,/])(?P<h>[01]?\d|2[0-3]):(?P<m>[0-5]\d)(?![\d:/]|,\d{3})"
     r"(?P<post>[ \t]*(?:[ap]\.?[ \t]?m\b\.?|hrs?\b|h\b|horas\b))?",
     re.I,
 )
-_RATIO_TERM = r"\d+(?:\.\d+)?"
+# Without "a las" / "h", "10:30" is still a time unless a ratio word or an equation is around.
+_RATIO_CUE = re.compile(
+    r"(?<![^\W\d_])(?:raz[óo]n|razones|escalas?|proporci[óo]n|proporciones|proporcional|relaci[óo]n|diluci[óo]n"
+    r"|diluye|diluir|diluido|diluida|mezcla)(?![^\W\d_])|=|::",
+    re.I,
+)
+_TIME_CUE = re.compile(
+    r"(?<![^\W\d_])(?:empieza|empiezan|comienza|comienzan|inicia|inician|termina|terminan|acaba|sale|salen|llega"
+    r"|llegan|abre|cierra|dura|dur[óo]|tarda|tard[óo]|demora|desde|hasta)[ \t]+$",
+    re.I,
+)
+_QUARTER_MINUTES = frozenset(["00", "15", "30", "45"])
+# "a la 1" / "es la 1" is one o'clock, "la una"; "x elevado a la 1" is still a power.
+_ONE_OCLOCK = re.compile(r"(?<![^\W\d_])((?:a|es)[ \t]+la[ \t]+)1(?!\d|[.,]\d|[:/^]|[ \t]*[-–—‒+*/×÷=<>^])", re.I)
+_POWER_BEFORE = re.compile(r"(?:(?<![^\W\d_])(?:elevad[oa]s?|elevar|eleva|potencia|[a-zA-Z])|\d|\))[ \t]+$", re.I)
+_RATIO_TERM = rf"(?:{_NUM})"
 _PROPORTION = re.compile(
     rf"(?<![\w.,:/])({_RATIO_TERM})( ?):\2({_RATIO_TERM})[ \t]*(?:=|::)[ \t]*({_RATIO_TERM})( ?):\5({_RATIO_TERM})"
     r"(?![\w:/]|\.\d)"
@@ -299,6 +389,21 @@ _INTERVAL = re.compile(
     r"[\[(][ \t]*(?P<a>-?[ \t]*(?:\d+(?:\.\d+)?(?:/\d+)?|[a-zA-Z]|∞))[ \t]*,"
     r"[ \t]*(?P<b>-?[ \t]*(?:\d+(?:\.\d+)?(?:/\d+)?|[a-zA-Z]|∞))[ \t]*[\])]",
     re.I,
+)
+_ENDPOINT = r"-?[ \t]*(?:\d+(?:\.\d+)?(?:/\d+)?|[a-zA-Z]|∞)"
+# "[2, 5]", "(2, 5]", "[0, ∞)": a square bracket makes the pair an interval; "(2, 5)" alone stays a point.
+_BARE_INTERVAL = re.compile(
+    rf"(?<![^\W\d_])(?P<open>[\[(])[ \t]*(?P<a>{_ENDPOINT})[ \t]*,[ \t]*(?P<b>{_ENDPOINT})[ \t]*(?P<close>[\])])"
+)
+_ELEMENT = r"-?[ \t]*(?:\d+(?:\.\d+)?(?:/\d+)?|[a-zA-Z])"
+_SET = re.compile(
+    rf"(?P<pre>(?<![^\W\d_])conjuntos?[ \t]*)?\{{[ \t]*(?P<items>{_ELEMENT}(?:[ \t]*,[ \t]*{_ELEMENT})+)"
+    r"(?P<more>[ \t]*,[ \t]*(?:\.\.\.|…))?[ \t]*\}",
+    re.I,
+)
+# "Los puntos (1, 2) y (3, 4)": the list already says "puntos", so later points need no "el punto".
+_POINT_LIST = re.compile(
+    r"(?<![^\W\d_])puntos[ \t]*\([^()\n]*\)(?:[ \t]*,[ \t]*\([^()\n]*\))*[ \t]*(?:,|y|e)[ \t]*$", re.I
 )
 _NAMED_POINT = re.compile(
     rf"(?<![^\W\d_])(?P<name>[A-Z]|[fgh])(?P<sp>[ \t]?)\([ \t]*(?P<a>{_COORD})[ \t]*,[ \t]*(?P<b>{_COORD})[ \t]*\)"
@@ -339,25 +444,52 @@ _ORDINAL_SUFFIX = re.compile(r"(?<![\w.,])(10|[1-9])(er|ero|era|do|da|ro|ra|to|t
 # In Mexico "3° de secundaria" / "1° grado" are ordinals, not angles.
 _ORDINAL_DEGREE = re.compile(
     r"(?<![\w.,])(10|[1-9])[ \t]*°(?=[ \t]+(de[ \t]+(?:secundaria|primaria|preparatoria|prepa|bachillerato|k[íi]nder)"
-    r"|grado|lugar|año|semestre|bimestre|trimestre|cuatrimestre|periodo|período|parcial|piso|nivel|grupo)"
-    r"(?![^\W\d_]))",
+    rf"|de[ \t]+(?:{_MONTHS})|grado|lugar|año|semestre|bimestre|trimestre|cuatrimestre|periodo|período|parcial|piso"
+    r"|nivel|grupo)(?![^\W\d_]))",
     re.I,
 )
+_MONTH_AFTER = re.compile(rf"de[ \t]+(?:{_MONTHS})", re.I)
+# "Tu calificación es 10/10", "Contestaste 7/10 bien": a score is "diez de diez", never "diez décimos".
+_SCORE_BEFORE = re.compile(
+    r"(?<![^\W\d_])(?:calificaci[óo]n|calificaste|sacaste|sac[óo]|saqu[ée]|obtuviste|obtuvo|contestaste|acertaste"
+    r"|puntuaci[óo]n|puntaje|nota|aciertos)(?![^\W\d_])[^.;!?\n\d]{0,20}$",
+    re.I,
+)
+_SCORE_AFTER = _word_set("bien correctas correctos aciertos buenas buenos puntos")
 _PERCENT = re.compile(rf"(?<![\d.,])({_NUM})[ \t]*%")
 _DEGREES = re.compile(rf"(?<![\d.,])({_NUM})[ \t]*°(?:[ \t]*([CF])(?![a-zA-Z]))?")
 _OPERATOR = re.compile("->|=>|[-+=<>≤≥≠≈±×÷/*·→⇒]")
 _NUMBER = re.compile(r"(\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.(\d+))?")
 _NEXT_WORD = re.compile(r"[ \t]+([^\W\d_]{2,})")
+# "1 a 2 tazas" / "1 o 2 tazas": the noun after the range sets the gender of both numbers.
+_RANGE_NEXT = re.compile(r"[ \t]+(?:a|al|y|o)[ \t]+\d+(?:\.\d+)?[ \t]+([^\W\d_]{2,})")
+# "Al 21 suma 4": a "noun" followed by an operand is a verb. The vowels are Spanish words ("suma a", "resta y").
+_NOUN_IS_VERB = re.compile(r"[ \t]+(?:-?[ \t]*\d|[b-df-hj-np-tv-xzB-DF-HJ-NP-TV-XZ](?![^\W\d_]))")
 _LETTER_RUN = re.compile(r"(?<![^\W\d_])[a-z]{2,3}(?![^\W\d_])")
 _VARIABLE_Y = re.compile(r"(?<![^\W\d_])[yY](?![^\W\d_])")
 _PREV_WORD = re.compile(r"([^\W\d_]+)[ \t]+$")
-_FOLLOWING_WORD = re.compile(r"[ \t]+([^\W\d_]+)")
-_Y_CUES = frozenset(
-    ["despeja", "despejar", "despejamos", "despejas", "eje", "variable", "valor", "para", "de", "la", "vale", "y"]
+# No conjunction can follow these words: "despeja y", "el eje y", "el valor de y", "despeja la y", "x y y".
+_Y_CUES = frozenset(["despeja", "despejar", "despejamos", "despejas", "eje", "variable", "de", "la", "y"])
+_Y_VERBS = frozenset(
+    ["encuentra", "encontrar", "halla", "hallar", "calcula", "calcular", "determina", "determinar", "obtén", "obtener"]
 )
-_Y_CUES_BEFORE_VERB = frozenset(["encuentra", "encontrar", "halla", "hallar", "calcula", "determina", "obtén"])
-_CONTRACT_POINT = re.compile("(?<![^\\W\\d_])(a|de)([ \t" + OS + SOFT + "]*)" + PT, re.I)
+# After "encuentra" / "calcula", y is the variable only before a math cue ("Encuentra y en 2x + y = 5");
+# any other word ("Calcula y luego suma", "Encuentra y dime") keeps the conjunction.
+_Y_MATH_NEXT = re.compile(
+    r"[ \t]+(?:(?:en|sabiendo|dad[oa]s?|tal[ \t]+que|a[ \t]+partir)(?![^\W\d_])"
+    r"|(?:si|cuando|para)[ \t]+(?:-?\d|[a-zA-Z](?![^\W\d_]))"
+    r"|de[ \t]+(?!(?:ah[íi]|aqu[íi]|all[íi]|nuevo|inmediato|igual|manera|forma|modo|una)(?![^\W\d_])))",
+    re.I,
+)
+# "Resuelve para y" names the variable; "Para y piensa" is a conjunction.
+_Y_SOLVE = re.compile(
+    r"(?<![^\W\d_])(?:resuelve|resolver|resolvemos|resuelva|resuelvan|despeja|despejar|despejamos|soluciona"
+    r"|solucionar)(?![^\W\d_])[^.;:!?\n]*$",
+    re.I,
+)
+_CONTRACT = re.compile("(?<![^\\W\\d_])(a|de)([ \t" + OS + OE + SOFT + "]*)" + EL, re.I)
 _SOFT_RUN = re.compile("[ \t]*" + SOFT + "[ \t" + SOFT + "]*")
+_NESTED_QUANTITY = re.compile(LQ + "[ \t" + SOFT + "]*(?=" + LQ + ")")
 
 
 @functools.cache
@@ -421,14 +553,19 @@ def to_speech_es(text: str, *, currency: str = "dólar") -> str:
 def _speak(text: str, currency: tuple[str, str]) -> str:
     s = _normalize(text)
     s = _CURRENCY.sub(lambda m: _money(m, currency), s)
+    s = _RATE.sub(_rate, s)
     s = _TIME.sub(_time, s)
+    s = _ONE_OCLOCK.sub(_one_oclock, s)
     s = _PROPORTION.sub(_proportion, s)
     s = _RATIO.sub(_ratio, s)
     s = _ORDINAL_SIGN.sub(_ordinal, s)
     s = _ORDINAL_SUFFIX.sub(_ordinal, s)
     s = _ORDINAL_DEGREE.sub(_ordinal_degree, s)
     s = _UNIT.sub(_unit, s)
+    s = s.replace("∉", SOFT + "no pertenece a" + SOFT).replace("∈", SOFT + "pertenece a" + SOFT)
     s = _INTERVAL.sub(_interval, s)
+    s = _BARE_INTERVAL.sub(_bare_interval, s)
+    s = _SET.sub(_set, s)
     s = _NAMED_POINT.sub(_named_point, s)
     s = _POINT.sub(_point, s)
     s = _FUNCTION_POWER.sub(lambda m: f"{_FUNCTIONS[m[1].lower()]} {'cuadrado' if m[2] == '2' else 'cúbico'}{FN}", s)
@@ -526,8 +663,80 @@ def _normalize(text: str) -> str:
     text = _INCLUSIVE_PAREN.sub(_inclusive, text)
     text = _UNICODE_FRACTION.sub(lambda m: (m[1] + " " if m[1] else "") + _UNICODE_FRACTIONS[m[2]], text)
     text = _SUPERSCRIPT_RUN.sub(lambda m: "^" + m[0].translate(_SUPERSCRIPTS), text)
+    text = _SPACE_THOUSANDS.sub(_space_thousands, text)
     text = _RANGE.sub(r"\1\2 a \3", text)
+    text = _number_ranges(text)
     return _DASH.sub(_dash, text)
+
+
+def _space_thousands(m: re.Match[str]) -> str:
+    head, groups = m[1], m[2]
+    if " " in groups and len(head) == 3 and not groups.endswith("000"):
+        return m[0]  # "100 200 300" written with plain spaces is a list
+    return head + re.sub("[   ]", "", groups)
+
+
+def _number_ranges(text: str) -> str:
+    # One pass per sentence, so the "is anything else math here?" test stays linear on long input.
+    if not _NUMBER_RANGE.search(text):
+        return text
+    parts = _SENTENCE_SPLIT.split(text)
+    for k in range(0, len(parts), 2):
+        found = len(_NUMBER_RANGE.findall(parts[k]))
+        if found:
+            busy = len(_SENTENCE_OPS.findall(parts[k])) > found
+            parts[k] = _NUMBER_RANGE.sub(functools.partial(_number_range, busy=busy), parts[k])
+    return "".join(parts)
+
+
+def _number_range(m: re.Match[str], *, busy: bool) -> str:
+    # "3–5 muestras", "25-37 °C", "1990–2000" are ranges; "8–3 = 5", "2(8-3)", "Calcula 8–3" subtract.
+    s, i, j = m.string, m.start(), m.end()
+    minus = m[1] + "-" + m[3]
+    if _in_expression(s, i, j):
+        return minus
+    if not _range_tail(s, j):
+        words = re.findall(r"[^\W\d_]+", s[max(0, i - 32) : i])[-2:]
+        if busy or any(w.lower() in _SUBTRACT_CUES for w in words):
+            return minus
+        if float(m[1].replace(",", "")) >= float(m[3].replace(",", "")):
+            return minus  # a range runs upward: a bare "8-3" is a subtraction
+    before = _PREV_WORD.search(s, max(0, i - 24), i)
+    word = before[1].lower() if before else ""
+    joiner = " y " if word == "entre" else " al " if word == "del" else " a "
+    return m[1] + joiner + m[3]
+
+
+def _in_expression(s: str, i: int, j: int) -> bool:
+    k = i - 1
+    while k >= 0 and s[k] in " \t":
+        k -= 1
+    if k >= 0 and s[k] in "([":
+        if k > 0 and (s[k - 1].isalnum() or s[k - 1] == ")"):
+            return True  # "2(8-3)"
+        k -= 1
+        while k >= 0 and s[k] in " \t":
+            k -= 1
+    if k >= 0 and s[k] in _OPS + "–—‒":
+        return True
+    k = j
+    while k < len(s) and s[k] in " \t)]":
+        k += 1
+    if k < len(s) and s[k] in _OPS + "–—‒(":
+        return True
+    return bool(_EQUALS_WORD.match(s, j))
+
+
+def _range_tail(s: str, j: int) -> bool:
+    tail = _RANGE_TAIL.match(s, j)
+    if not tail:
+        return False
+    word = tail["word"]
+    if word is None:
+        return True  # "25-37 °C", "5–10 %"
+    if word.lower() == "de":
+        return bool(tail["month"])  # "Del 3–7 de marzo"
+    return word in _RANGE_UNITS or _noun_gender(word) is not None or _noun_gender(word.lower()) is not None
 
 
 def _other_gender(stem: str, suffix: str) -> str | None:
@@ -579,50 +788,96 @@ def _dash(m: re.Match[str]) -> str:
     left_letter, right_letter = _lone_letter_before(s, i), _lone_letter_after(s, j)
     left_operand = left.isdigit() or (left != "" and left in ")]π") or left_letter
     right_operand = right.isdigit() or (right != "" and right in "([√") or right_letter
+    dash = s[i + len(m[1])]
     if m[1] == m[2] and left_operand and right_operand:
         if left_letter and right_letter and left.lower() in "aeouy" and right.lower() in "aeouy":
             return m[0]  # "y — o" are words
-        if not m[1] and _year_range(s, i, j):
-            return " a "  # "1990–2000" is a range of years, not a subtraction
+        if right_letter and (dash == "—" or right.lower() in "aeouy") and not _variable_ends(s, j + 1):
+            return m[0]  # "7 — y lo hiciste", "Paso 2 — a la derecha": an aside, not a minus
         return m[1] + "-" + m[2]
-    dash = s[i + len(m[1])]
-    if dash != "—" and not m[2] and (right.isdigit() or (right != "" and right in "(√")):
+    if not m[2] and (right.isdigit() or (right != "" and right in "(√") or right_letter):
         prev = _prev_char(s, i)
-        if prev and prev in _RELATIONS + "+*/×·÷±(^[":
-            return m[1] + "-"  # "x = –3"
+        if prev and (prev in _RELATIONS + "+*/×·÷±^" or (dash != "—" and prev in "([")):
+            return m[1] + "-"  # "x = –3", "x = –b"
+        if dash != "—" and prev in ("", "\n"):
+            line_end = s.find("\n", j)
+            if _LATER_OPERATOR.search(s, j, len(s) if line_end < 0 else line_end):
+                return m[1] + "-"  # "–5 + 3 = –2" opens with a negative number
     return m[0]
 
 
-def _year_range(s: str, i: int, j: int) -> bool:
-    before, after = re.search(r"(?<!\d)\d+$", s[max(0, i - 5) : i]), re.match(r"\d+(?!\d)", s[j : j + 5])
-    if not (before and after) or not all(re.fullmatch("[12]\\d{3}", t[0]) for t in (before, after)):
-        return False
-    line_start, line_end = s.rfind("\n", 0, i) + 1, s.find("\n", j)
-    return not any(c in _RELATIONS for c in s[line_start : len(s) if line_end < 0 else line_end])
+def _variable_ends(s: str, k: int) -> bool:
+    # A lone letter after a dash is a variable only where an expression can go on or stop ("x = 5 — y").
+    nxt = _next_char(s, k)
+    return not nxt or nxt in _OPS + ")].;:?!"
 
 
 def _money(m: re.Match[str], currency: tuple[str, str]) -> str:
-    whole, frac, named = m[1], m[2], (m["named"] or "").lower()
+    whole, frac, named = m["whole"], m["frac"], (m["named"] or "").lower()
     if named:
         currency = _CURRENCIES[_NAMED_CURRENCY.get(named, "dólar")]
     singular, plural = currency
+    sign = "menos " if m["neg"] else ""
+    if m["mag"]:
+        # "$10 mil" -> "diez mil dólares", "$1.5 millones" -> "uno punto cinco millones de dólares"
+        magnitude = re.sub(r"\bmillon\b", "millón", " ".join(m["mag"].lower().split()))
+        amount = _spell(whole + ("." + frac if frac else ""), apocope=True)
+        words = magnitude if (amount, magnitude) == ("un", "mil") else f"{amount} {magnitude}"
+        return _chunk(f"{sign}{words}{' ' if magnitude == 'mil' else ' de '}{plural}")
     if frac is not None and len(frac) > 2:
-        return _chunk(f"{_spell(whole + '.' + frac)} {plural}")
+        return _chunk(f"{sign}{_spell(whole + '.' + frac)} {plural}")
     cents = frac.ljust(2, "0").lstrip("0") if frac else ""
     parts = []
     if whole.strip("0,") or not cents:
         parts.append(_count(whole, singular, plural))
     if cents:
         parts.append(_count(cents, "centavo", "centavos"))
-    return _chunk(" con ".join(parts))
+    return _chunk(sign + " con ".join(parts))
+
+
+def _rate(m: re.Match[str]) -> str:
+    left, den, power = m["left"], m["den"], m["pow"]
+    if left != OE and (len(left) < 4 or left in _UNIT_WORDS):
+        return m[0]  # "km/h" and "x/a" belong to the unit and fraction passes
+    word = _PER_UNIT.get(den) or (den.lower() if den.lower() in _PER_WORDS else None)
+    if word is None:
+        return m[0]  # "sí/no", "verdadero/falso" are alternatives
+    if power:
+        if den in _LENGTH_UNITS:
+            word += " cuadrado" if power == "2" else " cúbico"
+        elif den in _TIME_UNITS and power == "2":
+            word += " al cuadrado"
+        else:
+            return m[0]
+    return left + _chunk("por " + word)
+
+
+def _sentence_span(s: str, i: int, j: int, limit: int = 200) -> tuple[int, int]:
+    a, b = i, j
+    while a > max(0, i - limit) and not (s[a - 1] in "!?;\n" or (s[a - 1] == "." and not s[a : a + 1].isdigit())):
+        a -= 1
+    while b < min(len(s), j + limit) and not (s[b] in "!?;\n" or (s[b] == "." and not s[b + 1 : b + 2].isdigit())):
+        b += 1
+    return a, b
 
 
 def _time(m: re.Match[str]) -> str:
     if not (m["pre"] or m["post"]):
-        return m[0]
+        s, start = m.string, m.start()
+        a, b = _sentence_span(s, start, m.end())
+        if _RATIO_CUE.search(s, a, b):
+            return m[0]  # "La razón es 3:45", "Diluye 1:10", "2:30 = 4:60"
+        if m["m"] not in _QUARTER_MINUTES and not _TIME_CUE.search(s, max(0, start - 16), start):
+            return m[0]
     hour = number_to_words_es(int(m["h"]), fem=True)
     minutes = "en punto" if m["m"] == "00" else "y " + number_to_words_es(int(m["m"]))
     return (m["pre"] or "") + _chunk(f"{hour} {minutes}") + (m["post"] or "")
+
+
+def _one_oclock(m: re.Match[str]) -> str:
+    if _POWER_BEFORE.search(m.string, max(0, m.start() - 16), m.start()):
+        return m[0]
+    return m[1] + _chunk("una")
 
 
 def _proportion(m: re.Match[str]) -> str:
@@ -642,6 +897,21 @@ def _interval(m: re.Match[str]) -> str:
     return f"{m['word']} {OS}{SOFT}de{SOFT}{a}{SOFT}a{SOFT}{b}{SOFT}{OE}"
 
 
+def _bare_interval(m: re.Match[str]) -> str:
+    if m["open"] == "(" and m["close"] == ")":
+        return m[0]  # the point pass reads "(2, 5)"
+    a, b = _coordinate(m["a"]), _coordinate(m["b"])
+    return f"{OS}{SOFT}{EL}{SOFT}intervalo{SOFT}de{SOFT}{a}{SOFT}a{SOFT}{b}{SOFT}{OE}"
+
+
+def _set(m: re.Match[str]) -> str:
+    items = ", ".join(_coordinate(t) for t in m["items"].split(","))
+    if m["more"]:
+        items += ", etcétera"
+    label = "" if m["pre"] else f"{EL}{SOFT}conjunto{SOFT}"
+    return f"{m['pre'] or ''}{OS}{SOFT}{label}{items}{SOFT}{OE}"
+
+
 def _named_point(m: re.Match[str]) -> str:
     name = m["name"]
     if m["sp"] and name in "EOUY":
@@ -652,7 +922,8 @@ def _named_point(m: re.Match[str]) -> str:
 
 def _point(m: re.Match[str]) -> str:
     pre = m["pre"] or ""
-    label = "" if pre else PT
+    listed = not pre and _POINT_LIST.search(m.string, max(0, m.start() - 200), m.start())
+    label = "" if pre or listed else f"{EL}{SOFT}punto"
     return f"{pre}{OS}{SOFT}{label}{SOFT}{_coordinate(m['a'])}{SOFT}, {_coordinate(m['b'])}{SOFT}{OE}"
 
 
@@ -661,10 +932,10 @@ def _coordinate(raw: str) -> str:
 
 
 def _unit(m: re.Match[str]) -> str:
-    num, unit, power, per = m["num"], m["unit"], m["pow"], m["per"]
-    if len(unit) == 1 and not (num and m["sp"] and (power or per)):
-        return m[0]  # "3m" / "5 m" can be algebra; "12 m²" and "9.8 m/s" are units
-    if power and unit not in _LENGTH_UNITS:
+    num, unit, power, per, perpow = m["num"], m["unit"], m["pow"], m["per"], m["perpow"]
+    if len(unit) == 1 and not (num and m["sp"] and (power or per or _measurement(m))):
+        return m[0]  # "3m" / "5 m" can be algebra; "12 m²", "9.8 m/s" and "1.5 m de" are units
+    if (power and unit not in _LENGTH_UNITS) or (unit == "min" and not num):
         return m[0]
     if not num and not per:
         return m[0]
@@ -674,8 +945,23 @@ def _unit(m: re.Match[str]) -> str:
         adjective = "cuadrado" if power == "2" else "cúbico"
         words += " " + (adjective if num == "1" else adjective + "s")
     if per:
-        words += " por " + _PER_UNIT[per] + (" al cuadrado" if m["perpow"] else "")
+        words += " por " + _PER_UNIT[per]
+        if perpow and per in _LENGTH_UNITS:
+            words += " cuadrado" if perpow == "2" else " cúbico"  # "g/cm³"
+        elif perpow == "2" and per in _TIME_UNITS:
+            words += " al cuadrado"  # "m/s²"
+        elif perpow:
+            return m[0]
     return _chunk(words)
+
+
+def _measurement(m: re.Match[str]) -> bool:
+    s, unit = m.string, m["unit"]
+    if unit == "h":
+        return not _OPERATOR_AFTER.match(s, m.end())  # "24 h" is hours; "5 h + 2" stays algebra
+    if "." in m["num"] or _UNIT_WORD_AFTER.match(s, m.end()):
+        return True
+    return bool(_UNIT_WORD_BEFORE.search(s, max(0, m.start() - 16), m.start()))
 
 
 def _prev_char(s: str, i: int) -> str:
@@ -699,7 +985,9 @@ def _split_letters(m: re.Match[str]) -> str:
     prev, nxt = _prev_char(s, m.start()), _next_char(s, m.end())
     coefficient = m.start() > 0 and s[m.start() - 1].isdigit()
     framed = bool(prev) and prev in _OPS + _OPENERS + _PREFIX and (not nxt or nxt in _OPS + _CLOSERS + ".,;:?!")
-    if not (coefficient or framed):
+    # "xy = 6" opens with a product of variables: no word stands at the start right before a relation.
+    leading = prev in ("", "\n", ":", "¿", "¡") and bool(nxt) and nxt in _RELATIONS + "+*×·÷±^"
+    if not (coefficient or framed or leading):
         return run
     return SOFT + SOFT.join(YV if c == "y" else c for c in run) + SOFT
 
@@ -715,18 +1003,30 @@ def _variable_y(m: re.Match[str]) -> str:
     # "y - 3 = 0" is the variable, but "son 3 y -2" is the conjunction before a negative number.
     if nxt and (nxt in _OPS.replace("-", "") + _CLOSERS or (nxt == "-" and not prev)):
         return YV
-    # A conjunction cannot end a clause: "¿cuánto vale y?", "los ejes x, y".
-    if (not nxt or nxt in "?.!;:") and prev and prev not in "¿¡":
+    # A conjunction cannot end a clause: "¿cuánto vale y?", "los ejes x, y" (but "Bueno, y." is still one).
+    clause_end = (not nxt or nxt in "?.!;:") and bool(prev) and prev not in "¿¡"
+    if clause_end and (prev != "," or _operand_before_comma(s, i)):
         return YV
-    # "despeja la y", "el eje y", "x y y": no conjunction can follow these words.
     word = _PREV_WORD.search(s, max(0, i - 24), i)
     cue = word[1].lower() if word else ""
     if cue in _Y_CUES:
         return YV
-    if cue in _Y_CUES_BEFORE_VERB:
-        following = _FOLLOWING_WORD.match(s, m.end())
-        return y if following and following[1].lower() in _IMPERATIVES else YV
+    if cue == "para" and _Y_SOLVE.search(s, max(0, i - 80), i):
+        return YV  # "Resuelve la ecuación para y en..."
+    if cue in _Y_VERBS and _Y_MATH_NEXT.match(s, m.end()):
+        return YV
     return y
+
+
+def _operand_before_comma(s: str, i: int) -> bool:
+    k = s.rfind(",", 0, i) - 1
+    while k >= 0 and s[k] in " \t" + SOFT:
+        k -= 1
+    if k < 0:
+        return False
+    if s[k].isascii() and s[k].isalpha():
+        return k == 0 or not s[k - 1].isalpha()  # "los ejes x, y"
+    return s[k].isdigit() or s[k] in _CLOSERS + YV + ")"
 
 
 def _is_math(inner: str, *, powered: bool = False) -> bool:
@@ -786,7 +1086,11 @@ def _fraction(m: re.Match[str]) -> str:
         return _chunk(f"{_spell(m[1])} sobre {_spell(m[2])}")
     num, den = int(m[1]), int(m[2])
     nxt = _NEXT_WORD.match(m.string, m.end())
-    gender = _noun_gender(nxt[1]) if nxt else None
+    if num <= den and (
+        _SCORE_BEFORE.search(m.string, max(0, m.start() - 48), m.start()) or (nxt and nxt[1].lower() in _SCORE_AFTER)
+    ):
+        return _chunk(f"{_spell(m[1])} de {_spell(m[2])}")  # "Sacaste 7/10" -> "siete de diez"
+    gender = _gender_after(m.string, m.end(), ranged=False)
     if gender is None or num == 0:
         return _chunk(fraction_to_words_es(num, den))
     fem = gender == "f"
@@ -809,8 +1113,7 @@ def _mixed(m: re.Match[str]) -> str:
     whole, num, den = int(m[1]), int(m[2]), int(m[3])
     if not 0 < num < den or _denominator(den) is None:
         return m[0]
-    nxt = _NEXT_WORD.match(m.string, m.end())
-    gender = _noun_gender(nxt[1]) if nxt else None
+    gender = _gender_after(m.string, m.end(), ranged=False)
     if gender is not None and (num, den) == (1, 2):
         fem = gender == "f"
         return _chunk(f"{number_to_words_es(whole, fem=fem)} y {'media' if fem else 'medio'}")  # "dos y media tazas"
@@ -854,7 +1157,10 @@ def _ordinal(m: re.Match[str]) -> str:
 
 
 def _ordinal_degree(m: re.Match[str]) -> str:
-    masc, _, short, _ = _ORDINALS[int(m[1])]
+    n = int(m[1])
+    masc, _, short, _ = _ORDINALS[n]
+    if _MONTH_AFTER.fullmatch(m[2]):
+        return _chunk(masc if n == 1 else number_to_words_es(n))  # "el 1° de mayo" -> "el primero de mayo"
     return _chunk(masc if m[2].lower().startswith("de") else short)
 
 
@@ -901,6 +1207,8 @@ def _operator(m: re.Match[str]) -> str:
         # A hyphen only reads "menos" next to an operand: keeps "auto-evaluación" and "- paso" bullets as prose.
         if not _starts_operand(s, j, skip=True):
             return op
+        if _compound(s, i, j):
+            return SOFT  # "COVID-19" is a name with a number, not a subtraction
         prev = _prev_char(s, i)
         after_operator = bool(prev) and prev in _OPS + _OPENERS + "("
         if not (_ends_operand(s, i) or _starts_operand(s, j, skip=False) or after_operator):
@@ -918,6 +1226,16 @@ def _operator(m: re.Match[str]) -> str:
     return SOFT + words + SOFT
 
 
+def _compound(s: str, i: int, j: int) -> bool:
+    if not (j < len(s) and s[j].isdigit() and i > 0 and s[i - 1].isalpha()):
+        return False
+    k = i
+    while k > 0 and s[k - 1].isalpha():
+        k -= 1
+    word = s[k:i]
+    return len(word) >= 4 or (len(word) >= 2 and any(c.isupper() for c in word))
+
+
 def _noun_gender(word: str) -> str | None:
     if word[0].isupper():
         return None
@@ -927,11 +1245,27 @@ def _noun_gender(word: str) -> str | None:
     return "m" if lower in _MASC_NOUNS else None
 
 
+def _gender_after(s: str, j: int, *, ranged: bool = True) -> str | None:
+    nxt = _NEXT_WORD.match(s, j)
+    if nxt is None:
+        span = _RANGE_NEXT.match(s, j) if ranged else None
+        return "f" if span and _noun_gender(span[1]) == "f" else None  # "1 a 2 tazas" -> "una a dos tazas"
+    word = nxt[1].lower()
+    if word in _SOLO:
+        noun = _NEXT_WORD.match(s, nxt.end())
+        return "m" if noun and _noun_gender(noun[1]) == "m" else None
+    gender = _noun_gender(nxt[1])
+    if gender is None or _NOUN_IS_VERB.match(s, nxt.end()):
+        return None
+    if word in _VERB_NOUNS:
+        obj = _NEXT_WORD.match(s, nxt.end())
+        if obj and obj[1].lower() in _VERB_OBJECT:
+            return None  # "La figura 1 muestra que..."
+    return gender
+
+
 def _number(m: re.Match[str]) -> str:
-    gender = None
-    if m[2] is None:
-        nxt = _NEXT_WORD.match(m.string, m.end())
-        gender = _noun_gender(nxt[1]) if nxt else None
+    gender = _gender_after(m.string, m.end()) if m[2] is None else None
     words = _spell(m[0], fem=gender == "f", apocope=gender == "m")
     if gender and words.endswith(("millón", "millones")):
         words += " de"  # "un millón de personas"
@@ -939,9 +1273,10 @@ def _number(m: re.Match[str]) -> str:
 
 
 def _finish(s: str) -> str:
-    s = _CONTRACT_POINT.sub(lambda m: m[1][0] + ("l" if len(m[1]) == 1 else "el") + m[2] + "punto", s)
+    s = _CONTRACT.sub(lambda m: m[1][0] + ("l" if len(m[1]) == 1 else "el") + m[2], s)
+    s = _NESTED_QUANTITY.sub(LQ + ", ", s)  # "{[2 + 3] × 4}": "la cantidad, la cantidad dos más tres..."
     s = (
-        s.replace(PT, "el punto")
+        s.replace(EL, "el")
         .replace(YV, "ye")
         .replace(LQ, SOFT + "la cantidad" + SOFT)
         .replace(LF, SOFT + "de" + SOFT)
