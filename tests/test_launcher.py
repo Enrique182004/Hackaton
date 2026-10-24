@@ -563,11 +563,14 @@ def test_spec_turns_on_utf8_mode_with_the_option_the_bootloader_knows() -> None:
 
 def test_spec_bundles_sympy_for_quiz_grading() -> None:
     spec = (LAUNCHER_PATH.parent / "sar.spec").read_text(encoding="utf-8")
-    hidden = spec[spec.index("hiddenimports = [") : spec.index("if IS_WIN:")]
+    start = spec.index("hiddenimports = [")
+    hidden = spec[start : spec.index("\n]\n", start)]
     for module in ('"sympy"', '"sympy.parsing.sympy_parser"', '"mpmath"'):
         assert module in hidden
     assert '_existing("biobench_sar.grading")' in spec
     assert 'collect_submodules("biobench_sar"' in spec
+    # Only the kid voices exist (online Edge): the adult computer voices are not bundled.
+    assert "pyttsx3" not in spec and "pyttsx3" not in launcher.RUNTIME_MODULES
 
 
 def test_requirements_pin_sympy_and_explain_the_missing_speechrecognition() -> None:
@@ -575,6 +578,7 @@ def test_requirements_pin_sympy_and_explain_the_missing_speechrecognition() -> N
     packages = [re.split(r"[<>=]", line)[0].strip().lower() for line in lines if line and not line.startswith("#")]
     assert "sympy" in packages
     assert "speechrecognition" not in packages
+    assert "pyttsx3" not in packages, "the computer's adult voices were removed: only the online kid voices exist"
     notes = " ".join(line for line in lines if line.startswith("#"))
     assert "SpeechRecognition" in notes and "PyAudio" in notes and "Whisper" in notes
 

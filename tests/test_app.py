@@ -1423,3 +1423,10 @@ def test_warm_up_leaves_the_mic_check_to_the_wake_listener(caplog: pytest.LogCap
     audio.mode = "wake"  # type: ignore[attr-defined]
     app_module._warm_up(types.SimpleNamespace(vlm=object(), audio=audio))  # type: ignore[arg-type]
     assert audio.probed == 0
+
+
+def test_status_says_when_the_voice_service_is_unreachable(built: Any, fakes: app_module.Services) -> None:
+    app, _ = built
+    assert app.test_client().get("/api/status").get_json()["voice_offline"] is False
+    fakes.tts.offline = True  # type: ignore[attr-defined]
+    assert app.test_client().get("/api/status").get_json()["voice_offline"] is True

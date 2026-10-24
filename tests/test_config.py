@@ -381,3 +381,15 @@ def test_lan_hostnames_passed_in_are_normalized() -> None:
     )
     assert Settings(lan_hostnames="a.local,b.local").lan_hostnames == ("a.local", "b.local")  # type: ignore[arg-type]
     assert Settings(lan_hostnames=None).lan_hostnames == ()  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("value", "backend"),
+    [("edge", "edge"), ("none", "none"), ("say", "edge"), ("pyttsx3", "edge"), (" Say ", "edge")],
+)
+def test_the_removed_adult_voices_fall_back_to_the_kid_voices(
+    monkeypatch: pytest.MonkeyPatch, value: str, backend: str
+) -> None:
+    # An old sar.env with SAR_TTS_BACKEND=say keeps a voice: the kid one, shown as text when offline.
+    monkeypatch.setenv("SAR_TTS_BACKEND", value)
+    assert Settings().tts_backend == backend

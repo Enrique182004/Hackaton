@@ -42,8 +42,8 @@ Non-negotiables:
 ## Stack
 - Backend: Python 3.10–3.12 (openai-whisper/torch lag the newest Python), Flask, Flask-SocketIO
 - Vision: opencv-python, numpy (`cv2.findHomography` / `cv2.warpPerspective`)
-- Audio/TTS: pyaudio (raw capture; no SpeechRecognition), openai-whisper (local, en/es), edge-tts / `say` /
-  pyttsx3 (en-US and es-MX voices)
+- Audio/TTS: pyaudio (raw capture; no SpeechRecognition), openai-whisper (local, en/es), edge-tts kid voices only
+  (en-US-AnaNeural, es-MX-DaliaNeural pitched up); no offline voice, so without internet answers are shown only
 - RAG: chromadb (persistent, local), sentence-transformers `all-MiniLM-L6-v2`
 - Parsers: PyMuPDF, pandas, python-docx, python-pptx, pytesseract
 - VLM: Ollama `qwen2.5vl:3b` by default (`SAR_VLM_BACKEND=openai|mock` for others)

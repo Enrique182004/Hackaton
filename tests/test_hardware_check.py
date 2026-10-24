@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import types
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -431,3 +431,61 @@ def test_check_mic_passes_with_sound(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_pyaudio(monkeypatch, 1000)
     [(_, status, detail)] = hc.check_mic()
     assert status == "PASS" and "MacBook Air Microphone" in detail
+
+
+class _VoiceEngine:
+    """TTSEngine stand-in: makes a file for each language unless the voice service is unreachable."""
+
+    reachable = True
+    broken: ClassVar[set[str]] = set()  # languages whose voice is wrong (a bad SAR_TTS_VOICE), with the network up
+    made: ClassVar[list[str]] = []
+
+    def __init__(self, backend: str, voice: str, out_dir: Path) -> None:
+        self.backend = backend
+
+    @property
+    def offline(self) -> bool:
+        return not _VoiceEngine.reachable
+
+    def speak(self, text: str, lang: str) -> str | None:
+        _VoiceEngine.made.append(lang)
+        return f"{lang}.mp3" if _VoiceEngine.reachable and lang not in _VoiceEngine.broken else None
+
+    def edge_voice(self, lang: str) -> str:
+        return {"en": "en-US-AnaNeural", "es": "es-MX-DaliaNeural"}[lang]
+
+
+@pytest.fixture
+def voice_engine(monkeypatch: pytest.MonkeyPatch) -> type[_VoiceEngine]:
+    from biobench_sar.llm import tts_engine
+
+    monkeypatch.setattr(_VoiceEngine, "reachable", True)
+    monkeypatch.setattr(_VoiceEngine, "broken", set())
+    monkeypatch.setattr(_VoiceEngine, "made", [])
+    monkeypatch.setattr(tts_engine, "TTSEngine", _VoiceEngine)
+    return _VoiceEngine
+
+
+def test_voice_check_makes_both_kid_voices(voice_engine: type[_VoiceEngine]) -> None:
+    [(name, status, detail)] = hc.check_tts(hc.Settings(tts_backend="edge"), skip=False)
+    assert (name, status) == ("voice", "PASS") and voice_engine.made == ["en", "es"]
+    assert "en-US-AnaNeural" in detail and "es-MX-DaliaNeural" in detail
+
+
+def test_voice_check_without_the_voice_service_says_answers_are_only_shown(voice_engine: type[_VoiceEngine]) -> None:
+    voice_engine.reachable = False
+    [(_, status, detail)] = hc.check_tts(hc.Settings(tts_backend="edge"), skip=False)
+    assert status == "WARN" and "shown but not spoken" in detail and "no offline voice" in detail
+
+
+def test_voice_check_with_the_voice_off_or_skipped(voice_engine: type[_VoiceEngine]) -> None:
+    assert hc.check_tts(hc.Settings(tts_backend="none"), skip=False)[0][1] == "WARN"
+    assert hc.check_tts(hc.Settings(tts_backend="edge"), skip=True) == [("voice", "WARN", "skipped (--no-voice)")]
+    assert voice_engine.made == []
+
+
+def test_voice_check_names_a_voice_that_fails_with_the_internet_up(voice_engine: type[_VoiceEngine]) -> None:
+    voice_engine.broken = {"es"}
+    [(_, status, detail)] = hc.check_tts(hc.Settings(tts_backend="edge"), skip=False)
+    assert status == "WARN" and "es-MX-DaliaNeural" in detail and "SAR_TTS_VOICE" in detail
+    assert "internet" not in detail

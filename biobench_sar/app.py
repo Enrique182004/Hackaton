@@ -495,6 +495,7 @@ def create_app(
                 "audio_available": bool(getattr(svc.audio, "available", False)),
                 "mic_silent": getattr(svc.audio, "mic_silent", None) is True,
                 "tts_backend": settings.tts_backend,
+                "voice_offline": getattr(svc.tts, "offline", False) is True,
                 "listen_mode": settings.listen_mode,
                 "state": assistant.state,
                 "busy": assistant.busy,

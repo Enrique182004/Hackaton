@@ -794,7 +794,7 @@ renderConfig({ profile: "math", listen_mode: "push", wake_word: "assistant", tts
 assert.deepEqual(rows(), {
   "Subject": "Math",
   "Microphone mode": "Press Talk (or Space on the projector page)",
-  "Voice": "Online voice (needs internet)",
+  "Voice": "Kid voice (needs internet)",
   "Checkerboard inner corners": "9 × 6",
 });
 renderConfig({ listen_mode: "wake", wake_word: "hey board", tts_backend: "none" });
@@ -866,6 +866,50 @@ assert.match(checks(), /Camera not found .*System Settings → Privacy & Securit
 assert.doesNotMatch(checks(), /Let desktop apps|On Windows/);
 renderStatus({ ...base, camera_running: false, host_os: "other" });
 assert.match(checks(), /Camera not found Check the camera is plugged in and not open in another app, then restart the assistant\\./);
+""",
+    )
+
+
+@needs_node
+def test_checklist_says_when_answers_are_shown_but_not_spoken(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+installFetch();
+const { renderStatus } = await import("./dashboard/status.js");
+const base = { camera_running: true, calibrated: true, total_documents: 1, active_documents: 1, audio_available: true };
+const checks = () => $("checks").children.map(text).join("\\n");
+renderStatus({ ...base, tts_backend: "edge", voice_offline: false });
+assert.match(checks(), /Answers are read aloud on the projector page/);
+renderStatus({ ...base, tts_backend: "edge", voice_offline: true });
+assert.match(checks(), /Answers are shown but not read aloud: the kid voices need the internet Check the internet connection/);
+assert.doesNotMatch(checks(), /are read aloud on the projector/);
+renderStatus({ ...base, tts_backend: "none", voice_offline: true });
+assert.match(checks(), /Answers are shown but not read aloud$/m);
+""",
+    )
+
+
+@needs_node
+def test_event_log_says_an_answer_without_audio_was_not_spoken(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+installFetch();
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+sock.fire("speak", { url: null, text: "hi" });
+assert.match(logText(), /speak.*not spoken: shown only/);
+assert.doesNotMatch(logText(), /local voice/);
+sock.fire("speak", { url: "/tts/a.mp3", text: "hi" });
+assert.match(logText(), /speak.*\\/tts\\/a\\.mp3/);
 """,
     )
 

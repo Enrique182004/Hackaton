@@ -466,8 +466,7 @@ class Assistant:
 
         False while a question is running, or its answer is still being played: that answer comes first.
         """
-        playing = self.settings.tts_backend != "none" and time.monotonic() < self._speaking_until
-        if playing or not self._busy.acquire(blocking=False):
+        if time.monotonic() < self._speaking_until or not self._busy.acquire(blocking=False):
             return False
         with self._language_lock:
             setting = self._language
@@ -504,9 +503,11 @@ class Assistant:
         audio_name = self.services.tts.speak(spoken, lang=language)
         url = f"/tts/{audio_name}" if audio_name else None
         self._emit("speak", {"url": url, "text": spoken, **said})
-        # A slower voice talks for longer: the wake-word loop stays deaf until it is done.
-        rate = self.accessibility.current.rate_factor
-        self._speaking_until = time.monotonic() + estimate_speech_seconds(spoken, rate)
+        # Without audio nothing plays (the kid voices are the only voices): only a spoken line keeps the wake-word loop
+        # deaf, until it is done. A slower voice talks for longer.
+        if audio_name:
+            rate = self.accessibility.current.rate_factor
+            self._speaking_until = time.monotonic() + estimate_speech_seconds(spoken, rate)
 
     def handle_query(self, text: str) -> bool:
         """Start a query in the background. False if it's empty or another query is still running."""

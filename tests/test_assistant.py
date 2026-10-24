@@ -1601,3 +1601,13 @@ def test_without_a_voice_nothing_is_still_playing(h: Harness, clock: FakeClock) 
     h.tts.name = None
     h.assistant.handle_query("q")
     assert h.assistant.on_unheard("unclear", "en") is True
+
+
+def test_an_answer_without_audio_is_not_still_playing(h: Harness, clock: FakeClock) -> None:
+    # The voice service is unreachable: the answer is only shown. There is no other voice, so nothing plays.
+    h.assistant.settings = dataclasses.replace(h.assistant.settings, tts_backend="edge")
+    h.tts.name = None
+    h.assistant.handle_query("q")
+    assert h.payloads("speak")[-1]["url"] is None
+    assert h.assistant.should_listen() is True, "the wake listener is not waiting for a voice that never speaks"
+    assert h.assistant.on_unheard("unclear", "en") is True

@@ -63,7 +63,6 @@ RUNTIME_MODULES = (
     "whisper",
     "pyaudio",
     "edge_tts",
-    "pyttsx3",
     "pymupdf",
     "docx",
     "pptx",

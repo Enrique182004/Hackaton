@@ -43,6 +43,13 @@ function micCheck(s) {
   return check("ok", t("check.mic.ok"));
 }
 
+// The kid voices are online only: while the voice service can't be reached, answers are shown and not spoken.
+function voiceCheck(s) {
+  if (s.tts_backend === "none") return check("warn", t("check.voice.off"));
+  if (s.voice_offline) return check("warn", t("check.voice.offline"), t("check.voice.offlineFix"));
+  return check("ok", t("check.voice.ok"));
+}
+
 function filesCheck(s) {
   const w = words();
   const total = s.total_documents;
@@ -86,7 +93,7 @@ export function renderStatus(s) {
       filesCheck(s),
       modelCheck(s),
       micCheck(s),
-      s.tts_backend === "none" ? check("warn", t("check.voice.off")) : check("ok", t("check.voice.ok")),
+      voiceCheck(s),
     ].filter(Boolean),
   );
   markOverflow($("checks"));

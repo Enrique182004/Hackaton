@@ -162,21 +162,43 @@ def check_mic() -> list[Result]:
         pa.terminate()
 
 
-def check_tts(settings: Settings, no_sound: bool) -> list[Result]:
-    if no_sound:
-        return [("tts", "WARN", "skipped (--no-sound)")]
-    if platform.system() == "Darwin" and shutil.which("say"):
-        rc = subprocess.run(["say", "Hardware check"], capture_output=True).returncode
-        return [("tts (say)", "PASS" if rc == 0 else "FAIL", "played sample" if rc == 0 else f"exit {rc}")]
-    try:
-        import pyttsx3
+VOICE_SAMPLES = {"en": "Hardware check.", "es": "Revisión del equipo."}
 
-        engine = pyttsx3.init()
-        engine.say("Hardware check")
-        engine.runAndWait()
-        return [("tts (pyttsx3)", "PASS", "played sample")]
-    except Exception as exc:
-        return [("tts", "WARN", f"no local TTS ({exc}); edge-tts needs internet")]
+
+def check_tts(settings: Settings, skip: bool) -> list[Result]:
+    """Make one sample in each kid voice. They come from Microsoft's online voice service: there is no offline voice,
+    so without it the answers are shown but not spoken."""
+    if skip:
+        return [("voice", "WARN", "skipped (--no-voice)")]
+    if settings.tts_backend != "edge":
+        return [("voice", "WARN", f"SAR_TTS_BACKEND={settings.tts_backend}: answers are shown but not spoken")]
+    import tempfile
+
+    from biobench_sar.llm import tts_engine
+
+    with tempfile.TemporaryDirectory() as folder:
+        engine = tts_engine.TTSEngine(settings.tts_backend, settings.tts_voice, Path(folder))
+        made = {lang: engine.speak(text, lang) for lang, text in VOICE_SAMPLES.items()}
+    if all(made.values()):
+        return [("voice", "PASS", "kid voices ready: " + ", ".join(engine.edge_voice(lang) for lang in made))]
+    if engine.offline:
+        return [
+            (
+                "voice",
+                "WARN",
+                "can't reach Microsoft's voice service, so answers will be shown but not spoken (there is no offline "
+                "voice): check the internet connection",
+            )
+        ]
+    failed = ", ".join(engine.edge_voice(lang) for lang, name in made.items() if not name)
+    return [
+        (
+            "voice",
+            "WARN",
+            f"the voice service answers, but {failed} failed: check SAR_TTS_VOICE (answers in that language will be "
+            "shown but not spoken)",
+        )
+    ]
 
 
 def tesseract_install_hint(system: str) -> str:
@@ -415,7 +437,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--camera", type=int, default=None, help="check only this camera index")
     parser.add_argument("--skip-mic", action="store_true")
     parser.add_argument("--skip-camera", action="store_true")
-    parser.add_argument("--no-sound", action="store_true", help="skip audible TTS sample")
+    parser.add_argument("--no-voice", action="store_true", help="skip the kid-voice check (it needs the internet)")
     parser.add_argument("--save-frame", metavar="PATH", help="save a camera snapshot (jpg)")
     args = parser.parse_args(argv)
     applied = load_env_file()
@@ -435,7 +457,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if not args.skip_mic:
         results += check_mic()
-    results += check_tts(settings, args.no_sound)
+    results += check_tts(settings, args.no_voice)
     results += check_tesseract()
     results += check_ollama(settings)
     results += check_displays(settings.projector_size)

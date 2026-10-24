@@ -28,12 +28,10 @@ Budget about 45 minutes, and do part A the day before.
    The Board tab shows "Camera not found", which is expected without the webcam.
 5. **First-run download.** On a computer with a microphone, the speech model (~140 MB) downloads in the
    background at the first start. Let it finish while you still have internet.
-6. **Spanish voice offline (optional).** The Mexican Spanish voice is online (Edge). Without internet the
-   assistant falls back to a voice installed on the laptop, so install a Spanish (Mexico) one: on macOS,
-   System Settings → Accessibility → Spoken Content → System voice → Manage Voices (e.g. *Paulina*); on
-   Windows, Settings → Time & language → Language & region → add *Español (México)* with text-to-speech.
-   `SAR_TTS_BACKEND=say` (Mac) or `pyttsx3` (Windows) in `sar.env` skips the online voice altogether.
-   Test it: with the Wi-Fi off, ask one question in Spanish and listen.
+6. **The voice needs internet.** Both kid voices (Ana in English, Dalia in Spanish) come from Microsoft's
+   online voice service. Without internet the answers are shown on the projector and the dashboard but not
+   spoken: there is no offline voice, because the laptop's own voices are adult voices. The hardware check's
+   `voice` row (step 10) makes one sample in each voice.
 
 ## B. Set up the room
 
@@ -186,4 +184,4 @@ test cases). File anything that went wrong as a new issue with the photos.
 | Washed-out spot on the board in the camera view | Glare: see step 13. |
 | No sound | Click once on the projector page and check the laptop's output device. |
 | Pip says "I can't hear the microphone", or the Board checklist says "The microphone sends only silence" | The microphone records only zeros: allow it for the app that started the assistant (step 10), then restart the assistant. |
-| Spanish sounds like an English voice (offline) | Install a Spanish (Mexico) voice (step 6). |
+| Answers are shown but not spoken (the Board checklist says the kid voices need the internet) | Connect to the internet (step 6); the voice comes back by itself within a minute. The hardware check's `voice` row (step 10) tells a dead connection from a wrong `SAR_TTS_VOICE`. |

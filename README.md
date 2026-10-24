@@ -217,12 +217,11 @@ like worksheet problems.
   assistant may not use it), "I didn't catch that…" when it heard sound but no words. A microphone that sends only
   silence also shows on the dashboard's Board checklist (checked at startup and on every recording) and fails
   `scripts/hardware_check.py`; the server log says what to change.
-- **Voice out.** The assistant talks like a kid. The online Edge voices are `en-US-AnaNeural` (a child voice) and
-  `es-MX-DaliaNeural` (Mexican Spanish), pitched up (+15 Hz) and a little faster (+5 %) because Edge has no Mexican
-  child voice; any other voice set with `SAR_TTS_VOICE` plays as it is. Offline voices are adult voices. Offline (`SAR_TTS_BACKEND=say` or `pyttsx3`, or when Edge can't reach the internet), the assistant picks an
-  installed Spanish voice, Mexican first. If Spanish comes out with an English voice, install one: on macOS,
-  System Settings → Accessibility → Spoken Content → System voice → Manage Voices (e.g. *Paulina*); on Windows,
-  Settings → Time & language → Language & region → add *Español (México)* with text-to-speech.
+- **Voice out.** The assistant talks like a kid, and only like a kid: `en-US-AnaNeural` (Edge's child voice) in
+  English and `es-MX-DaliaNeural` in Mexican Spanish, pitched up (+30 Hz) and a little faster (+5 %) because Edge has
+  no Mexican child voice. Both come from Microsoft's online voice service. Without internet the answers are shown but
+  not spoken: the computer's own voices are adult voices, so the assistant never uses them. Any other Edge voice set
+  with `SAR_TTS_VOICE` plays as it is.
 - **Everything else.** Spanish requests ("Ayúdame con el siguiente paso", "Dame un problema parecido", "Hazme
   un quiz", "Quiero aprender a resolver fracciones", "Termina el quiz") are understood by
   `biobench_sar/lang.py`. Math is spoken in Spanish words, and quiz answers in Spanish words are graded.
@@ -237,7 +236,7 @@ once (the projector, the voice and every open dashboard) and are kept in `SAR_AC
   bubble stays until the next answer instead of fading, and clears as soon as a new question starts.
 - **Text size on the board**: Normal, Large (1.25×) or Extra large (1.5×) for the bubble, the quiz card, the
   heard words and the status.
-- **Voice speed**: Slower (0.75×), Normal or Faster (1.25×), for every voice (Edge, `say` and pyttsx3).
+- **Voice speed**: Slower (0.75×), Normal or Faster (1.25×), for both kid voices.
 - **Calm mode** (autism, ADHD, motion or light sensitivity): no bouncing, shaking or pulsing, and softer glows.
   Pip still glides to the ink it talks about.
 - **High contrast** (low vision, colour-blind students): thicker outlines and pure white text. A wrong answer's
@@ -319,7 +318,7 @@ wins over the file. Desktop builds also look next to the app and in the data fol
 | `SAR_WHISPER_MODEL` | `base` | Local Whisper model size |
 | `SAR_RECORD_SECONDS` | `5` | How long push-to-talk records |
 | `SAR_SILENCE_RMS` | `0.01` | Wake-word chunks quieter than this skip Whisper. Push-to-talk only skips digital silence |
-| `SAR_TTS_BACKEND` | `edge` | `edge` (online), `say` (macOS), `pyttsx3` (offline) or `none`. Falls back edge → say → pyttsx3 |
+| `SAR_TTS_BACKEND` | `edge` | `edge` (the kid voices, online) or `none` (answers are only shown). There is no offline voice: without internet the answers are shown but not spoken. The removed `say` and `pyttsx3` count as `edge` |
 | `SAR_TTS_VOICE` | `en-US-AnaNeural` | Edge voice for its own language. Spanish uses `es-MX-DaliaNeural` (pitched up to sound like a kid) unless this names a Spanish voice |
 | **Server and phones** | | |
 | `SAR_HOST` | `127.0.0.1` (`0.0.0.0` with `SAR_LAN=1`) | Bind address. Anything other than `127.0.0.1`, `localhost` or `::1` turns the phone PIN gate on |

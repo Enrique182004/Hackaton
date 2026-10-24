@@ -30,12 +30,10 @@ Calcula unos 45 minutos y haz la parte A un día antes.
    web.
 5. **Descarga del primer arranque.** En una computadora con micrófono, el modelo de voz (~140 MB) se
    descarga en segundo plano la primera vez que arranca. Déjalo terminar mientras tengas internet.
-6. **Voz en español sin internet (opcional).** La voz mexicana es en línea (Edge). Sin internet, el
-   asistente usa una voz instalada en la computadora, así que instala una de español (México): en macOS,
-   Ajustes del Sistema → Accesibilidad → Contenido leído → Voz del sistema → Administrar voces (por ejemplo,
-   *Paulina*); en Windows, Configuración → Hora e idioma → Idioma y región → agrega *Español (México)* con
-   texto a voz. Con `SAR_TTS_BACKEND=say` (Mac) o `pyttsx3` (Windows) en `sar.env` ni siquiera intenta la voz
-   en línea. Pruébala: apaga el Wi-Fi, haz una pregunta en español y escucha.
+6. **La voz necesita internet.** Las dos voces infantiles (Ana en inglés, Dalia en español) vienen del
+   servicio de voz en línea de Microsoft. Sin internet, las respuestas se ven en el proyector y en el panel,
+   pero no se oyen: no hay voz sin internet, porque las voces de la computadora son de adulto. La fila `voice`
+   de la revisión del equipo (paso 10) hace una muestra con cada voz.
 
 ## B. Preparar el salón
 
@@ -200,4 +198,4 @@ repórtalo como un issue nuevo con las fotos.
 | Pip dice «No puedo oír el micrófono», o la lista del Pizarrón dice «El micrófono solo manda silencio» | El micrófono solo graba ceros: permítelo para la app que inició el asistente (paso 10) y reinicia el asistente. |
 | Una mancha deslavada en el pizarrón en la imagen de la cámara | Es un reflejo: ve el paso 13. |
 | No hay sonido | Haz clic una vez en la página del proyector y revisa la salida de audio de la laptop. |
-| El español suena con voz en inglés (sin internet) | Instala una voz de español (México) (paso 6). |
+| Las respuestas se ven pero no se oyen (la lista del Pizarrón dice que las voces infantiles necesitan internet) | Conéctate a internet (paso 6); la voz vuelve sola en menos de un minuto. La fila `voice` de la revisión del equipo (paso 10) distingue una conexión caída de un `SAR_TTS_VOICE` equivocado. |

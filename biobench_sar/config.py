@@ -91,6 +91,12 @@ def _env_profile() -> str:
     return value if value in PROFILES else PROFILES[0]
 
 
+def _env_tts_backend() -> str:
+    value = os.environ.get("SAR_TTS_BACKEND", "edge").strip().lower()
+    # say and pyttsx3 (the computer's adult voices) were removed: an old sar.env that names them gets the kid voices.
+    return "edge" if value in ("say", "pyttsx3") else value
+
+
 def normalize_block_size(value: int, default: int = 31) -> int:
     """Adaptive-threshold block size must be odd and >= 3."""
     if value < 1:
@@ -144,8 +150,8 @@ class Settings:
     record_seconds: float = field(default_factory=lambda: _env_pos_float("SAR_RECORD_SECONDS", 5.0))
     # Wake-word chunks quieter than this RMS skip Whisper; push-to-talk only skips digital silence.
     silence_rms: float = field(default_factory=lambda: _env_nonneg_float("SAR_SILENCE_RMS", 0.01))
-    # edge | pyttsx3 | say | none
-    tts_backend: str = field(default_factory=lambda: os.environ.get("SAR_TTS_BACKEND", "edge"))
+    # edge (the kid voices) | none (answers are shown only)
+    tts_backend: str = field(default_factory=_env_tts_backend)
     tts_voice: str = field(default_factory=lambda: os.environ.get("SAR_TTS_VOICE", "en-US-AnaNeural"))
     # auto (reply in the language the student uses) | en | es
     language: str = field(default_factory=lambda: normalize_language(os.environ.get("SAR_LANGUAGE")))

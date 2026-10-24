@@ -92,7 +92,7 @@ function initSocket() {
     logEvent("avatar_update", d);
   });
   socket.on("interaction", (d) => addInteraction(d));
-  socket.on("speak", (d) => logEvent("speak", d.url || "(local voice)"));
+  socket.on("speak", (d) => logEvent("speak", d.url || t("log.speak.silent")));
   socket.on("documents_changed", (d) => renderFiles(d));
   socket.on("tutor", (d) => {
     renderTutor(d);

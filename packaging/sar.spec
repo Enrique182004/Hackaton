@@ -22,7 +22,6 @@ APP_NAME = "SAR Whiteboard Assistant"
 BUNDLE_ID = "org.codecore.sarwhiteboard"
 VERSION = re.search(r'__version__\s*=\s*"([^"]+)"', (PACKAGE / "__init__.py").read_text(encoding="utf-8")).group(1)
 IS_MAC = sys.platform == "darwin"
-IS_WIN = sys.platform == "win32"
 sys.path.insert(0, str(ROOT))  # collect_submodules("biobench_sar") imports the package from the checkout
 
 
@@ -105,19 +104,11 @@ hiddenimports = [
     "docx",
     "pptx",
     "pytesseract",
-    "pyttsx3.drivers",
-    "pyttsx3.drivers.dummy",
     # Quiz grading (biobench_sar/grading.py): sympy's parser runs `from sympy import *` from a string at run time.
     "sympy",
     "sympy.parsing.sympy_parser",
     "mpmath",
 ]
-if IS_WIN:
-    hiddenimports += ["pyttsx3.drivers.sapi5", "comtypes.client"]
-elif IS_MAC:
-    hiddenimports += ["pyttsx3.drivers.nsss", "pyttsx3.drivers.avspeech"]
-else:
-    hiddenimports += ["pyttsx3.drivers.espeak", "pyttsx3.drivers._espeak"]
 
 
 # sentence-transformers -> transformers picks the model class from config.json (BERT for MiniLM) by name.
