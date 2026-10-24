@@ -969,6 +969,22 @@ def test_quiz_check_of_a_check_line_with_a_tick_after_it_is_never_wrong(mark: st
     assert fraction.verdict == "correct", "the arithmetic problem worked out, ticked"  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize(
+    ("read", "verdict"),
+    [
+        ("1/2 + 1/3 ; = 3/6 + 2/6 ; = 5/6", "correct"),
+        ("1/2 + 1/3\n= 3/6 + 2/6\n= 5/6", "correct"),
+        ("= 5/6", "correct"),
+    ],
+)
+def test_quiz_check_of_a_vertical_chain_grades_its_bottom_line(read: str, verdict: str) -> None:
+    for language in ("en", "es"):
+        action = vc.check_quiz_answer(PRAISE, _arithmetic_check("1/2 + 1/3"), read, language=language)
+        assert action.verdict == verdict, (read, language)  # type: ignore[attr-defined]
+    wrong = vc.check_quiz_answer(PRAISE, _arithmetic_check("1/2 + 1/3"), "1/2 + 1/3 ; = 2/5")
+    assert wrong.verdict == "wrong"  # type: ignore[attr-defined]
+
+
 def test_a_check_under_a_worded_problem_asks_again_for_the_answer_line() -> None:
     # Live, problem "3x + 5 = 20. Find x.": the first read was the check line in 2/2 runs, graded as a miss.
     task = {**QUIZ_CHECK, "problem": "3x + 5 = 20. Find x."}

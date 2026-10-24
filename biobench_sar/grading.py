@@ -621,6 +621,8 @@ _ASIDE = re.compile(r"[(\[]\s*(?!sqrt\b)(?=[a-z]{2,})")
 # "x = 5 x = -3", "x = 7 y = 3": answers next to each other with only a space between them; "3 = x 7 - 2(3) = 1": an
 # answer and its check.
 _GAP = re.compile(r"(=[^=;,\n]*?[\d)])\s+(?=[a-z]\s*=)|(=\s*[a-z])\s+(?=[\d√][^=;,\n]*=)")
+# A line that starts with "=" goes on from the one above it: "1/2 + 1/3" over "= 3/6 + 2/6" over "= 5/6".
+_GOES_ON = re.compile(r"\s*[;\n]\s*(?==)")
 # Subscripts of a root: "x₁ = 3, x₂ = 4" (and "x_1") are two values of x.
 _SUBSCRIPT = re.compile(r"(?<=[A-Za-z])(?:[₀-₉]+|_\d+)")
 
@@ -664,9 +666,11 @@ def _without_asides(text: str) -> str:
 
 def _answer_text(text: Any) -> str:
     """`text` as plain math with what is no answer cut off: checks and reasons ("x = 5 (check: ...)", "because ...",
-    ": subtract 9 ..."), and a clause break between answers on their own lines or side by side ("x = 5 x = -3")."""
+    ": subtract 9 ..."), and a clause break between answers on their own lines or side by side ("x = 5 x = -3"). A
+    line that starts with "=" goes on from the line above it."""
     text = _SUBSCRIPT.sub("", text) if isinstance(text, str) else text
-    math_text = _EXPLANATION.sub(" ; ", _without_asides(to_math(text)))
+    chained = re.sub(r"^\s*=\s*", "", _GOES_ON.sub(" ", to_math(text)))  # "= 5/6" alone: the bottom of a chain
+    math_text = _EXPLANATION.sub(" ; ", _without_asides(chained))
     return _GAP.sub(lambda found: f"{found.group(1) or found.group(2)} ; ", math_text)
 
 

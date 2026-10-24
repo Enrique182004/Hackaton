@@ -633,6 +633,24 @@ def test_a_check_line_with_a_tick_or_a_word_after_it_is_still_a_check(mark: str)
     assert _plain(parse_answers("1/2 + 1/3 = 2/5" + mark, "1/2 + 1/3")) == {("", Fraction(2, 5))}
 
 
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("1/2 + 1/3 ; = 3/6 + 2/6 ; = 5/6", Fraction(5, 6)),
+        ("1/2 + 1/3\n= 3/6 + 2/6\n= 5/6", Fraction(5, 6)),
+        ("1/2 + 1/3\n= 2/5", Fraction(2, 5)),
+        ("= 5/6", Fraction(5, 6)),
+        ("12 ÷ 4\n= 3", Fraction(3)),
+    ],
+)
+def test_a_vertical_chain_is_read_down_to_its_last_line(text: str, value: Fraction) -> None:
+    problem = "12 ÷ 4" if "÷" in text else "1/2 + 1/3"
+    assert _plain(parse_answers(text, problem)) == {("", value)}
+    assert not grading.unfinished(text)
+    assert grading.unfinished("1/2 + 1/3\n= 3/6 + 2/6"), "not at its bottom yet"
+    assert parse_answers("x = 5\n3(5) + 5\n= 15 + 5\n= 20", "3x + 5 = 20") == parse_answers("x = 5"), "a check"
+
+
 def test_same_problem() -> None:
     assert grading.same_problem("1/2+1/3", "1/2 + 1/3")
     assert grading.same_problem("6/8", "Simplify 6/8") and grading.same_problem("12 ÷ 4", "12 ÷ 4 = ?")
