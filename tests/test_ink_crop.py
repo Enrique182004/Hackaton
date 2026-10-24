@@ -203,7 +203,7 @@ def test_shrinking_is_antialiased() -> None:
     stripes[:, ::2] = 255
     crop = crop_ink_view(stripes, Calibration.identity((3840, 2160), PROJ), [_region(0, 0, *PROJ)])
     assert crop is not None and crop.size == (1600, 900)
-    # A single warpPerspective treats INTER_AREA as point sampling, which turns 1 px stripes into moire.
+    # A single warpPerspective treats INTER_AREA as bilinear, which turns 1 px stripes into moire.
     m = np.diag([crop.scale / 2, crop.scale / 2, 1.0])
     aliased = cv2.warpPerspective(stripes, m, crop.size, flags=cv2.INTER_AREA)
     assert _decode(crop.jpeg).std() < 0.5 * aliased.std()  # measured: ~25 vs ~76

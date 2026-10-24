@@ -89,8 +89,9 @@ def _render(frame: np.ndarray, matrix: np.ndarray, roi: Roi, scale: float, densi
     size = (max(1, round(w * scale)), max(1, round(h * scale)))
     if scale >= density:
         return cv2.warpPerspective(frame, _crop_matrix(matrix, x0, y0, scale), size, flags=cv2.INTER_CUBIC)
-    # warpPerspective silently treats INTER_AREA as INTER_LINEAR (point sampling, aliases thin strokes),
-    # so shrink by warping once near native density and box-filtering with resize, which honours INTER_AREA.
+    # warpPerspective silently treats INTER_AREA as INTER_LINEAR (no box filter, so thin strokes alias).
+    # Warp once at up to 2x the target (native density bounds detail, 2x bounds cost on 4K cameras),
+    # then box-filter down with resize, which does honour INTER_AREA.
     inner = min(density, 2.0 * scale)
     inner_size = (max(1, round(w * inner)), max(1, round(h * inner)))
     big = cv2.warpPerspective(frame, _crop_matrix(matrix, x0, y0, inner), inner_size, flags=cv2.INTER_LINEAR)
