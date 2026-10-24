@@ -140,22 +140,74 @@ def encode_jpeg(frame: np.ndarray, quality: int = 80) -> bytes:
     return buf.tobytes()
 
 
+_MIN_BOX_AREA = 600
+_BOX_PAD = 3
+_ERASE_PAD = 6
+_RING = 15
+
+
+def _box_rects(mask: np.ndarray, min_area: int) -> list[tuple[int, int, int, int]]:
+    """Closed, roughly rectangular outlines: their enclosed hole is a rect-like child contour."""
+    sealed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    contours, hierarchy = cv2.findContours(sealed, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    if hierarchy is None:
+        return []
+    rects: list[tuple[int, int, int, int]] = []
+    for contour, node in zip(contours, hierarchy[0]):
+        if node[3] < 0:  # outer contour, not a hole
+            continue
+        area = cv2.contourArea(contour)
+        x, y, w, h = cv2.boundingRect(contour)
+        if area < max(min_area, _MIN_BOX_AREA) or area < 0.75 * w * h:
+            continue
+        if len(cv2.approxPolyDP(contour, 0.04 * cv2.arcLength(contour, True), True)) > 8:
+            continue
+        rects.append((x, y, w, h))
+    # An enclosing frame around other boxes is not a step; keep the innermost boxes.
+    def contains(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+        return a != b and a[0] <= b[0] and a[1] <= b[1] and a[0] + a[2] >= b[0] + b[2] and a[1] + a[3] >= b[1] + b[3]
+
+    return [r for r in rects if not any(contains(r, o) for o in rects)]
+
+
 def find_ink_regions(frame: np.ndarray, min_area: int = 150, max_regions: int = 10) -> list[InkRegion]:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
     # Adaptive threshold tolerates uneven projector/room lighting on the board.
     mask = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 15)
+    height, width = mask.shape[:2]
+
+    found: list[tuple[int, int, int, int, int]] = []  # (area, x, y, w, h)
+    rest = mask
+    ring: np.ndarray | None = None
+    rects = _box_rects(mask, min_area)
+    if rects:
+        rest = mask.copy()
+        zone = np.zeros_like(mask)
+        for x, y, w, h in rects:
+            x0, y0 = max(x - _BOX_PAD, 0), max(y - _BOX_PAD, 0)
+            x1, y1 = min(x + w + _BOX_PAD, width), min(y + h + _BOX_PAD, height)
+            found.append(((x1 - x0) * (y1 - y0), x0, y0, x1 - x0, y1 - y0))
+            cv2.rectangle(zone, (x0 - _ERASE_PAD, y0 - _ERASE_PAD), (x1 + _ERASE_PAD, y1 + _ERASE_PAD), 255, -1)
+        rest[zone > 0] = 0
+        ring = cv2.dilate(zone, cv2.getStructuringElement(cv2.MORPH_RECT, (2 * _RING + 1, 2 * _RING + 1))) > 0
+        ring &= zone == 0
+
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    mask = cv2.dilate(mask, kernel, iterations=1)
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    boxes = []
+    rest = cv2.morphologyEx(rest, cv2.MORPH_CLOSE, kernel)
+    rest = cv2.dilate(rest, kernel, iterations=1)
+    if ring is not None:
+        # Connector strokes that touched a box leave stubs; drop any ink blob adjacent to a box.
+        _, labels = cv2.connectedComponents(rest, connectivity=8)
+        touching = np.unique(labels[ring & (rest > 0)])
+        rest[np.isin(labels, touching[touching > 0])] = 0
+    contours, _ = cv2.findContours(rest, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
         if cv2.contourArea(contour) >= min_area or w * h >= min_area:
-            boxes.append((w * h, x, y, w, h))
-    boxes.sort(reverse=True)
+            found.append((w * h, x, y, w, h))
+    found.sort(reverse=True)
     return [
         InkRegion(x=int(x), y=int(y), w=int(w), h=int(h), cx=int(x + w // 2), cy=int(y + h // 2))
-        for _, x, y, w, h in boxes[:max_regions]
+        for _, x, y, w, h in found[:max_regions]
     ]
