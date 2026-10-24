@@ -527,7 +527,9 @@ def test_socket_connect_receives_current_status(built: Any, fakes: Any) -> None:
     got = sio.get_received()
     assert [m["name"] for m in got] == ["status", "tutor", "language"]
     assert got[0]["args"][0] == {"state": "idle"}
-    assert got[1]["args"][0] == {"mode": "help", "learn_topic": None, "quiz": None}, "a reloaded projector catches up"
+    assert got[1]["args"][0] == {"mode": "help", "learn_topic": None, "quiz": None, "problem": None}, (
+        "a reloaded projector catches up"
+    )
     assert got[2]["args"][0] == {"setting": "auto", "current": "en"}
 
 
@@ -868,7 +870,12 @@ def _tutor_pushes(sio: Any, wait: bool = True) -> list[dict[str, Any]]:
 
 
 def test_tutor_state_starts_in_help(built: Any) -> None:
-    assert built[0].test_client().get(TUTOR).get_json() == {"mode": "help", "learn_topic": None, "quiz": None}
+    assert built[0].test_client().get(TUTOR).get_json() == {
+        "mode": "help",
+        "learn_topic": None,
+        "quiz": None,
+        "problem": None,
+    }
 
 
 @pytest.mark.parametrize("mode", ["help", "practice", "quiz"])
@@ -878,7 +885,7 @@ def test_put_mode(built: Any, mode: str) -> None:
     sio.get_received()
     client = app.test_client()
     r = client.put(f"{TUTOR}/mode", json={"mode": mode})
-    assert r.status_code == 200 and r.get_json() == {"mode": mode, "learn_topic": None, "quiz": None}
+    assert r.status_code == 200 and r.get_json() == {"mode": mode, "learn_topic": None, "quiz": None, "problem": None}
     assert client.get(TUTOR).get_json()["mode"] == mode
     assert client.get("/api/status").get_json()["mode"] == mode
     assert _tutor_pushes(sio, wait=mode != "help") == ([] if mode == "help" else [r.get_json()])
@@ -904,7 +911,12 @@ def test_quiz_start_without_problems_invents_them(built: Any) -> None:
 
     body = built[0].test_client().post(f"{TUTOR}/quiz/start").get_json()
     problem = body["quiz"].pop("problem")
-    assert body == {"mode": "quiz", "learn_topic": None, "quiz": {"active": True, "number": 1, "total": 10, "score": 0}}
+    assert body == {
+        "mode": "quiz",
+        "learn_topic": None,
+        "quiz": {"active": True, "number": 1, "total": 10, "score": 0},
+        "problem": None,
+    }
     assert solve_problem(problem), "the projector card shows an invented problem the code can grade"
 
 
@@ -920,7 +932,7 @@ def test_quiz_start_uses_ticked_uploads_and_stop_ends_it(built: Any, ingest_text
     assert started["quiz"] == {"active": True, "number": 1, "total": 2, "score": 0, "problem": "2 + 2 = ?"}
     assert _tutor_pushes(sio) == [started]
     stopped = client.post(f"{TUTOR}/quiz/stop").get_json()
-    assert stopped == {"mode": "help", "learn_topic": None, "quiz": None}
+    assert stopped == {"mode": "help", "learn_topic": None, "quiz": None, "problem": None}
     assert _tutor_pushes(sio) == [stopped]
 
 

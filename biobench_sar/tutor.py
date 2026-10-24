@@ -20,12 +20,24 @@ DEFAULT_QUIZ_LENGTH = 10  # problems in a quiz without worksheet problems (they 
 MAX_TURNS = 3
 MAX_TURN_CHARS = 400
 MAX_TOPIC_WORDS = 8
+MAX_PROBLEM_CHARS = 80  # the projector card's problem, read from across the room
+PROBLEM_SOURCES = ("dictated", "board")  # read out by the assistant / copied off the student's writing
 
 
 def _norm(text: str) -> str:
     text = (text or "").lower().replace("’", "'").replace("‘", "'")
     text = re.sub(r"[^a-z0-9'\s]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _card_text(text: str | None) -> str | None:
+    """`text` on one line, cut at a word to MAX_PROBLEM_CHARS (ending in …); None when nothing is left."""
+    flat = " ".join(str(text or "").split())
+    if len(flat) <= MAX_PROBLEM_CHARS:
+        return flat or None
+    cut = flat[: MAX_PROBLEM_CHARS - 1]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > MAX_PROBLEM_CHARS // 2 else cut).rstrip() + "…"
 
 
 def _any(patterns: tuple[re.Pattern[str], ...], text: str) -> bool:
@@ -358,6 +370,7 @@ class TutorSession:
         self._learn_topic: str | None = None
         self._offer_pending = False
         self._turns: deque[dict[str, str]] = deque(maxlen=MAX_TURNS)
+        self._problem: dict[str, str] | None = None  # the projector card's, outside a quiz
 
     @property
     def mode(self) -> str:
@@ -372,6 +385,8 @@ class TutorSession:
             if mode != "quiz":
                 self._quiz = None
                 self._dictated = False
+            else:
+                self._problem = None
             if mode != "help":
                 self._learn_topic = None
             self._offer_pending = False
@@ -490,6 +505,7 @@ class TutorSession:
         with self._lock:
             self._learn_topic = topic
             self._offer_pending = True
+            self._problem = None  # a new topic starts with an empty card
 
     def resolve_offer(self) -> None:
         """The student answered the offer: the lesson goes on with the same topic."""
@@ -502,6 +518,26 @@ class TutorSession:
             if self._offer_pending:
                 self._offer_pending = False
                 self._learn_topic = None
+
+    # ---- the problem on the projector's card ---------------------------------
+    @property
+    def problem(self) -> dict[str, str] | None:
+        with self._lock:
+            return dict(self._problem) if self._problem else None
+
+    def show_problem(self, text: str | None, source: str) -> None:
+        """Show `text` on the card; empty text keeps what it shows (a model that left the key out)."""
+        if source not in PROBLEM_SOURCES:
+            raise ValueError(f"source must be one of {', '.join(PROBLEM_SOURCES)}")
+        clean = _card_text(text)
+        if clean is None:
+            return
+        with self._lock:
+            self._problem = {"text": clean, "source": source}
+
+    def clear_problem(self) -> None:
+        with self._lock:
+            self._problem = None
 
     # ---- conversation memory -------------------------------------------------
     def turns(self) -> list[dict[str, str]]:
@@ -525,4 +561,5 @@ class TutorSession:
                     "score": self._score,
                     "problem": current.problem if current else None,
                 }
-            return {"mode": self._mode, "learn_topic": self._learn_topic, "quiz": quiz}
+            problem = None if self._quiz == "active" else self.problem
+            return {"mode": self._mode, "learn_topic": self._learn_topic, "quiz": quiz, "problem": problem}

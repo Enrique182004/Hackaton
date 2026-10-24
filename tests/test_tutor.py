@@ -8,6 +8,7 @@ import pytest
 from biobench_sar.rag.quiz_bank import INVENTED_SOURCE, QuizProblem, solve_problem
 from biobench_sar.tutor import (
     DEFAULT_QUIZ_LENGTH,
+    MAX_PROBLEM_CHARS,
     MAX_TURNS,
     MODES,
     TutorSession,
@@ -214,7 +215,7 @@ def test_new_session() -> None:
     t = TutorSession()
     assert t.mode == "help" and t.learn_topic is None and not t.offer_pending and t.turns() == []
     assert t.current() is None and not t.dictated and not t.quiz_active
-    assert t.to_dict() == {"mode": "help", "learn_topic": None, "quiz": None}
+    assert t.to_dict() == {"mode": "help", "learn_topic": None, "quiz": None, "problem": None}
 
 
 def test_set_mode_rejects_unknown() -> None:
@@ -330,7 +331,7 @@ def test_record_and_dictate_without_a_quiz_are_ignored() -> None:
     t = TutorSession()
     t.record(True)
     t.mark_dictated()
-    assert t.to_dict() == {"mode": "help", "learn_topic": None, "quiz": None}
+    assert t.to_dict() == {"mode": "help", "learn_topic": None, "quiz": None, "problem": None}
 
 
 def test_start_quiz_copies_the_problem_list() -> None:
@@ -528,3 +529,51 @@ def test_is_repeat_request_any(text: str, repeat: bool) -> None:
     from biobench_sar.tutor import is_repeat_request_any
 
     assert is_repeat_request_any(text) is repeat
+
+
+# ---- session: the problem on the projector's card -------------------------------------------------------------
+
+
+def test_show_problem_puts_it_in_the_dict() -> None:
+    t = TutorSession()
+    t.show_problem("  4x +  7 = 19 ", "dictated")
+    assert t.problem == {"text": "4x + 7 = 19", "source": "dictated"}
+    assert t.to_dict()["problem"] == {"text": "4x + 7 = 19", "source": "dictated"}
+
+
+@pytest.mark.parametrize("text", ["", "   ", None])
+def test_show_problem_ignores_empty_text(text: str | None) -> None:
+    t = TutorSession()
+    t.show_problem("2x + 3 = 11", "board")
+    t.show_problem(text, "dictated")
+    assert t.problem == {"text": "2x + 3 = 11", "source": "board"}
+
+
+def test_show_problem_caps_long_text_at_a_word() -> None:
+    t = TutorSession()
+    t.show_problem("word " * 40, "board")
+    text = t.problem["text"]
+    assert len(text) <= MAX_PROBLEM_CHARS and text.endswith("…") and not text.endswith(" …")
+
+
+def test_show_problem_rejects_unknown_source() -> None:
+    with pytest.raises(ValueError):
+        TutorSession().show_problem("x = 1", "guess")
+
+
+def test_new_topic_and_quiz_clear_the_problem() -> None:
+    t = TutorSession()
+    t.show_problem("x + 3 = 8", "dictated")
+    t.start_learning("fractions")
+    assert t.problem is None
+    t.show_problem("x + 3 = 8", "dictated")
+    t.set_mode("quiz")
+    assert t.problem is None
+
+
+def test_running_quiz_owns_the_card() -> None:
+    t = TutorSession()
+    t.set_mode("quiz")
+    t.start_quiz([], length=3)
+    t.show_problem("x + 3 = 8", "board")
+    assert t.to_dict()["problem"] is None

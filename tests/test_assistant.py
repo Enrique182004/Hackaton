@@ -679,7 +679,7 @@ def test_learn_request_on_an_empty_board_offers_an_exercise(h: Harness) -> None:
     assert kwargs["task"] == {"kind": "learn", "topic": "solving fractions", "stage": "offer"}
     assert h.assistant.tutor.offer_pending
     assert h.payloads("avatar_update")[-1]["animation_state"] == "pointing", "lessons are never downgraded"
-    assert _tutor_events(h)[-1] == {"mode": "help", "learn_topic": "solving fractions", "quiz": None}
+    assert _tutor_events(h)[-1] == {"mode": "help", "learn_topic": "solving fractions", "quiz": None, "problem": None}
     assert h.assistant.history()[0]["task_kind"] == "learn"
 
 
@@ -793,6 +793,7 @@ def test_quiz_dictates_then_checks_problems_from_ticked_files(h: Harness) -> Non
         "mode": "help",
         "learn_topic": None,
         "quiz": {"active": False, "number": 2, "total": 2, "score": 1, "problem": None},
+        "problem": None,
     }
     assert _ask(h, "thanks")["task"] is None, "back to help after the quiz"
 
@@ -930,7 +931,7 @@ def test_quiz_check_without_ink_says_so_instead_of_praising(h: Harness) -> None:
 def test_stop_the_quiz(h: Harness) -> None:
     _ask(h, "quiz me")
     assert _ask(h, "stop the quiz")["task"] is None
-    assert h.assistant.tutor.to_dict() == {"mode": "help", "learn_topic": None, "quiz": None}
+    assert h.assistant.tutor.to_dict() == {"mode": "help", "learn_topic": None, "quiz": None, "problem": None}
     assert _tutor_events(h)[-1]["quiz"] is None
 
 
