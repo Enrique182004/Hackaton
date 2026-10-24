@@ -559,7 +559,9 @@ def run_self_test(
     `services=None` builds the real services (camera and microphone are never opened), which is what a
     frozen build needs exercised; tests pass fakes and `bundle=False`.
     """
-    out(f"{APP_NAME} {__version__} self-test ({'frozen build' if is_frozen() else 'source checkout'})")
+    kind = "frozen build" if is_frozen() else "source checkout"
+    python = f"Python {sys.version.split()[0]}, UTF-8 mode {'on' if sys.flags.utf8_mode else 'off'}"
+    out(f"{APP_NAME} {__version__} self-test ({kind}, {python}, {sys.platform})")
     outcome: list[int] = []
     worker = threading.Thread(
         target=lambda: outcome.append(_self_test(services, bundle, get, out)), daemon=True, name="self-test"
