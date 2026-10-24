@@ -91,8 +91,9 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0000
   font-size: 22px; color: var(--white); text-shadow: 0 0 8px var(--cyan); z-index: 20; text-align: center; }
 #transcript::before { content: "\201C"; } #transcript::after { content: "\201D"; }
 
-/* Current quiz problem, written the normal way (3x + 5 = 20). It sits inside the camera's view for the whole
-   quiz, so it is small, thin and has no glow: bright projected text shows up as ink in the camera picture.
+/* The problem being worked on (the quiz's, one the assistant dictated, or the student's read off the board), written
+   the normal way (3x + 5 = 20). It sits inside the camera's view most of the session, so it is small, thin and has
+   no glow: bright projected text shows up as ink in the camera picture.
    Below the avatar, so the avatar stays visible when it points at work in this corner. */
 #problem-card { position: fixed; left: 16px; top: 14px; max-width: 26vw; padding: 0.15em 0.5em; z-index: 5;
   color: rgba(255, 255, 255, 0.75); background: transparent; border: 1px solid rgba(127, 252, 255, 0.5);

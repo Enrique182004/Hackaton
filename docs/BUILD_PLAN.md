@@ -214,7 +214,8 @@ class VLMClient:
 - **Helper keys (math prompts).** Quiz asks for `{"board_answer": str, ...the 4 keys}`, help for
   `{"board_problem": str, ...}`, practice for `{"board_problem": str, "new_problem": str, ...}` and lessons for
   `{"new_problem": str, ...}`. `board_problem` is the problem copied off the board, `new_problem` the one the
-  reply dictates, in symbols (code's own when code replaced the model's words). They are internal: code reads
+  reply dictates, in symbols (code's own when code replaced the model's words; dropped unless the spoken words
+  read that problem out in order). They are internal: code reads
   them (to grade, to know which problem the board holds, and for the projector's problem card via
   `TutorAction.board_problem` / `new_problem`) and they never reach `AvatarAction.to_dict()`, so every socket
   event still carries the 4 spec keys (plus `display_text`, `language` and `highlight`, see E/F).

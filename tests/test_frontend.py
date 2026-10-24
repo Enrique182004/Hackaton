@@ -446,6 +446,13 @@ assert.equal($("problem-card-text").textContent, "4x + 7 = 19");
 sock.fire("tutor", { mode: "help", learn_topic: null, quiz: null, problem: { text: "<b>2x</b> = 4", source: "board" } });
 assert.equal($("problem-card-label").textContent, "Your problem");
 assert.equal($("problem-card-text").textContent, "<b>2x</b> = 4", "set as text, never as HTML");
+// The labels follow the language the assistant answers in, like the quiz label.
+sock.fire("language", { setting: "es", current: "es" });
+assert.equal($("problem-card-label").textContent, "Tu problema");
+sock.fire("tutor", { mode: "practice", learn_topic: null, quiz: null, problem: { text: "4x + 7 = 19", source: "dictated" } });
+assert.equal($("problem-card-label").textContent, "Prueba este");
+sock.fire("language", { setting: "en", current: "en" });
+assert.equal($("problem-card-label").textContent, "Try this");
 sock.fire("tutor", { mode: "help", learn_topic: "fractions", quiz: null, problem: null });
 assert.ok(card.classList.contains("hidden"));
 """,

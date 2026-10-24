@@ -64,7 +64,9 @@ today):
 
 `VLMClient.evaluate` hands over only problems the card may show (`_card_problems`): `board_problem` in help and
 practice, `new_problem` only in practice and a lesson's example, and only when the final `spoken_text` reads it
-out (`reads_problem`); placeholder values (`N/A`, `none`, text with no digit or operator) are dropped.
+out with its numbers, operations, letters and powers in the same order (`_card_reads`; other words may come in
+between, "minus" counts as "negative"); a board value must be an operation on numbers or letters, so
+placeholders (`N/A`, `none`), bare numbers and the prompt's own `left=… top=…` box line are dropped.
 
 ### Projector (`templates/index.html`, `static/js/main.js`, `static/css/style.css`, `static/js/i18n.js`)
 
@@ -77,8 +79,8 @@ out (`reads_problem`); placeholder values (`N/A`, `none`, text with no digit or 
 
 ### Tests (PR 1)
 
-- `test_vlm_client.py`: `new_problem` / help `board_problem` parsed from clean, missing, empty, numeric and
-  truncated replies; retry keeps the fields; prompts for help/practice/learn (en + es) contain the new keys.
+- `test_vlm_client.py`: `new_problem` / help `board_problem` parsed from clean, missing, empty and numeric
+  replies (a reply cut off mid-JSON is rejected as not JSON before the helper keys are read); retry keeps the fields; prompts for help/practice/learn (en + es) contain the new keys.
 - `test_tutor.py`: `show_problem` trims/caps/ignores empty; `clear_problem` on new topic and quiz;
   `to_dict()` shape; quiz active → `problem` is `None`.
 - `test_assistant.py`: practice/learn-example turns show `dictated`; help shows `board`; failed turn keeps the
