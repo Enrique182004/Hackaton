@@ -99,6 +99,25 @@ def create_app(
     if services is None:
         assistant.calibrated = _load_initial_calibration(settings)
 
+    def documents_body() -> dict[str, Any]:
+        documents = svc.store.list_sources()
+        active = assistant.active_sources
+        listed = [{**d, "active": active is None or d["source"] in active} for d in documents]
+        return {
+            "documents": listed,
+            "total_chunks": sum(d["chunks"] for d in documents),
+            "active_count": sum(1 for d in listed if d["active"]),
+            "all_active": active is None,
+        }
+
+    def notify_documents_changed(body: dict[str, Any] | None = None) -> None:
+        """Push the document list to every open dashboard, so the student's file picker stays in sync."""
+        # The change already succeeded; a failed push must not turn it into a 500.
+        try:
+            socketio.emit("documents_changed", body if body is not None else documents_body())
+        except Exception:
+            log.exception("could not push documents_changed")
+
     @app.before_request
     def block_cross_origin() -> Any:
         # Plain form POSTs skip CORS preflight, so any page open in the operator's browser could upload
@@ -135,6 +154,8 @@ def create_app(
 
         results: list[dict[str, Any]] = []
         total = 0
+        stored: list[str] = []
+        emptied: list[str] = []
         for storage in request.files.getlist("files[]") + request.files.getlist("files"):
             name = secure_filename(storage.filename or "")
             if not name:
@@ -151,12 +172,18 @@ def create_app(
                 # Replace, not add: ids are content hashes, so an edited file would keep its old chunks.
                 added, removed = svc.store.replace_source(name, chunks)
                 total += added
-                results.append({"name": name, "chunks": svc.store.source_count(name), "replaced": removed})
+                count = svc.store.source_count(name)
+                (stored if count else emptied).append(name)
+                results.append({"name": name, "chunks": count, "replaced": removed})
             except Exception as exc:  # UnsupportedFileType, parse errors, embed errors
                 log.warning("upload %s failed: %s", name, exc)
                 results.append({"name": name, "chunks": 0, "error": str(exc) or type(exc).__name__})
             finally:
                 path.unlink(missing_ok=True)
+        assistant.selection.activate(stored)
+        for name in emptied:
+            assistant.selection.discard(name)  # nothing left in the store under that name
+        notify_documents_changed()
         return jsonify({"files": results, "total_chunks": total})
 
     @app.get("/api/status")
@@ -165,6 +192,11 @@ def create_app(
             doc_chunks = svc.store.count()
         except Exception:
             doc_chunks = 0
+        try:
+            documents = documents_body()
+            active_documents, total_documents = documents["active_count"], len(documents["documents"])
+        except Exception:
+            active_documents = total_documents = 0
         return jsonify(
             {
                 "fps": round(float(getattr(svc.vision, "fps", 0.0)), 1),
@@ -172,6 +204,8 @@ def create_app(
                 and svc.vision.latest_frame() is not None,
                 "calibrated": assistant.calibrated,
                 "doc_chunks": doc_chunks,
+                "active_documents": active_documents,
+                "total_documents": total_documents,
                 "vlm_backend": settings.vlm_backend,
                 "vlm_model": settings.vlm_model,
                 "audio_available": bool(getattr(svc.audio, "available", False)),
@@ -211,14 +245,34 @@ def create_app(
 
     @app.get("/api/documents")
     def api_documents() -> Any:
-        documents = svc.store.list_sources()
-        return jsonify({"documents": documents, "total_chunks": sum(d["chunks"] for d in documents)})
+        return jsonify(documents_body())
+
+    @app.put("/api/documents/selection")
+    def api_select_documents() -> Any:
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": 'expected {"all": true} or {"sources": [...]}'}), 400
+        if body.get("all") is True:
+            assistant.selection.select_all()
+        elif "sources" in body:
+            requested = body["sources"]
+            if not isinstance(requested, list):
+                return jsonify({"error": "sources must be a list of file names"}), 400
+            known = {d["source"] for d in svc.store.list_sources()}
+            assistant.selection.select(s for s in requested if isinstance(s, str) and s in known)
+        else:
+            return jsonify({"error": 'expected {"all": true} or {"sources": [...]}'}), 400
+        documents = documents_body()
+        notify_documents_changed(documents)
+        return jsonify(documents)
 
     @app.delete("/api/documents/<path:source>")
     def api_delete_document(source: str) -> Any:
         deleted = svc.store.delete_source(source)
+        assistant.selection.discard(source)
         if not deleted:
             return jsonify({"deleted": 0, "error": "no such document"}), 404
+        notify_documents_changed()
         return jsonify({"deleted": deleted})
 
     @app.get("/api/search")

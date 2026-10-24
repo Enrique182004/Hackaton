@@ -6,6 +6,7 @@ import re
 import shutil
 import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -281,3 +282,132 @@ def test_replace_source_rejects_chunks_of_another_source(store: VectorStore) -> 
     with pytest.raises(ValueError, match=r"'a\.md'"):
         store.replace_source("a.md", [Chunk("x", "b.md", {})])
     assert store.count() == 0
+
+
+# ---- per-file filtering (document selection) ----------------------------------------
+
+
+class QuerySpy:
+    """Wraps the chroma collection to record what query() asks it for."""
+
+    def __init__(self, col: Any) -> None:
+        self._col = col
+        self.queries: list[dict[str, Any]] = []
+
+    def query(self, **kwargs: Any) -> Any:
+        self.queries.append(kwargs)
+        return self._col.query(**kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._col, name)
+
+
+@pytest.fixture
+def three_files(store: VectorStore) -> VectorStore:
+    store.add_chunks([Chunk(f"amoeba cyst note {i}", "a.md", {"type": "md"}) for i in range(3)])
+    store.add_chunks([Chunk(f"amoeba agar plate {i}", "b.md", {"type": "md"}) for i in range(2)])
+    store.add_chunks([Chunk("amoeba turbidity runoff", "c.csv", {"type": "csv"})])
+    return store
+
+
+def test_query_sources_none_searches_every_file(three_files: VectorStore) -> None:
+    res = three_files.query("amoeba", k=10, sources=None)
+    assert len(res) == 6 and {r.source for r in res} == {"a.md", "b.md", "c.csv"}
+
+
+def test_query_single_source_only_returns_that_file(three_files: VectorStore) -> None:
+    res = three_files.query("amoeba agar plate", k=4, sources=["b.md"])
+    assert [r.source for r in res] == ["b.md", "b.md"]
+
+
+def test_query_several_sources(three_files: VectorStore) -> None:
+    res = three_files.query("amoeba", k=10, sources=["c.csv", "a.md", "a.md"])
+    assert len(res) == 4 and {r.source for r in res} == {"a.md", "c.csv"}
+    assert all(res[i].score >= res[i + 1].score for i in range(len(res) - 1))
+
+
+def test_query_empty_source_list_returns_nothing_without_querying(tmp_path: Path) -> None:
+    embedded: list[list[str]] = []
+
+    def counting(texts: list[str]) -> list[list[float]]:
+        embedded.append(texts)
+        return fake_embed(texts)
+
+    s = VectorStore(tmp_path / "c", embedder=counting)
+    s.add_chunks([Chunk("amoeba", "a.md", {})])
+    spy = QuerySpy(s._col)
+    s._col = spy
+    embedded.clear()
+    assert s.query("amoeba", k=4, sources=[]) == []
+    assert spy.queries == [] and embedded == [], "no embedding, no chroma query"
+
+
+def test_query_n_results_clamped_to_selected_chunks(three_files: VectorStore) -> None:
+    spy = QuerySpy(three_files._col)
+    three_files._col = spy
+    res = three_files.query("amoeba", k=10, sources=["b.md"])
+    assert len(res) == 2
+    assert spy.queries[-1]["n_results"] == 2, "never ask chroma for more than the selected files hold"
+    assert spy.queries[-1]["where"] == {"source": "b.md"}
+    three_files.query("amoeba", k=10, sources=["a.md", "b.md"])
+    assert spy.queries[-1]["n_results"] == 5
+    assert spy.queries[-1]["where"] == {"source": {"$in": ["a.md", "b.md"]}}
+    three_files.query("amoeba", k=2, sources=["a.md", "b.md"])
+    assert spy.queries[-1]["n_results"] == 2
+    three_files.query("amoeba", k=10)
+    assert spy.queries[-1]["n_results"] == 6 and spy.queries[-1]["where"] is None
+
+
+def test_query_unknown_source_returns_nothing(three_files: VectorStore) -> None:
+    spy = QuerySpy(three_files._col)
+    three_files._col = spy
+    assert three_files.query("amoeba", k=4, sources=["gone.md"]) == []
+    assert spy.queries == [], "zero matching chunks: chroma is not asked"
+    assert {r.source for r in three_files.query("amoeba", k=10, sources=["gone.md", "c.csv"])} == {"c.csv"}
+
+
+def test_query_after_deleting_a_selected_source(three_files: VectorStore) -> None:
+    three_files.delete_source("b.md")
+    assert three_files.query("amoeba agar", k=4, sources=["b.md"]) == []
+    assert [r.source for r in three_files.query("amoeba", k=4, sources=["b.md", "c.csv"])] == ["c.csv"]
+
+
+def test_list_sources_tracks_every_write(three_files: VectorStore, tmp_path: Path) -> None:
+    def summary(s: VectorStore) -> list[tuple[str, str, int]]:
+        return [(d["source"], d["type"], d["chunks"]) for d in s.list_sources()]
+
+    assert summary(three_files) == [("a.md", "md", 3), ("b.md", "md", 2), ("c.csv", "csv", 1)]
+    three_files.replace_source("b.md", [Chunk("amoeba only one", "b.md", {"type": "md"})])
+    assert summary(three_files) == [("a.md", "md", 3), ("b.md", "md", 1), ("c.csv", "csv", 1)]
+    three_files.delete_source("a.md")
+    assert summary(three_files) == [("b.md", "md", 1), ("c.csv", "csv", 1)]
+    assert summary(VectorStore(tmp_path / "chroma", embedder=fake_embed)) == summary(three_files), "loaded at start"
+    three_files.clear()
+    assert three_files.list_sources() == []
+
+
+def test_list_sources_returns_copies(three_files: VectorStore) -> None:
+    three_files.list_sources()[0]["chunks"] = 99
+    assert three_files.list_sources()[0]["chunks"] == 3
+
+
+def test_list_sources_does_not_wait_for_the_store_lock(three_files: VectorStore) -> None:
+    import time
+
+    held, release = threading.Event(), threading.Event()
+
+    def hold() -> None:
+        with three_files._lock:
+            held.set()
+            release.wait(2)
+
+    worker = threading.Thread(target=hold)
+    worker.start()
+    try:
+        assert held.wait(2)
+        started = time.perf_counter()
+        assert len(three_files.list_sources()) == 3
+        assert time.perf_counter() - started < 0.1, "status polls must not block behind an upload"
+    finally:
+        release.set()
+        worker.join()

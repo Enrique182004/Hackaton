@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from biobench_sar.config import Settings
+from biobench_sar.config import DATA_DIR, Settings
 
 
 def _clear(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,3 +101,13 @@ def test_build_services_passes_silence_rms_to_audio(monkeypatch: pytest.MonkeyPa
     settings = Settings(silence_rms=0.042, calibration_file=tmp_path / "calibration.json")
     svc = app_module.build_services(settings, on_query=lambda q: None, on_state=lambda s: None)
     assert svc.audio.silence_rms == 0.042
+
+
+def test_selection_file_defaults_to_data_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SAR_SELECTION_FILE", raising=False)
+    assert Settings().selection_file == DATA_DIR / "selection.json"
+
+
+def test_selection_file_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SAR_SELECTION_FILE", str(tmp_path / "picked.json"))
+    assert Settings().selection_file == tmp_path / "picked.json"

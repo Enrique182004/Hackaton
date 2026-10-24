@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
+import os
+import tempfile
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from biobench_sar.config import Settings
@@ -46,6 +51,79 @@ class Interaction:
         return asdict(self)
 
 
+class DocumentSelection:
+    """Which uploaded files answers may draw on; None means every file. Persisted as JSON, thread-safe.
+
+    File format: {"all": true} or {"sources": [...]}. A missing or unreadable file means every file is active.
+    """
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._lock = threading.Lock()
+        self._sources: set[str] | None = self._load()
+
+    def _load(self) -> set[str] | None:
+        try:
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict) or data.get("all") is True or not isinstance(data.get("sources"), list):
+            return None
+        return {s for s in data["sources"] if isinstance(s, str)}
+
+    @property
+    def active(self) -> set[str] | None:
+        with self._lock:
+            return None if self._sources is None else set(self._sources)
+
+    def query_sources(self) -> list[str] | None:
+        """What the store should search: None for every file, else the selected names in sorted order."""
+        active = self.active
+        return None if active is None else sorted(active)
+
+    def select_all(self) -> None:
+        with self._lock:
+            self._sources = None
+            self._save()
+
+    def select(self, sources: Iterable[str]) -> None:
+        with self._lock:
+            self._sources = set(sources)
+            self._save()
+
+    def activate(self, sources: Iterable[str]) -> None:
+        """Add files to an explicit selection, so a fresh upload is never silently left out of answers."""
+        with self._lock:
+            if self._sources is None:
+                return
+            new = set(sources) - self._sources
+            if new:
+                self._sources |= new
+                self._save()
+
+    def discard(self, source: str) -> None:
+        with self._lock:
+            if self._sources is not None and source in self._sources:
+                self._sources.discard(source)
+                self._save()
+
+    def _save(self) -> None:
+        payload = {"all": True} if self._sources is None else {"sources": sorted(self._sources)}
+        tmp = ""
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=self._path.parent, prefix=f".{self._path.name}.", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+            os.replace(tmp, self._path)
+        except OSError as exc:
+            # The in-memory selection still applies; it just won't survive a restart.
+            log.warning("could not save document selection to %s: %s", self._path, exc)
+            if tmp:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+
+
 class Assistant:
     """Owns the busy lock, the status shown to clients and the interaction history.
 
@@ -64,6 +142,12 @@ class Assistant:
         self._speaking_until = 0.0
         self._history: deque[Interaction] = deque(maxlen=HISTORY_SIZE)
         self._next_id = 1
+        self.selection = DocumentSelection(settings.selection_file)
+
+    @property
+    def active_sources(self) -> set[str] | None:
+        """Files answers may use; None = every file."""
+        return self.selection.active
 
     @property
     def state(self) -> str:
@@ -126,11 +210,7 @@ class Assistant:
             self.emit_status("thinking")
             frame = svc.vision.latest_warped()
             ink = find_ink_regions(frame, **self.settings.ink_kwargs) if frame is not None else []
-            try:
-                context = svc.store.query(text, self.settings.rag_top_k)
-            except Exception:
-                log.exception("RAG query failed; continuing without context")
-                context = []
+            context = self._retrieve(text)
             sources = list(dict.fromkeys(chunk.source for chunk in context))
             image = encode_jpeg(frame) if frame is not None else None
             action = svc.vlm.evaluate(text, image, context, ink, self.settings.projector_size)
@@ -153,6 +233,16 @@ class Assistant:
         finally:
             self.emit_status("idle")
             self._busy.release()
+
+    def _retrieve(self, text: str) -> list[Any]:
+        sources = self.selection.query_sources()
+        if sources is not None and not sources:
+            return []  # the student switched every file off: answer without notes
+        try:
+            return list(self.services.store.query(text, self.settings.rag_top_k, sources=sources))
+        except Exception:
+            log.exception("RAG query failed; continuing without context")
+            return []
 
     def _record(
         self,
