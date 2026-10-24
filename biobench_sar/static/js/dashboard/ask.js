@@ -1,6 +1,17 @@
 import { $, el, request, setNote } from "./api.js";
 
 let pending = null;
+let serverState = "idle";
+// The push-to-talk phase the ask note currently shows, so status events never clear an unrelated note.
+let micNote = null;
+
+// A 202 from /api/listen only queues the recording (in wake mode it starts after the current chunk),
+// so "speak now" waits for the server's own "listening" status.
+const MIC_NOTES = {
+  starting: ["Starting microphone…", ""],
+  listening: ["Listening — speak now.", "ok"],
+  transcribing: ["Transcribing…", ""],
+};
 
 function sourcesTag(sources) {
   return sources.length ? el("span", { className: "tag", textContent: `📄 ${sources.join(", ")}` }) : null;
@@ -50,9 +61,33 @@ export async function loadHistory() {
   showEmpty();
 }
 
+function note(text, tone) {
+  micNote = null;
+  setNote($("ask-msg"), text, tone);
+}
+
+function showMicNote(phase) {
+  note(...MIC_NOTES[phase]);
+  micNote = phase;
+}
+
+// Called with every server status (socket push, or the status poll while the socket is down).
+export function onListenState(state) {
+  serverState = state;
+  if (state === "listening" || state === "transcribing") showMicNote(state);
+  // Only idle ends a recording: a query still running can emit other states mid-recording, and
+  // "starting" survives idle because a previous query or wake chunk may finish before recording begins.
+  else if (state === "idle" && (micNote === "listening" || micNote === "transcribing")) note("");
+}
+
+function listenError(err) {
+  if (err.status === 503) return "No microphone on the server machine. Plug one in and restart the server, or type your question.";
+  if (err.status === 409) return "Already recording.";
+  return `Microphone unavailable: ${err.message}`;
+}
+
 export function initAsk() {
   const input = $("ask-input");
-  const msg = $("ask-msg");
   $("ask-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = input.value.trim();
@@ -61,9 +96,9 @@ export function initAsk() {
     try {
       await request("/api/query", { method: "POST", json: { text } });
       input.value = "";
-      setNote(msg, "Sent — watch the projector.", "ok");
+      note("Sent — watch the projector.", "ok");
     } catch (err) {
-      setNote(msg, err.status === 409 ? "Still answering the last question — try again in a moment." : `Could not send: ${err.message}`, "warn");
+      note(err.status === 409 ? "Still answering the last question — try again in a moment." : `Could not send: ${err.message}`, "warn");
     } finally {
       $("ask-btn").disabled = false;
     }
@@ -71,9 +106,10 @@ export function initAsk() {
   $("listen-btn").addEventListener("click", async () => {
     try {
       await request("/api/listen", { method: "POST" });
-      setNote(msg, "Listening — speak now.", "ok");
+      // The status push can beat this response; never step back from a recording already under way.
+      showMicNote(serverState === "listening" || serverState === "transcribing" ? serverState : "starting");
     } catch (err) {
-      setNote(msg, err.status === 409 ? "Already recording." : `Microphone unavailable: ${err.message}`, "warn");
+      note(listenError(err), err.status === 503 ? "bad" : "warn");
     }
   });
   showEmpty();

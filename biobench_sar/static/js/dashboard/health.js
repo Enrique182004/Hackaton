@@ -30,8 +30,10 @@ export function renderState(state, detail) {
   $("listen-btn").dataset.live = state === "listening" ? "1" : "0";
 }
 
-export function renderConnection(connected) {
+// `hint` marks a degraded mode (polling still works), so it reads as a warning rather than a failure.
+export function renderConnection(connected, hint = "") {
   const chip = $("conn-chip");
-  chip.dataset.tone = connected ? "ok" : "bad";
-  chip.querySelector("span").textContent = connected ? "live" : "offline";
+  chip.dataset.tone = connected ? "ok" : hint ? "warn" : "bad";
+  chip.title = hint;
+  chip.querySelector("span").textContent = connected ? "live" : hint ? "offline · polling" : "offline";
 }

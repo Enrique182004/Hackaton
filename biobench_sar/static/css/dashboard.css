@@ -11,9 +11,10 @@
   --amber: #ffb347;
   --red: #ff6b5e;
   --green: #7dffb0;
-  --font-display: "Chakra Petch", "Eurostile", ui-monospace, monospace;
-  --font-body: "IBM Plex Sans", "Helvetica Neue", sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  /* Web fonts may never arrive (offline venue), so each stack names local macOS + Windows fallbacks. */
+  --font-display: "Chakra Petch", "Bahnschrift", "Eurostile", "DIN Alternate", ui-monospace, monospace;
+  --font-body: "IBM Plex Sans", "Helvetica Neue", "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px;
   --radius: 10px;
   --step-0: clamp(0.88rem, 0.84rem + 0.2vw, 0.98rem);

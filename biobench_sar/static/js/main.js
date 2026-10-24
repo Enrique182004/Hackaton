@@ -32,6 +32,7 @@
   let bubbleTimer = null;
   let transcriptTimer = null;
   let connected = false;
+  let statusSinceConnect = false; // a server status arrived since the last disconnect
   let offlineTimer = null;
   let offlineHintTimer = null;
 
@@ -132,6 +133,11 @@
   }
 
   function onStatus(d) {
+    statusSinceConnect = true;
+    renderStatus(d);
+  }
+
+  function renderStatus(d) {
     const s = d.state || "idle";
     clearTimeout(offlineHintTimer);
     statusEl.dataset.state = s;
@@ -167,8 +173,9 @@
     }, 2000);
   }
 
-  // A reconnect may follow missed events (e.g. hide_calibration), so drop all transient UI and
-  // wait for the server's status push on connect.
+  // A reconnect may follow missed events (e.g. hide_calibration), so drop all transient UI. The
+  // server pushes its real status on connect and that push can land before this handler runs, so
+  // "idle" is only a placeholder until it arrives, never an overwrite.
   function resync() {
     body.classList.remove("offline");
     hideCalibration();
@@ -179,7 +186,7 @@
     clearTimeout(moveTimer);
     pendingState = "idle";
     setState("idle");
-    onStatus({ state: "idle" });
+    if (!statusSinceConnect) renderStatus({ state: "idle" });
   }
 
   function showCalibration(d) {
@@ -216,9 +223,10 @@
   const socket = typeof io === "function" ? io() : null;
   if (socket) {
     socket.on("connect", () => { connected = true; setConn("connected"); resync(); });
-    socket.on("disconnect", () => { connected = false; setConn("disconnected"); setOffline(); });
+    socket.on("disconnect", () => { connected = false; statusSinceConnect = false; setConn("disconnected"); setOffline(); });
     socket.on("connect_error", (e) => {
       connected = false;
+      statusSinceConnect = false;
       setConn("error: " + (e && e.message));
       setOffline();
     });
