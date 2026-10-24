@@ -257,7 +257,9 @@ Downloads, first run, where `sar.env` and the data go, and building locally:
 ## Configuration
 
 Everything is an environment variable, read by `Settings` in `biobench_sar/config.py`. The variables can also
-go in a `sar.env` file in the repo root: copy `sar.env.example`, or point `SAR_ENV_FILE` at another file.
+go in a `sar.env` file in the repo root: copy `sar.env.example`, or point `SAR_ENV_FILE` at another file
+(`SAR_ENV_FILE` itself is read by `biobench_sar/envfile.py` before `Settings` exists, so it only works as a real
+environment variable).
 `python -m biobench_sar` and `scripts/hardware_check.py` load it at startup, and a real environment variable
 wins over the file. Desktop builds also look next to the app and in the data folder (see
 [DESKTOP_BUILDS.md](docs/DESKTOP_BUILDS.md#settings-sarenv)). Room and hardware advice:
@@ -301,7 +303,6 @@ wins over the file. Desktop builds also look next to the app and in the data fol
 | `SAR_LAN` | off | `1` = phone mode: listen on the Wi-Fi, behind a six-digit PIN ([docs/MOBILE.md](docs/MOBILE.md)) |
 | `SAR_LAN_HOSTNAMES` | empty | Comma list of extra host names phones may use (e.g. `my-laptop.local`). IP addresses and `localhost` always work |
 | **Files** | | |
-| `SAR_ENV_FILE` | `sar.env` in the repo root | Settings file to load before `Settings` is built |
 | `SAR_DATA_DIR` | `data/` in the checkout (desktop builds: the per-user data folder) | Where everything below is kept. Shared by both profiles unless you give each its own |
 | `SAR_CALIBRATION_FILE` | `data/calibration.json` | Camera ↔ projector line-up |
 | `SAR_CHROMA_DIR` | `data/chroma_db` | The knowledge base. Delete it to load the bundled documents again |

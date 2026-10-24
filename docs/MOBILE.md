@@ -194,8 +194,8 @@ any new route or socket handler.
    - Always pass `request.remote_addr`, the TCP peer. Never trust `X-Forwarded-For`: there is no proxy, and
      there must never be one.
 4. **Headers (`after_request`).** `/api/*` and `/join` get `Cache-Control: no-store` in every mode. `/join`
-   gets `Referrer-Policy: same-origin`. In LAN mode every response carries `X-SAR-LAN: 1`, the mark the service
-   worker looks for.
+   gets `Referrer-Policy: same-origin`. In LAN mode every response carries `X-SAR-LAN: 1` (`LAN_MODE_HEADER`), the
+   mark the service worker looks for.
 5. **`/join`.**
    - A local request, or any request with LAN mode off, gets a 303 to `/dashboard`.
    - `GET /join` renders `templates/join.html` with `error` (bool), `language` (the phone's `Accept-Language`,
@@ -219,13 +219,17 @@ any new route or socket handler.
    sids are tracked in `PhoneSessions` so New PIN and Disconnect can close them
    (`socketio.server.disconnect(sid, namespace="/")`). `flask.request` in a handler is the connection's
    handshake request, cookies included, so a revoked token fails there even on a WebSocket that is still open.
-7. **Local-only endpoints** (403 unless the request is local, so a joined phone never sees the PIN):
+7. **Local-only endpoints** (403 unless `is_local_request(request.remote_addr)`, so a joined phone never sees
+   the PIN):
 
    | Method | Path | Result |
    | --- | --- | --- |
-   | GET | `/api/lan` | `{"enabled": bool, "urls": [join_url(ip, port, pin) for ip in local_ip_addresses()], "pin": "123456" \| null, "phones": int}` (plus `locked_for`, the seconds until anyone may join again). With LAN mode off: `enabled` false, `pin` null |
+   | GET | `/api/lan` | `{"enabled": bool, "urls": [join_url(ip, port, pin) for ip in local_ip_addresses()], "pin": "123456" \| null, "phones": int}` (plus `locked_for`: `gate.server_locked_for()`, the seconds until anyone may join again). With LAN mode off: `enabled` false, `pin` null |
    | POST | `/api/lan/rotate` | New PIN: `gate.rotate(revoke_tokens=True)`, then every phone socket is disconnected. Returns the `GET /api/lan` body |
    | POST | `/api/lan/disconnect` | Disconnect all phones: `gate.revoke_all()`, then every phone socket is disconnected. The PIN stays |
+
+   The groundwork's names for the two buttons, `POST /api/lan/pin` and `POST /api/lan/revoke`, were never
+   built: use `/api/lan/rotate` and `/api/lan/disconnect`. With LAN mode off, both answer 409.
 
 8. **The card** (`static/js/dashboard/phone.js`) polls `GET /api/lan` on the laptop and draws the QR of
    `urls[0]` with `static/vendor/qrcode.min.js` (black on white whatever the theme, or phones may not read it),
@@ -240,8 +244,10 @@ any new route or socket handler.
     alone.
     - **`/sw.js` is served only in LAN mode** (`Cache-Control: no-cache`, `Service-Worker-Allowed: /`). With
       LAN mode off it answers 404, so nothing new can register.
-    - **The page registers it only in LAN mode** and otherwise unregisters any leftover worker and deletes the
-      `sar-*` caches (a kill switch for a worker from an earlier LAN-mode run on this port). `serviceWorker` is
+    - **The page registers it only in LAN mode** (`navigator.serviceWorker.register("/sw.js", { scope: "/" })`).
+      Otherwise it unregisters any leftover worker (`navigator.serviceWorker.getRegistrations()`, then
+      `unregister()` on each) and deletes the `sar-*` caches: a kill switch for a worker from an earlier LAN-mode
+      run on this port. `serviceWorker` is
       missing on plain-HTTP phones, so they skip all of this.
     - **The worker's own dev-safety rule** covers pages where that script never runs. It stores only responses
       carrying `X-SAR-LAN: 1`. The first unmarked response from the laptop means LAN mode is off, so the

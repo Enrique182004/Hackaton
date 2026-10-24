@@ -97,23 +97,23 @@ All paths are inside the `biobench_sar` package. Imports are package-absolute
 - `error_action(message, projector_size) -> AvatarAction`.
 - `Settings`: every knob is an env var `SAR_*` (the full table with defaults is in the
   [README](../README.md#configuration)). Invalid numbers fall back to the default. In particular:
-  - `profile: str`: env `SAR_PROFILE`, default `"math"`. Allowed `"math" | "biology"`, anything else → `"math"`.
-  - `knowledge_dir: Path` (property): `PACKAGE_DIR / "knowledge" / profile`, the seed docs ingested at startup.
+  - `profile: str` — env `SAR_PROFILE`, default `"math"`. Allowed `"math" | "biology"`, anything else → `"math"`.
+  - `knowledge_dir: Path` (property) — `PACKAGE_DIR / "knowledge" / profile`, the seed docs ingested at startup.
     Biology seed docs live in `knowledge/biology/` and math seed docs in `knowledge/math/` (`quiz_bank.csv` with
     header `problem,answer,topic,level`, `tutoring_guide.md`, and `worksheet_linear_equations.md` with `## Level N`
     headings that match the CSV's levels).
-  - `seed_marker_file: Path` (property): `chroma_dir / ".seeded"`, the profiles whose seed docs are already in
+  - `seed_marker_file: Path` (property) — `chroma_dir / ".seeded"`, the profiles whose seed docs are already in
     the store. Each profile is seeded once per store, and deleting `chroma_dir` seeds it again.
-  - `quiz_bank_file: Path`: env `SAR_QUIZ_BANK_FILE`, default `DATA_DIR / "quiz_bank.json"`.
-  - `quiz_length: int`: env `SAR_QUIZ_LENGTH`, default `10`. The most problems one quiz asks, and how many the
+  - `quiz_bank_file: Path` — env `SAR_QUIZ_BANK_FILE`, default `DATA_DIR / "quiz_bank.json"`.
+  - `quiz_length: int` — env `SAR_QUIZ_LENGTH`, default `10`. The most problems one quiz asks, and how many the
     code invents when no ticked file has any.
-  - `language: str`: env `SAR_LANGUAGE`, `"auto" | "en" | "es"` (`lang.normalize_language`), default `"auto"`.
-  - `projector_width` / `projector_height`: default `1280` / `800` (`config.PROJECTOR_SIZE`, the kit's Epson WXGA).
-  - `camera_width` / `camera_height`: default `1280` / `720`. `sar.env.example` sets `1920` / `1080` for the kit.
-  - `ink_max_regions`: `SAR_INK_MAX_REGIONS`, else the profile's default (`config.INK_MAX_REGIONS`: math 20,
+  - `language: str` — env `SAR_LANGUAGE`, `"auto" | "en" | "es"` (`lang.normalize_language`), default `"auto"`.
+  - `projector_width` / `projector_height` — default `1280` / `800` (`config.PROJECTOR_SIZE`, the kit's Epson WXGA).
+  - `camera_width` / `camera_height` — default `1280` / `720`. `sar.env.example` sets `1920` / `1080` for the kit.
+  - `ink_max_regions` — `SAR_INK_MAX_REGIONS`, else the profile's default (`config.INK_MAX_REGIONS`: math 20,
     biology 10). `ink_kwargs` (property) holds the `find_ink_regions` keyword arguments.
-  - `lan: bool`: on for `SAR_LAN=1` **or** any non-loopback `host` (`lan.is_lan_mode`). `SAR_LAN=1` makes
-    `host` default to `0.0.0.0`. `lan_hostnames: tuple[str, ...]`: `lan.parse_hostnames(SAR_LAN_HOSTNAMES)`.
+  - `lan: bool` — on for `SAR_LAN=1` **or** any non-loopback `host` (`lan.is_lan_mode`). `SAR_LAN=1` makes
+    `host` default to `0.0.0.0`. `lan_hostnames: tuple[str, ...]` — `lan.parse_hostnames(SAR_LAN_HOSTNAMES)`.
   - Both profiles share one `SAR_DATA_DIR`: one store, one file selection, one quiz bank. Run each profile with
     its own `SAR_DATA_DIR` (e.g. `data/biology`) to keep one subject's files out of the other's answers.
 - `envfile.load_env_file()` runs in `__main__` before `Settings` exists, so `sar.env` can set `SAR_DATA_DIR`
@@ -221,10 +221,11 @@ class VLMClient:
 | --- | --- |
 | help | `None` |
 | practice | `{"kind": "practice"}` |
-| quiz | `{"kind": "quiz", "stage": "dictate" \| "check" \| "hint", "number": int, "total": int, "problem": str \| None, "answer": str \| None, "next_problem": str \| None}`. `problem` is always set: a worksheet problem, or one the code invented and solved (`quiz_bank.invent_problem`). `next_problem` is set only in `check`. A "repeat the problem" request is stage `dictate` again |
+| quiz | `{"kind": "quiz", "stage": "dictate" \| "check" \| "hint", "number": int, "total": int, "problem": str \| None, "answer": str \| None, "next_problem": str \| None}`. `problem` is always set: a worksheet problem, or one the code invented and solved (`quiz_bank.invent_problem`). `answer` is the expected answer, for code only. (The old rule was "`answer` is set only in stage `check`"; now it travels with every stage, and no prompt shows it.) `next_problem` is set only in `check`. A "repeat the problem" request is stage `dictate` again |
 | learn | `{"kind": "learn", "topic": str, "stage": "offer" \| "example" \| "own"}` |
 
-- **Answers never reach the model.** Quiz answers are graded in code (`grading.grade`, contract G) against the
+- **Answers never reach the model except when checking — and since grading moved into code, not even then.**
+  Quiz answers are graded in code (`grading.grade`, contract G) against the
   model's `board_answer`. The model only copies the bottom line of the student's writing, its own verdict is
   never used to award a point, and the next problem is never in a check prompt (the model copied it as the
   student's answer). Profile `math` also strips answer keys from the RAG context in every task (contract B).
@@ -530,8 +531,8 @@ equations that are not in the seed files, so a pass never depends on an answer k
    next problem is dictated and the card advances.
 5. **Quiz, wrong answer:** write a wrong answer → `error`, one hint, the correct answer is never spoken, and the
    card stays on the same problem.
-6. **Quiz, several values:** on `x^2 - 2x - 15 = 0`, `x = -3 or x = 5` is correct and `x = 4 or x = -4` is
-   wrong, whatever the model says.
+6. **Quiz, several values:** on the default quiz's last problem (the quadratic x² − 2x − 15 = 0), writing
+   `x = -3 or x = 5` is correct and `x = 4 or x = -4` is wrong, whatever the model says.
 7. **Quiz, unreadable answer:** an answer grading can't parse → "I couldn't read your answer clearly. Ask me to
    check it again.", no try counted.
 8. **Quiz, ask for a hint:** after a problem is dictated, say "I'm stuck" → `pointing`, one hint for the next
@@ -577,7 +578,7 @@ Seed docs in `biobench_sar/knowledge/biology/`. The assistant must:
 | F Server & ops | ✅ built + polished; LAN mode wiring, stop confirmation in the final round | `Assistant` pipeline, APIs, warm-up (#23, #24); CI tests + lint (#13, #25); scripts (#19); classroom kit `sar.env.example` (#50) |
 | G Tutor / H Quiz bank / I Math speech / J Language | ✅ built and merged; `grading.py` in the final round | contracts above |
 | K Phones | 🟡 groundwork merged (`lan.py`, manifest, icons, `sw.js`); server wiring in the final round | `tests/test_lan.py`, `tests/test_mobile.py` |
-| L Desktop builds | ✅ Windows installer + macOS arm64 app, smoke-tested in CI (#66) | `--self-test` prints `SELF-TEST OK` |
+| L Desktop builds | ✅ Windows installer + macOS arm64 app, smoke-tested in CI (#66) | the launcher's self-test prints `SELF-TEST OK` |
 | Phase 2 integrate | ✅ both profiles | full suite green on `release/candidate`; live loop verified in the browser with `qwen2.5vl:3b` |
 | Phase 3 hardware | 🟡 pending: runbook ready ([HARDWARE_DAY.md](HARDWARE_DAY.md)), kit is a C930e + Epson WXGA on a cart | camera + mic need OS permissions; projector not yet connected |
 
