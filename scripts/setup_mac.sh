@@ -23,7 +23,7 @@ fi
 # 2. Python venv (3.10-3.12; openai-whisper/torch lag behind newest Python).
 if [[ ! -d .venv ]]; then
   if command -v uv >/dev/null; then
-    uv venv --python 3.12 .venv
+    uv venv --seed --python 3.12 .venv
   elif command -v python3.12 >/dev/null; then
     python3.12 -m venv .venv
   else

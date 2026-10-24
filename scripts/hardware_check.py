@@ -17,6 +17,19 @@ from biobench_sar.config import Settings  # noqa: E402
 
 Result = tuple[str, str, str]  # (name, PASS|WARN|FAIL, detail)
 
+CAMERA_WARMUP_FRAMES = 15
+CAMERA_MEASURE_FRAMES = 90
+CAMERA_PASS_FPS = 28.0
+CAMERA_FAIL_FPS = 15.0
+
+
+def camera_status(fps: float) -> str:
+    if fps >= CAMERA_PASS_FPS:
+        return "PASS"
+    if fps >= CAMERA_FAIL_FPS:
+        return "WARN"
+    return "FAIL"
+
 
 def check_cameras(only: int | None, save_path: str | None) -> list[Result]:
     try:
@@ -33,10 +46,12 @@ def check_cameras(only: int | None, save_path: str | None) -> list[Result]:
             if only is not None:
                 results.append((f"camera {index}", "FAIL", "cannot open"))
             continue
+        for _ in range(CAMERA_WARMUP_FRAMES):
+            cap.read()
         frame = None
         count = 0
         start = time.time()
-        for _ in range(90):
+        for _ in range(CAMERA_MEASURE_FRAMES):
             ok, img = cap.read()
             if ok:
                 frame, count = img, count + 1
@@ -47,7 +62,9 @@ def check_cameras(only: int | None, save_path: str | None) -> list[Result]:
             continue
         fps = count / elapsed if elapsed > 0 else 0.0
         h, w = frame.shape[:2]
-        results.append((f"camera {index}", "PASS" if fps >= 30 else "WARN", f"{w}x{h} @ {fps:.1f} fps (need >= 30)"))
+        results.append(
+            (f"camera {index}", camera_status(fps), f"{w}x{h} @ {fps:.1f} fps (PASS >= {CAMERA_PASS_FPS:g}, FAIL < {CAMERA_FAIL_FPS:g})")
+        )
         if save_path and not saved:
             cv2.imwrite(save_path, frame)
             saved = True
@@ -64,6 +81,7 @@ def check_mic() -> list[Result]:
     except ImportError as exc:
         return [("microphone", "FAIL", f"missing dependency: {exc.name}")]
     pa = pyaudio.PyAudio()
+    stream = None
     try:
         inputs = [
             pa.get_device_info_by_index(i)
@@ -76,7 +94,6 @@ def check_mic() -> list[Result]:
         rate = 16000
         stream = pa.open(format=pyaudio.paInt16, channels=1, rate=rate, input=True, frames_per_buffer=1024)
         data = b"".join(stream.read(1024, exception_on_overflow=False) for _ in range(int(rate * 2 / 1024)))
-        stream.close()
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         rms = float(np.sqrt(np.mean(samples**2)))
         status = "PASS" if rms > 0.001 else "WARN"
@@ -84,6 +101,9 @@ def check_mic() -> list[Result]:
     except Exception as exc:
         return [("microphone", "FAIL", str(exc))]
     finally:
+        if stream is not None:
+            stream.stop_stream()
+            stream.close()
         pa.terminate()
 
 
@@ -133,7 +153,11 @@ def check_ollama(settings: Settings) -> list[Result]:
     results: list[Result] = [("ollama", "PASS", f"reachable, {len(names)} model(s)")]
     wanted = settings.vlm_model
     have = any(n == wanted or n.split(":")[0] == wanted for n in names)
-    results.append((f"model {wanted}", "PASS" if have else "FAIL", "pulled" if have else f"run: ollama pull {wanted}"))
+    if have:
+        results.append((f"model {wanted}", "PASS", "pulled"))
+    else:
+        missing = "WARN" if settings.vlm_backend != "ollama" else "FAIL"
+        results.append((f"model {wanted}", missing, f"run: ollama pull {wanted}"))
     return results
 
 
