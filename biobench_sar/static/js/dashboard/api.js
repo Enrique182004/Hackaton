@@ -46,21 +46,26 @@ export function setNote(node, text, tone = "") {
 // Hidden tabs skip work but always render once, and catch up the moment they become visible again.
 export function every(ms, fn, { backoffMs = ms * 4 } = {}) {
   let stopped = false;
+  let running = false;
   let timer = null;
   let first = true;
   const tick = async () => {
+    // A tab shown again mid-request must not start a second chain: the running one reschedules itself.
+    if (stopped || running) return;
     clearTimeout(timer);
-    if (stopped) return;
     let delay = ms;
     if (first || !document.hidden) {
       first = false;
+      running = true;
       try {
         await fn();
       } catch {
         delay = backoffMs;
+      } finally {
+        running = false;
       }
     }
-    timer = setTimeout(tick, delay);
+    if (!stopped) timer = setTimeout(tick, delay);
   };
   document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
   tick();
