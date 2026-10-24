@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +19,14 @@ def _env_int(name: str, default: int) -> int:
 def _env_pos_int(name: str, default: int, minimum: int = 1) -> int:
     value = _env_int(name, default)
     return value if value >= minimum else default
+
+
+def _env_nonneg_float(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, default))
+    except ValueError:
+        return default
+    return value if math.isfinite(value) and value >= 0 else default
 
 
 def _env_ink_c(name: str, default: int) -> int:
@@ -65,6 +74,8 @@ class Settings:
     # push (hotkey/button only) | wake (always listening for wake word)
     listen_mode: str = field(default_factory=lambda: os.environ.get("SAR_LISTEN_MODE", "push"))
     record_seconds: float = field(default_factory=lambda: float(os.environ.get("SAR_RECORD_SECONDS", "5")))
+    # Wake-word chunks quieter than this RMS skip Whisper; push-to-talk only skips digital silence.
+    silence_rms: float = field(default_factory=lambda: _env_nonneg_float("SAR_SILENCE_RMS", 0.01))
     # edge | pyttsx3 | say | none
     tts_backend: str = field(default_factory=lambda: os.environ.get("SAR_TTS_BACKEND", "edge"))
     tts_voice: str = field(default_factory=lambda: os.environ.get("SAR_TTS_VOICE", "en-US-AriaNeural"))

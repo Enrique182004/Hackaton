@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import threading
+import time
 from collections.abc import Callable
 
 import numpy as np
@@ -12,6 +13,11 @@ log = logging.getLogger(__name__)
 SAMPLE_RATE = 16000
 WAKE_CHUNK_SECONDS = 3.0
 SILENCE_RMS = 0.01
+# Explicit queries (push-to-talk, wake follow-up) are only dropped when the mic delivered digital zeros:
+# a quiet speaker must still be heard.
+DIGITAL_SILENCE_RMS = 1e-4
+# Trimming a wake chunk by wall clock lags the audio a little; keep some of what came just before the click.
+PUSH_PREROLL_SECONDS = 0.5
 
 
 class AudioTrigger:
@@ -42,10 +48,12 @@ class AudioTrigger:
         self.silence_rms = silence_rms
         self._model = None
         self._model_lock = threading.Lock()
+        self._infer_lock = threading.Lock()
         self._busy_lock = threading.Lock()
         # idle -> pending (requested, waiting for the wake loop) -> recording -> idle
         self._push_state = "idle"
         self._push_requested = threading.Event()
+        self._push_requested_at = 0.0
         self._stop = threading.Event()
         self._wake_thread: threading.Thread | None = None
         self._available: bool | None = None
@@ -108,6 +116,9 @@ class AudioTrigger:
             if self._push_state == "pending":
                 return True
             self._push_state = "pending"
+            self._push_requested_at = time.monotonic()
+            # Under the lock so it can never land after this push's own "idle".
+            self._state("listening")
             wake_running = self.mode == "wake" and self._wake_thread is not None and self._wake_thread.is_alive()
             if wake_running:
                 self._push_requested.set()
@@ -121,15 +132,19 @@ class AudioTrigger:
             self.on_query(text)
 
     def transcribe(self, audio: np.ndarray) -> str:
+        # Whisper hangs a kv-cache on the shared model for each decode, so concurrent decodes (warm-up,
+        # wake chunks, push-to-talk) corrupt each other. An injected transcriber gets the same guarantee.
         if self._transcriber is not None:
-            return self._transcriber(audio).strip()
+            with self._infer_lock:
+                return self._transcriber(audio).strip()
         with self._model_lock:
             if self._model is None:
                 import whisper
 
-                self._model = self._model or whisper.load_model(self.whisper_model)
+                self._model = whisper.load_model(self.whisper_model)
             model = self._model
-        result = model.transcribe(np.asarray(audio, dtype=np.float32), fp16=False, language="en")
+        with self._infer_lock:
+            result = model.transcribe(np.asarray(audio, dtype=np.float32), fp16=False, language="en")
         return str(result.get("text", "")).strip()
 
     def _record(self, seconds: float) -> np.ndarray:
@@ -156,26 +171,34 @@ class AudioTrigger:
         pcm = np.frombuffer(b"".join(frames), dtype=np.int16)
         return pcm.astype(np.float32) / 32768.0
 
-    def _heard(self, audio: np.ndarray) -> str:
-        """Transcribe unless the clip is silent (saves CPU; Whisper hallucinates text on silence)."""
+    def _heard(self, audio: np.ndarray, min_rms: float) -> str:
+        """Transcribe unless the clip's RMS is below min_rms (saves CPU; Whisper hallucinates text on silence)."""
         arr = np.asarray(audio, dtype=np.float32)
-        if arr.size == 0 or float(np.sqrt(np.mean(np.square(arr)))) < self.silence_rms:
+        if arr.size == 0 or float(np.sqrt(np.mean(np.square(arr)))) < min_rms:
             return ""
         return self.transcribe(arr)
+
+    def _since_request(self, chunk: np.ndarray) -> np.ndarray:
+        """The part of a wake chunk recorded after push-to-talk was requested."""
+        arr = np.asarray(chunk, dtype=np.float32)
+        seconds = time.monotonic() - self._push_requested_at + PUSH_PREROLL_SECONDS
+        return arr[max(0, arr.size - int(seconds * SAMPLE_RATE)) :]
 
     def _run_push(self) -> None:
         self._deliver(self._do_push())
 
-    def _do_push(self) -> str:
+    def _do_push(self, lead: np.ndarray | None = None) -> str:
+        """Record and transcribe one push-to-talk query; `lead` is audio already captured since the request."""
         with self._busy_lock:
             self._push_state = "recording"
         self._push_requested.clear()
         text = ""
         try:
-            self._state("listening")
-            audio = self._record(self.record_seconds)
+            audio = np.asarray(self._record(self.record_seconds), dtype=np.float32)
+            if lead is not None:
+                audio = np.concatenate([lead, audio])
             self._state("transcribing")
-            text = self._heard(audio)
+            text = self._heard(audio, DIGITAL_SILENCE_RMS)
         except Exception:
             log.exception("push-to-talk failed")
         finally:
@@ -212,26 +235,32 @@ class AudioTrigger:
                 try:
                     audio = self._record(self.wake_chunk_seconds)
                     if self._push_requested.is_set():
-                        continue  # push-to-talk wins; drop this chunk
-                    heard = self._heard(audio)
-                    # The avatar may have started talking mid-chunk; its own voice must not count as a wake word.
-                    rest = self.extract_after_wake(heard) if heard and self._should_listen() else None
-                    if rest is not None:
-                        if not rest:
-                            listened = True
-                            self._state("listening")
-                            rest = self._heard(self._record(self.record_seconds))
-                        query = rest
+                        # Push-to-talk wins, but the user may already be talking: keep what the chunk caught.
+                        query = self._do_push(self._since_request(audio))
+                    else:
+                        heard = self._heard(audio, self.silence_rms)
+                        # The avatar may have started talking mid-chunk; its own voice must not count as a wake word.
+                        rest = self.extract_after_wake(heard) if heard and self._should_listen() else None
+                        if rest is not None:
+                            if not rest:
+                                listened = True
+                                self._state("listening")
+                                rest = self._heard(self._record(self.record_seconds), DIGITAL_SILENCE_RMS)
+                            query = rest
                 except Exception:
                     log.exception("wake listener iteration failed")
                     self._stop.wait(1.0)
                 finally:
                     if listened:
-                        self._state("idle")
+                        with self._busy_lock:
+                            # A push requested meanwhile already announced "listening"; don't clobber it.
+                            if self._push_state == "idle":
+                                self._state("idle")
                 if query:
                     self._deliver(query)
         finally:
             with self._busy_lock:
                 if self._push_state == "pending":
                     self._push_state = "idle"
+                    self._state("idle")
             self._push_requested.clear()
