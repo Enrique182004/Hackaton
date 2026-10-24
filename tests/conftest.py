@@ -165,6 +165,14 @@ def isolated_quiz_bank(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture(autouse=True)
+def isolated_accessibility_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """And for the room's accessibility settings: a test that changes them never changes the developer's room."""
+    path = tmp_path / "accessibility.json"
+    monkeypatch.setenv("SAR_ACCESSIBILITY_FILE", str(path))
+    return path
+
+
+@pytest.fixture(autouse=True)
 def no_lan_from_the_shell(monkeypatch: pytest.MonkeyPatch) -> None:
     """A developer's exported SAR_LAN / SAR_HOST must not turn the PIN gate on in tests that don't ask for it."""
     for name in ("SAR_LAN", "SAR_HOST", "SAR_LAN_HOSTNAMES"):
@@ -181,6 +189,7 @@ def settings(tmp_path: Path) -> Settings:
         calibration_file=tmp_path / "calibration.json",
         selection_file=tmp_path / "selection.json",
         quiz_bank_file=tmp_path / "quiz_bank.json",
+        accessibility_file=tmp_path / "accessibility.json",
         projector_width=640,
         projector_height=360,
     )

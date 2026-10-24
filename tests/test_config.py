@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from biobench_sar import config
 from biobench_sar.config import DATA_DIR, PACKAGE_DIR, Settings
 
 
@@ -275,6 +276,20 @@ def test_selection_file_defaults_to_data_dir(monkeypatch: pytest.MonkeyPatch) ->
 def test_selection_file_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("SAR_SELECTION_FILE", str(tmp_path / "picked.json"))
     assert Settings().selection_file == tmp_path / "picked.json"
+
+
+def test_accessibility_file_default_and_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("SAR_ACCESSIBILITY_FILE", raising=False)
+    assert Settings().accessibility_file == DATA_DIR / "accessibility.json"
+    monkeypatch.setenv("SAR_ACCESSIBILITY_FILE", str(tmp_path / "room.json"))
+    assert Settings().accessibility_file == tmp_path / "room.json"
+
+
+def test_accessibility_file_follows_the_launchers_data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # The desktop launcher sets config.DATA_DIR after config is imported; the default is read when Settings is built.
+    monkeypatch.delenv("SAR_ACCESSIBILITY_FILE", raising=False)
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    assert Settings().accessibility_file == tmp_path / "data" / "accessibility.json"
 
 
 # ---- LAN mode (phones join with a PIN; docs/MOBILE.md) ----------------------------------------------

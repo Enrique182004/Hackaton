@@ -747,6 +747,7 @@ def self_test_settings(data_dir: Path, port: int) -> Any:
         tts_dir=data_dir / "tts",
         selection_file=data_dir / "selection.json",
         quiz_bank_file=data_dir / "quiz_bank.json",
+        accessibility_file=data_dir / "accessibility.json",
     )
 
 
