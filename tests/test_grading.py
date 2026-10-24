@@ -619,6 +619,8 @@ def test_subscripted_roots_are_values_of_their_letter() -> None:
     assert grade("x₁ = 3, x₂ = 4", "x = 3 or x = 4") is True
     assert grade("x_1 = 3 ; x_2 = 4", "x = 3 or x = 4") is True
     assert grade("x₁ = 3, x₂ = 5", "x = 3 or x = 4") is False
+    assert grade("x1 = 3, x2 = 4", "x = 3 or x = 4") is True and grade("x1 = 3 x2 = 4", "x = 3 or x = 4") is True
+    assert parse_answers("3x2 = 6") == frozenset() and parse_answers("2x1 = 4") == frozenset(), "a product, a step"
 
 
 def test_a_step_with_the_letter_on_the_right_is_still_no_answer() -> None:

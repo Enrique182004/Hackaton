@@ -638,8 +638,8 @@ _GAP = re.compile(
 )
 # A line that starts with "=" goes on from the one above it: "1/2 + 1/3" over "= 3/6 + 2/6" over "= 5/6".
 _GOES_ON = re.compile(r"\s*[;\n]\s*(?==)")
-# Subscripts of a root: "x₁ = 3, x₂ = 4" (and "x_1") are two values of x.
-_SUBSCRIPT = re.compile(r"(?<=[A-Za-z])(?:[₀-₉]+|_\d+)")
+# Subscripts of a root: "x₁ = 3, x₂ = 4" (and "x_1", or "x1 = 3" as a model copies it) are two values of x.
+_SUBSCRIPT = re.compile(r"(?<=[A-Za-z])(?:[₀-₉]+|_\d+)|(?<![\w.][A-Za-z])(?<=[A-Za-z])[1-3](?=\s*=)")
 
 
 def _value_run(text: str) -> tuple[str, str]:
