@@ -22,6 +22,7 @@ const HIGHLIGHT_FADE_MS = 800; // style.css #highlight.fading
 // Projector px between the ink and the outline, so the outline frames the writing and never lights it up.
 const HIGHLIGHT_GAP = 14;
 const HIGHLIGHT_BORDER = 3; // CSS px: style.css #highlight border width
+const HIGHLIGHT_BORDER_CONTRAST = 6; // the same in high contrast (body[data-contrast="on"] #highlight)
 const HIGHLIGHT_TONES = { error: "error", celebrating: "celebrate" };
 // Projected UI looks like ink to the camera, so the server is told where it is ("ui_rects", projector px) and leaves
 // out ink regions mostly under it. Sent on every change and at least once a second; the server ignores rects older
@@ -30,6 +31,9 @@ const UI_TICK_MS = 250;
 const UI_HEARTBEAT_MS = 1000;
 const UI_PAD = 10; // CSS px: the glow and the idle bob reach past each element's own box
 const UI_JITTER = 12; // projector px: moving less than this (the idle bob) is not a change worth sending
+// The room's accessibility settings (accessibility.py) live on <body> as data-* attributes, which style.css reads:
+// data-text-size, data-captions ("stay" | "timed"), data-calm and data-contrast ("on" | "off").
+const TEXT_SIZES = ["normal", "large", "xlarge"];
 
 const $ = (id) => document.getElementById(id);
 const avatar = $("avatar");
@@ -61,6 +65,7 @@ let offlineTimer = null;
 let offlineHintTimer = null;
 let tutorVersion = 0; // bumped per "tutor" render so an older GET can't roll the card back
 let languageVersion = 0; // the same for "language"
+let accessVersion = 0; // and for "accessibility"
 let highlight = null; // [x, y, w, h] in projector px while the outline is on (not fading)
 let highlightTimer = null;
 let sentRects = null; // the last "ui_rects" sent, and when
@@ -131,14 +136,19 @@ function isRect(r) {
   return Array.isArray(r) && r.length === 4 && r.every(Number.isFinite) && r[2] > 0 && r[3] > 0;
 }
 
+function highlightBorder() {
+  return body.dataset.contrast === "on" ? HIGHLIGHT_BORDER_CONTRAST : HIGHLIGHT_BORDER;
+}
+
 // The outline's box in window px: the ink plus the gap, plus the border (drawn inside the box), kept on screen.
 function highlightBox([x, y, w, h]) {
+  const border = highlightBorder();
   const a = toPixels(x - HIGHLIGHT_GAP, y - HIGHLIGHT_GAP);
   const b = toPixels(x + w + HIGHLIGHT_GAP, y + h + HIGHLIGHT_GAP);
-  const left = Math.max(0, a.x - HIGHLIGHT_BORDER);
-  const top = Math.max(0, a.y - HIGHLIGHT_BORDER);
-  const right = Math.min(window.innerWidth, b.x + HIGHLIGHT_BORDER);
-  const bottom = Math.min(window.innerHeight, b.y + HIGHLIGHT_BORDER);
+  const left = Math.max(0, a.x - border);
+  const top = Math.max(0, a.y - border);
+  const right = Math.min(window.innerWidth, b.x + border);
+  const bottom = Math.min(window.innerHeight, b.y + border);
   return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
 }
 
@@ -201,7 +211,7 @@ function onBoard(node) {
 // The outline goes as its four edges, not its whole box: the server drops ink mostly under a UI rect, and the
 // writing inside the outline is exactly what the student is working on.
 function edges(r) {
-  const band = HIGHLIGHT_BORDER;
+  const band = highlightBorder();
   return [
     { left: r.left, top: r.top, width: r.width, height: band },
     { left: r.left, top: r.top + r.height - band, width: r.width, height: band },
@@ -260,10 +270,15 @@ function uiChanged() {
   });
 }
 
+// Captions held until the next question (accessibility "captions_stay"): no timer takes the bubble down.
+function captionsStay() {
+  return body.dataset.captions === "stay";
+}
+
 // Single owner of bubbleTimer: every (re)arm clears the previous one so stale timers can't hide a newer bubble.
 function armBubbleTimer(ms) {
   clearTimeout(bubbleTimer);
-  bubbleTimer = ms ? setTimeout(hideBubbleUnlessSpeaking, ms) : null;
+  bubbleTimer = ms && !captionsStay() ? setTimeout(hideBubbleUnlessSpeaking, ms) : null;
 }
 
 function showBubble(text, holdMs) {
@@ -286,8 +301,17 @@ function releaseAudio() {
   a.src = "";
 }
 
+// A timer armed before captions were set to stay leaves the caption up too.
 function hideBubbleUnlessSpeaking() {
-  if (audio && !audio.paused && !audio.ended) return;
+  if (captionsStay() || (audio && !audio.paused && !audio.ended)) return;
+  bubble.classList.add("hidden");
+  uiChanged();
+}
+
+// A held caption goes when a real new question starts (its words, or the board being read), so it never covers
+// the board in the camera picture. Timed captions keep their own timer.
+function dropHeldCaption() {
+  if (!captionsStay() || bubble.classList.contains("hidden")) return;
   bubble.classList.add("hidden");
   uiChanged();
 }
@@ -313,6 +337,11 @@ function onAvatarUpdate(d) {
     uiChanged();
   } else {
     setState(finalState);
+  }
+  // Held captions: the student's words stay up until this answer arrives.
+  if (captionsStay()) {
+    clearTranscript();
+    uiChanged();
   }
   // display_text keeps math in normal notation (3x + 5 = 20); spoken_text spells it out for the voice.
   const text = d.display_text || d.spoken_text || "";
@@ -352,6 +381,7 @@ function renderStatus(d) {
   quizCard.classList.toggle("capturing", capturing);
   // A new question: the last answer's outline is stale, and the camera must not see it as writing.
   if (capturing) clearHighlight(true);
+  if (s === "thinking") dropHeldCaption();
   uiChanged();
 }
 
@@ -383,6 +413,40 @@ function refreshLanguage() {
     .catch(() => {});
 }
 
+// Unknown values are ignored, so a newer server can't put the page in a state style.css doesn't know.
+function applyAccessibility(d) {
+  const held = captionsStay();
+  if (TEXT_SIZES.includes(d.text_size)) body.dataset.textSize = d.text_size;
+  if (typeof d.captions_stay === "boolean") body.dataset.captions = d.captions_stay ? "stay" : "timed";
+  if (typeof d.calm === "boolean") body.dataset.calm = d.calm ? "on" : "off";
+  if (typeof d.high_contrast === "boolean") body.dataset.contrast = d.high_contrast ? "on" : "off";
+  // Captions switched off while one is held: it goes like an answer without audio, the student's words after 5 s.
+  if (held && !captionsStay()) {
+    if (!bubble.classList.contains("hidden")) armBubbleTimer(4000);
+    if (!transcriptEl.classList.contains("hidden")) armTranscriptTimer();
+  }
+  // Bigger text and a thicker outline change the boxes: place them again and tell the server at once.
+  placeHighlight();
+  fitBubble();
+  uiChanged();
+}
+
+// Text size, held captions, calm mode and high contrast, set for the whole room from the dashboard.
+function onAccessibility(d) {
+  accessVersion += 1;
+  applyAccessibility(d);
+}
+
+// Changes made while the page was away come with the GET on every connect; Flask painted the first ones.
+function refreshAccessibility() {
+  const seen = accessVersion;
+  if (typeof fetch !== "function") return;
+  fetch("/api/accessibility")
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => { if (d && seen === accessVersion) onAccessibility(d); })
+    .catch(() => {});
+}
+
 // "tutor" events missed while disconnected would leave a stale card, so ask the server once per connect.
 function refreshTutor() {
   const seen = tutorVersion;
@@ -400,14 +464,22 @@ function clearTranscript() {
   transcriptEl.classList.add("hidden");
 }
 
-function onTranscript(d) {
+// The student's words go after 5 s, or with captions held when the answer arrives (onAvatarUpdate).
+function armTranscriptTimer() {
   clearTimeout(transcriptTimer);
-  transcriptEl.textContent = d.text || "";
-  transcriptEl.classList.toggle("hidden", !d.text);
+  transcriptTimer = null;
+  if (captionsStay()) return;
   transcriptTimer = setTimeout(() => {
     transcriptEl.classList.add("hidden");
     uiChanged();
   }, 5000);
+}
+
+function onTranscript(d) {
+  transcriptEl.textContent = d.text || "";
+  transcriptEl.classList.toggle("hidden", !d.text);
+  if (d.text) dropHeldCaption();
+  armTranscriptTimer();
   uiChanged();
 }
 
@@ -444,6 +516,7 @@ function resync() {
   if (!statusSinceConnect) renderStatus({ state: "idle" });
   refreshTutor();
   refreshLanguage();
+  refreshAccessibility();
 }
 
 function showCalibration(d) {
@@ -498,6 +571,7 @@ if (socket) {
   const handlers = {
     avatar_update: onAvatarUpdate, speak: onSpeak, status: onStatus, transcript: onTranscript,
     show_calibration: showCalibration, hide_calibration: hideCalibration, tutor: onTutor, language: onLanguage,
+    accessibility: onAccessibility,
   };
   Object.keys(handlers).forEach((name) => {
     socket.on(name, (data) => {

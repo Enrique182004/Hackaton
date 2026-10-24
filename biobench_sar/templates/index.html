@@ -6,7 +6,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
-<body data-projector-width="{{ projector_width }}" data-projector-height="{{ projector_height }}">
+{# The room's accessibility settings (app.py page()), so the first paint is already right; main.js keeps them
+   current. A render without them paints the defaults. #}
+{% set access = access | default({}) %}
+<body data-projector-width="{{ projector_width }}" data-projector-height="{{ projector_height }}"
+      data-text-size="{{ access.text_size | default('normal') }}"
+      data-captions="{{ 'stay' if access.captions_stay else 'timed' }}"
+      data-calm="{{ 'on' if access.calm else 'off' }}" data-contrast="{{ 'on' if access.high_contrast else 'off' }}">
   {# The ink the latest answer is about: a glowing outline around it, drawn by main.js. #}
   <div id="highlight" class="hidden" aria-hidden="true"></div>
   <div id="avatar" class="state-idle" aria-hidden="true">
