@@ -701,9 +701,16 @@ def test_offer_reply_only_counts_while_an_offer_is_pending(h: Harness) -> None:
     assert _ask(h, "I have one")["task"] is None
 
 
+def test_what_is_a_math_idea_starts_a_lesson_with_an_offer(h: Harness) -> None:
+    # "What is a fraction?" is explained with a worked example, then the offer: not step-by-step board help.
+    task = _ask(h, "What is a fraction?")["task"]
+    assert task == {"kind": "learn", "topic": "a fraction", "stage": "offer"}
+    assert h.assistant.tutor.offer_pending
+
+
 def test_unrelated_reply_expires_the_offer(h: Harness) -> None:
     _ask(h, "teach me fractions")
-    assert _ask(h, "what is a numerator?")["task"] is None
+    assert _ask(h, "is this right?")["task"] is None
     tutor = h.assistant.tutor
     assert not tutor.offer_pending and tutor.learn_topic is None, "only the very next turn answers the offer"
     assert _ask(h, "no")["task"] is None, "a 'no' two turns later is not an answer to the old offer"

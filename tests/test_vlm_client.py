@@ -223,6 +223,8 @@ MATH_GOOD = {
     "target_y": 9,
 }
 LEARN_OFFER = {"kind": "learn", "topic": "solving fractions", "stage": "offer"}
+# A topic with no worked example in code: what the offer question rules do, with nothing added in between.
+PLAIN_OFFER = {"kind": "learn", "topic": "slope", "stage": "offer"}
 
 
 @pytest.fixture
@@ -405,6 +407,100 @@ def test_build_prompt_learn_stages(stage: str, expected: str) -> None:
     assert "Ink regions detected on the whiteboard: none." in prompt
 
 
+@pytest.mark.parametrize(
+    ("language", "one", "app", "question"),
+    [
+        ("en", "ONE plain sentence", "the app adds", OFFER_QUESTION),
+        ("es", "UNA oración sencilla", "la app agrega", vc.OFFER_QUESTION_ES),
+    ],
+)
+def test_learn_offer_asks_the_model_for_the_idea_only(language: str, one: str, app: str, question: str) -> None:
+    # The 3B model gets example arithmetic wrong; it says the idea and code adds the worked example.
+    learn = system_prompt("math", "learn", language)
+    assert one in learn and app in learn
+    offer = next(e for e in _few_shot(learn) if question in e["spoken_text"])
+    before_question = offer["spoken_text"].split(question)[0]
+    assert len(re.findall(r"[.!?]", before_question)) == 1, before_question
+    task = vc.learn_task_text({"kind": "learn", "topic": "fractions", "stage": "offer"}, language)
+    assert one in task and question in task
+
+
+FRACTION_OFFER = {"kind": "learn", "topic": "a fraction", "stage": "offer"}
+
+
+def test_learn_offer_keeps_the_idea_and_adds_a_worked_example_from_code() -> None:
+    # The model's own example ("1/3 + 1/3 = 3/4", wrong) is dropped; the code's example follows the idea.
+    model = AvatarAction("A fraction is a part of a whole. For example, 1/3 + 1/3 = 3/4. Easy!", "pointing", 1, 2)
+    action = vc.apply_task_rules(model, "help", FRACTION_OFFER)
+    assert action.spoken_text.startswith("A fraction is a part of a whole. For example, cut a pizza into ")
+    assert "3/4. Easy" not in action.spoken_text and "1/3 + 1/3" not in action.spoken_text
+    assert action.spoken_text.endswith(OFFER_QUESTION) and action.animation_state == "idle"
+
+
+def test_learn_offer_idea_with_numbers_is_replaced() -> None:
+    model = AvatarAction("1/2 + 1/4 = 2/6 is how you add fractions.", "idle", 1, 2)
+    task = {"kind": "learn", "topic": "adding fractions", "stage": "offer"}
+    spoken = vc.apply_task_rules(model, "help", task).spoken_text
+    assert "is how you add fractions" not in spoken
+    assert spoken.startswith("Let's look at adding fractions. For example, ")
+
+
+@pytest.mark.parametrize(
+    ("idea", "language", "topic"),
+    [
+        # the model's own arithmetic in words is still its own example (review: it survived the digit check)
+        ("Adding fractions is like one half plus one third equals two fifths.", "en", "adding fractions"),
+        ("Sumar fracciones es como un medio más un tercio es igual a dos quintos.", "es", "sumar fracciones"),
+        # "e.g." ends a sentence for the splitter: half an idea is no idea
+        ("A fraction is a part of a whole, e.g. a slice of pizza.", "en", "a fraction"),
+    ],
+)
+def test_learn_offer_idea_with_the_models_own_math_is_replaced(idea: str, language: str, topic: str) -> None:
+    task = {"kind": "learn", "topic": topic, "stage": "offer"}
+    spoken = vc.apply_task_rules(AvatarAction(idea, "idle", 1, 2), "help", task, language=language).spoken_text
+    fallback = vc.text_for(language, "learn_idea", topic=topic)
+    assert spoken.startswith(f"{fallback} "), spoken
+    assert "two fifths" not in spoken and "dos quintos" not in spoken and "e.g." not in spoken
+
+
+def test_spanish_fallback_idea_is_spanish() -> None:
+    # A bare topic ("numerador") in the fallback must still read as Spanish, or the reply is asked again for nothing.
+    assert vc.in_language(vc.text_for("es", "learn_idea", topic="numerador"), "es")
+
+
+def test_spanish_learn_offer_gets_a_spanish_worked_example() -> None:
+    model = AvatarAction("Una fracción es una parte de un entero.", "idle", 1, 2)
+    task = {"kind": "learn", "topic": "una fracción", "stage": "offer"}
+    spoken = vc.apply_task_rules(model, "help", task, language="es").spoken_text
+    assert spoken.startswith("Una fracción es una parte de un entero. Por ejemplo, partes una pizza en ")
+    assert spoken.endswith(vc.OFFER_QUESTION_ES)
+
+
+def test_learn_offer_without_a_worked_example_keeps_the_models_idea() -> None:
+    # No code example for the topic: the idea and the offer, never a model-made example.
+    model = AvatarAction("Slope is how steep a line is. For example, rise over run is 3/7.", "idle", 1, 2)
+    spoken = vc.apply_task_rules(model, "help", {"kind": "learn", "topic": "slope", "stage": "offer"}).spoken_text
+    assert spoken == f"Slope is how steep a line is. {OFFER_QUESTION}"
+
+
+def test_salvaged_lesson_offer_keeps_its_worked_example() -> None:
+    # A repeated sentence gets the reply asked again; when the retry repeats it too, salvage drops only the copy.
+    # The worked example's result is the tutor's own example, not the student's answer: it stays.
+    turns = [{"q": "teach me equations", "a": "An equation is like a balance."}]
+    reply = {
+        "spoken_text": "An equation is like a balance. For example, x plus three equals seven. Take three from both "
+        f"sides. So x is four. {OFFER_QUESTION}",
+        "animation_state": "idle",
+        "target_x": 1,
+        "target_y": 2,
+    }
+    task = {"kind": "learn", "topic": "an equation", "stage": "offer"}
+    action, _ = _ask(_math_client(), reply, query="What is an equation?", task=task, recent_turns=turns)
+    assert "balance" not in action.spoken_text
+    assert re.search(r"\bx equals \w+", action.spoken_text), action.spoken_text  # the code example's result
+    assert action.spoken_text.endswith(OFFER_QUESTION)
+
+
 def test_learn_prompt_without_topic() -> None:
     assert "Topic: this math topic" in vc.learn_task_text({"kind": "learn", "topic": "  ", "stage": "offer"})
 
@@ -551,23 +647,27 @@ def test_learn_offer_adds_missing_question_and_idles() -> None:
         "target_y": 9,
     }
     action, _ = _ask(_math_client(), reply, query="I want to learn how to solve fractions", task=LEARN_OFFER)
-    assert action.spoken_text == f"A fraction is part of a whole. {OFFER_QUESTION}"
+    assert action.spoken_text.startswith("A fraction is part of a whole. For example, ")
+    assert action.spoken_text.endswith(OFFER_QUESTION)
     assert action.animation_state == "idle"
 
 
 def test_apply_task_rules_learn() -> None:
     asked = AvatarAction(f"Fractions are parts. {OFFER_QUESTION}", "idle", 1, 2)
-    assert vc.apply_task_rules(asked, "help", LEARN_OFFER) == asked
+    assert vc.apply_task_rules(asked, "help", PLAIN_OFFER) == asked
     lower = AvatarAction("Want me to make one up for you?", "celebrating", 1, 2)
-    assert vc.apply_task_rules(lower, "quiz", LEARN_OFFER) == AvatarAction(lower.spoken_text, "idle", 1, 2)
-    assert vc.apply_task_rules(AvatarAction("...", "idle", 1, 2), "help", LEARN_OFFER).spoken_text == OFFER_QUESTION
+    assert vc.apply_task_rules(lower, "quiz", PLAIN_OFFER) == AvatarAction(lower.spoken_text, "idle", 1, 2)
+    assert vc.apply_task_rules(AvatarAction("...", "idle", 1, 2), "help", PLAIN_OFFER).spoken_text == OFFER_QUESTION
+    # No idea from the model on a topic with a worked example: code still teaches it.
+    blank = vc.apply_task_rules(AvatarAction("...", "idle", 1, 2), "help", LEARN_OFFER).spoken_text
+    assert blank.startswith("Let's look at solving fractions. For example, ") and blank.endswith(OFFER_QUESTION)
     example = AvatarAction("Try one half plus one fourth.", "pointing", 1, 2)
     learn_example = {**LEARN_OFFER, "stage": "example"}
     assert vc.apply_task_rules(example, "help", learn_example) == AvatarAction(example.spoken_text, "idle", 1, 2)
     failed = vc.failed_action("The AI model took too long to answer.", (2, 4))
     assert vc.apply_task_rules(failed, "help", LEARN_OFFER) is failed
     # The model picking "error" is not a failed call: a lesson offer is still idle and still asks the question.
-    chosen = vc.apply_task_rules(AvatarAction("Fractions are parts.", "error", 1, 2), "help", LEARN_OFFER)
+    chosen = vc.apply_task_rules(AvatarAction("Fractions are parts.", "error", 1, 2), "help", PLAIN_OFFER)
     assert chosen == AvatarAction(f"Fractions are parts. {OFFER_QUESTION}", "idle", 1, 2)
 
 
@@ -983,12 +1083,17 @@ def test_reads_problem(spoken: str, problem: str | None, reads: bool) -> None:
     ],
 )
 def test_offer_question_in_other_words_is_not_asked_twice(spoken: str) -> None:
-    action = vc.apply_task_rules(AvatarAction(spoken, "idle", 1, 2), "help", LEARN_OFFER)
+    action = vc.apply_task_rules(AvatarAction(spoken, "idle", 1, 2), "help", PLAIN_OFFER)
     assert action.spoken_text == spoken
+    # With a worked example in between, the model's own-words question still closes the reply, once.
+    idea, question = spoken.split(". ", 1)
+    worked = vc.apply_task_rules(AvatarAction(spoken, "idle", 1, 2), "help", LEARN_OFFER).spoken_text
+    assert worked.startswith(f"{idea}. For example, ") and worked.endswith(question)
+    assert OFFER_QUESTION not in worked
 
 
 def test_offer_question_replaces_another_closing_question() -> None:
-    action = vc.apply_task_rules(AvatarAction("Fractions are parts. Ready?", "idle", 1, 2), "help", LEARN_OFFER)
+    action = vc.apply_task_rules(AvatarAction("Fractions are parts. Ready?", "idle", 1, 2), "help", PLAIN_OFFER)
     assert action.spoken_text == f"Fractions are parts. {OFFER_QUESTION}"
 
 
@@ -1370,7 +1475,7 @@ def test_spanish_quiz_dictation_is_spanish_even_when_the_model_answers_in_englis
 
 
 def test_spanish_learn_offer_asks_the_spanish_question() -> None:
-    offer = {"kind": "learn", "topic": "fracciones", "stage": "offer"}
+    offer = {"kind": "learn", "topic": "la pendiente", "stage": "offer"}
     intro = AvatarAction("Una fracción es una parte de un todo. ¿Quieres saber más?", "pointing", 1, 2)
     asked = vc.apply_task_rules(intro, "help", offer, language="es")
     assert asked.spoken_text == f"Una fracción es una parte de un todo. {vc.OFFER_QUESTION_ES}"

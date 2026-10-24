@@ -27,6 +27,7 @@ from biobench_sar.schemas import (
     error_action,
     parse_vlm_response,
 )
+from biobench_sar.worked_examples import worked_example
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "dictation": "Problem {number} of {total}. {problem}. Write your answer on the board.",
         "try_this": "Try this one. {problem}. Write it down and solve it.",
         "learn_offer": "Let's learn about {topic}. {offer}",
+        "learn_idea": "Let's look at {topic}.",
         "learn_example": "Let's start easy. {problem}. Write it on the board and try the first step.",
         "learn_own": "Great! Write your exercise on the board, then ask me for help.",
         "write_problem": "Write the problem on the board, then ask me for help with the first step.",
@@ -92,6 +94,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "dictation": "Problema {number} de {total}. {problem}. Escribe tu respuesta en el pizarrón.",
         "try_this": "Prueba este. {problem}. Escríbelo y resuélvelo.",
         "learn_offer": "Vamos a aprender sobre {topic}. {offer}",
+        "learn_idea": "Veamos el tema de {topic} con un ejemplo.",
         "learn_example": "Empecemos con uno fácil. {problem}. Escríbelo en el pizarrón e intenta el primer paso.",
         "learn_own": "¡Muy bien! Escribe tu ejercicio en el pizarrón y luego pídeme ayuda.",
         "write_problem": "Escribe el problema en el pizarrón y luego pídeme ayuda con el primer paso.",
@@ -236,17 +239,17 @@ Quiz stage: check. Problem 1 of 5: x + 4 = 10. Board: x + 4 = 10, then x = 6
 
 MATH_LEARN = f"""TASK: the student wants to learn a topic. The board may be empty. The message gives the topic \
 and the stage. Use plain words for a middle or high school student.
-- Stage offer: one or two plain sentences that introduce the idea of the topic, then ask exactly: \
-"{OFFER_QUESTION}" Do not solve anything yet.
+- Stage offer: say in ONE plain sentence what the idea is, with no numbers and no example: the app adds a worked \
+example, solved step by step, after your sentence. Then ask exactly: "{OFFER_QUESTION}"
 - Stage example: dictate ONE easy starter problem on the topic in words, then invite the student to write it on the \
 board and try the first step. Do not solve it.
 - Stage own: ask the student to write their exercise on the board and then ask you for help.
 - Always "idle", target = screen center.
 
 Examples (JSON only, 1920x1080 screen):
-Learn stage: offer. Topic: equations. Query: "Teach me equations."
-{{"spoken_text": "An equation is like a balance: both sides are equal. We solve it by doing the same thing to both \
-sides until the letter is alone. {OFFER_QUESTION}", "animation_state": "idle", "target_x": 960, "target_y": 540}}
+Learn stage: offer. Topic: a fraction. Query: "What is a fraction?"
+{{"spoken_text": "A fraction is a part of a whole, like one slice of a pizza cut into equal slices. \
+{OFFER_QUESTION}", "animation_state": "idle", "target_x": 960, "target_y": 540}}
 Learn stage: example. Topic: adding fractions. Query: "Make one up."
 {{"spoken_text": "Let's start easy. One fourth plus two fourths. Write it on the board and try the first step.", \
 "animation_state": "idle", "target_x": 960, "target_y": 540}}
@@ -328,18 +331,17 @@ Etapa del quiz: revisar. Problema 1 de 5: x + 4 = 10. Pizarrón: x + 4 = 10, lue
 
 MATH_LEARN_ES = f"""TAREA: el estudiante quiere aprender un tema. El pizarrón puede estar vacío. El mensaje da el tema y la \
 etapa. Usa palabras sencillas para un estudiante de secundaria o preparatoria.
-- Etapa ofrecer: una o dos oraciones sencillas que presenten la idea del tema y luego pregunta exactamente: \
-"{OFFER_QUESTION_ES}" Todavía no resuelvas nada.
+- Etapa ofrecer: di en UNA oración sencilla qué es la idea, sin números ni ejemplo: la app agrega después de tu \
+oración un ejemplo resuelto paso a paso. Luego pregunta exactamente: "{OFFER_QUESTION_ES}"
 - Etapa ejemplo: dicta con palabras UN problema fácil para empezar sobre el tema e invita al estudiante a escribirlo \
 en el pizarrón e intentar el primer paso. No lo resuelvas.
 - Etapa propio: pídele al estudiante que escriba su ejercicio en el pizarrón y que luego te pida ayuda.
 - Siempre "idle", target = centro de la pantalla.
 
 Ejemplos (solo JSON, pantalla de 1280x800):
-Etapa de aprender: ofrecer. Tema: ecuaciones. Mensaje: "Enséñame ecuaciones."
-{{"spoken_text": "Una ecuación es como una balanza: los dos lados valen lo mismo. La resolvemos haciendo lo mismo en \
-ambos lados hasta que la letra quede sola. {OFFER_QUESTION_ES}", "animation_state": "idle", "target_x": 640, \
-"target_y": 400}}
+Etapa de aprender: ofrecer. Tema: una fracción. Mensaje: "¿Qué es una fracción?"
+{{"spoken_text": "Una fracción es una parte de un entero, como una rebanada de una pizza partida en partes \
+iguales. {OFFER_QUESTION_ES}", "animation_state": "idle", "target_x": 640, "target_y": 400}}
 Etapa de aprender: ejemplo. Tema: suma de fracciones. Mensaje: "Invéntame uno."
 {{"spoken_text": "Empecemos con uno fácil. Un cuarto más dos cuartos. Escríbelo en el pizarrón e intenta el primer \
 paso.", "animation_state": "idle", "target_x": 640, "target_y": 400}}
@@ -619,7 +621,8 @@ def learn_task_text(task: Mapping[str, Any] | None, language: str = "en") -> str
     if normalize_reply_language(language) == "es":
         topic = _clean((task or {}).get("topic")) or "este tema de matemáticas"
         todo = {
-            "offer": f'Presenta la idea de {topic} en una o dos oraciones sencillas y luego pregunta: "{OFFER_QUESTION_ES}"',
+            "offer": f"Di en UNA oración sencilla qué es {topic}, sin números ni ejemplo (la app agrega un ejemplo "
+            f'resuelto), y luego pregunta: "{OFFER_QUESTION_ES}"',
             "example": f"El estudiante quiere que inventes uno: dicta con palabras UN problema fácil para empezar sobre "
             f"{topic} e invítalo a escribirlo e intentar el primer paso. No lo resuelvas.",
             "own": "El estudiante tiene su propio ejercicio: pídele que lo escriba en el pizarrón y que luego te pida "
@@ -628,7 +631,8 @@ def learn_task_text(task: Mapping[str, Any] | None, language: str = "en") -> str
         return f"Etapa de aprender: {LEARN_STAGE_NAMES_ES[stage]}. Tema: {topic}\n{todo}"
     topic = _clean((task or {}).get("topic")) or "this math topic"
     todo = {
-        "offer": f'Introduce the idea of {topic} in one or two plain sentences, then ask: "{OFFER_QUESTION}"',
+        "offer": f"Say in ONE plain sentence what {topic} is, with no numbers and no example (the app adds a worked "
+        f'example), then ask: "{OFFER_QUESTION}"',
         "example": f"The student wants you to make one up: dictate ONE easy starter problem on {topic} in words "
         "and invite them to write it and try the first step. Do not solve it.",
         "own": "The student has their own exercise: ask them to write it on the board and then ask you for help.",
@@ -1127,12 +1131,36 @@ def apply_task_rules(
             return replace(action, animation_state="pointing")
         return _quiz_dictation(action, t, query, language)
     if kind == "learn" and learn_stage(t) == "offer":
-        action = replace(action, spoken_text=_with_offer_question(action.spoken_text, language))
+        spoken = _worked_offer(action.spoken_text, t, language)
+        action = replace(action, spoken_text=_with_offer_question(spoken, language))
     if kind == "practice" or (kind == "learn" and learn_stage(t) == "example"):
         # The student solves it, not the voice.
         action = replace(action, spoken_text=unsolved(action.spoken_text, language))
     # Dictating or offering is not about one drawing; at temperature 0.6 the model still picks "pointing"/"walking".
     return replace(action, animation_state="idle") if kind in ("practice", "learn") else action
+
+
+def _worked_offer(spoken: str, task: Mapping[str, Any], language: str) -> str:
+    """The model's one-sentence idea, then a worked example made and solved in code: a 3B model's own example
+    arithmetic is often wrong. An idea with numbers in it is the model's example in disguise, so code says it."""
+    topic = _clean(task.get("topic")) or text_for(language, "this_topic")
+    sentences = [s for s in _raw_sentences(spoken) if s.strip(" .…")]
+    idea = ""
+    for sentence in sentences:
+        if not sentence.endswith("?"):
+            own_math = re.search(r"\d|example|ejemplo|\b(?:e\.g|i\.e)\.$", sentence, re.IGNORECASE) or says_equation(
+                sentence, language
+            )
+            if not own_math and not dictates_problem(sentence, None, language):
+                idea = sentence
+            break
+    # The model's closing question stays last: _with_offer_question keeps it when it asks the offer in its own words.
+    question = sentences[-1] if sentences and sentences[-1].endswith("?") else ""
+    example = worked_example(topic, language)
+    if example:
+        idea = idea or text_for(language, "learn_idea", topic=topic)
+    parts = [part for part in (idea, example, question) if part]
+    return " ".join(parts) if parts else spoken
 
 
 def _starter(topic: str | None) -> str:
@@ -1246,7 +1274,9 @@ def _salvage(
     language: str = "en",
 ) -> AvatarAction:
     """Keep the sentences that are fine (not an echo, a copy, the answer or the wrong language); otherwise use the
-    task's fallback. Works on the text before mathspeak, so what is kept keeps its notation on screen."""
+    task's fallback. Works on the text before mathspeak, so what is kept keeps its notation on screen.
+
+    A lesson offer's result is the tutor's own worked example, not the student's answer, so it is kept."""
     text = getattr(action, "display_text", None) or action.spoken_text
     spoken = action.spoken_text
     if kind == "practice" and board:
@@ -1265,11 +1295,12 @@ def _salvage(
             if e
         )
 
+    own_example = kind == "learn" and learn_stage(task) == "offer"
     kept = [
         s
         for s in _raw_sentences(text)
         if not _is_echo(s, query, language)
-        and not reveals_value(s, language)
+        and (own_example or not reveals_value(s, language))
         and not copied(s)
         and in_language(s, language)
     ]
