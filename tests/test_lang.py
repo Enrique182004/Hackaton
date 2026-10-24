@@ -357,6 +357,17 @@ def test_word_lists_do_not_overlap() -> None:
         ("ya no puedo. Termina el quiz.", "help"),
         ("ya no puedo. Para el quiz.", "help"),
         ("no sé, para el quiz ya me cansé", "help"),
+        # the reason first with no comma: kids and Whisper drop it
+        ("ya me cansé termina el quiz", "help"),
+        ("ya me canse termina el quiz", "help"),
+        ("ya no puedo termina el quiz", "help"),
+        ("ya no quiero termina el examen", "help"),
+        ("ya me aburrí para el quiz", "help"),
+        ("ya me canse terminale al quiz", "help"),
+        ("profe ya me cansé ya terminale al quiz", "help"),
+        ("profe, ya me cansé termina el quiz", "help"),
+        ("ya no puedo más termina el quiz", "help"),
+        ("ya me harté párale al quiz", "help"),
         # polite or firm endings, and a time word followed by the student's next clause
         ("termina el quiz si se puede", "help"),
         ("termina el quiz si puedes", "help"),
@@ -430,6 +441,14 @@ def test_word_lists_do_not_overlap() -> None:
         ("claro vamos a practicar", "practice"),
         ("primero vamos a practicar", "practice"),
         ("mira, ¿hay otro igual?", "practice"),
+        # "usted", as a student asks the teacher
+        ("¿me da otro igual?", "practice"),
+        ("me da otro igual porfa", "practice"),
+        ("¿nos da otro igual?", "practice"),
+        ("¿me da otro ejercicio parecido?", "practice"),
+        ("profe, ¿me da otro problema así?", "practice"),
+        ("maestra me da otro ejercicio parecido", "practice"),
+        ("¿me da otro parecido, maestra?", "practice"),
         ("practiquemos luego luego", "practice"),
         # "luego" before an order is "then", not "later"
         ("luego dame otro ejercicio", "practice"),
@@ -455,6 +474,9 @@ def test_word_lists_do_not_overlap() -> None:
         ("hazme un quiz de lo que vamos a ver mañana", "quiz"),
         ("hazme un quiz para el examen de mañana", "quiz"),
         ("tengo examen mañana hazme un quiz", "quiz"),
+        ("mañana tengo examen hazme un quiz", "quiz"),
+        ("el examen es mañana hazme un quiz", "quiz"),
+        ("pero mañana no, hazme un quiz", "quiz"),
         ("hazme un quiz luego", "quiz"),
         ("hazme un quiz después", "quiz"),
         ("quiz de repaso para mañana", "quiz"),
@@ -696,7 +718,7 @@ def test_detect_mode_es(text: str, expected: str) -> None:
         "otra igual a la cuarta parte",
         "otro igual a los dos",
         "¿hay otro así en la hoja?",
-        # put off: only a word before the request is read ("mañana" only opening its clause)
+        # put off: only a word before the request is read, anywhere in its clause
         "mañana vamos a practicar",
         "en la clase vamos a practicar fracciones",
         "si vamos a practicar 2 horas diarias, ¿cuántas horas son en una semana?",
@@ -705,6 +727,23 @@ def test_detect_mode_es(text: str, expected: str) -> None:
         "mañana hazme un quiz",
         "ok, mañana hazme un quiz",
         "después hazme un quiz",
+        "pero mañana hazme un quiz",
+        "pero mañana me haces un quiz",
+        "bueno pero mañana hazme un quiz",
+        "y mañana hazme un quiz",
+        "pero pasado mañana me haces un quiz",
+        "tal vez mañana me haces un quiz",
+        "si quieres mañana me haces un quiz",
+        "o sea mañana me haces un quiz",
+        "igual mañana me haces un quiz",
+        "mañana en la mañana hazme un quiz",
+        "en la mañana hazme un quiz",
+        "mañana temprano hazme un quiz",
+        "mañana en la tarde me haces un quiz",
+        "mañana antes del examen hazme un quiz",
+        "pero mañana practiquemos",
+        "mañana dame otro igual",
+        "luego en la tarde me haces un quiz",
         # the worksheet or a result: "hay otro así" asks only as a question ("¿hay otro así?")
         "aquí hay otro así",
         "mira hay otro igual",
@@ -714,6 +753,8 @@ def test_detect_mode_es(text: str, expected: str) -> None:
         "queda otro igual",
         "me queda otra igual a la de arriba",
         "pongo otro igual abajo",
+        "eso da otro igual",
+        "que da otro igual",
         # a condition says when to stop, not to stop now
         "si fallo, termina el quiz",
         "cuando acabe, termina el quiz",
@@ -721,6 +762,31 @@ def test_detect_mode_es(text: str, expected: str) -> None:
         "en cuanto acabe, termina el quiz",
         "si fallo entonces termina el quiz",
         "¿y entonces termina el quiz?",
+        "y si fallo, termina el quiz",
+        "pero si fallo, termina el quiz",
+        "oye y si fallo, termina el quiz",
+        "pero en cuanto acabe, termina el quiz",
+        "¿y si fallo, termina el quiz?",
+        "¿y cuando acabe, termina el quiz?",
+        "¿qué pasa si me equivoco, termina el quiz?",
+        "¿Y si contesto mal? ¿Termina el quiz?",
+        # a later "termina el quiz" in a question is "the quiz ends"
+        "falta una y ya termina el quiz?",
+        "¿esta es la última y ya termina el quiz?",
+        "me falta una y ya termina el examen verdad?",
+        "es la ultima y ya termina el quiz o no",
+        "falta una, ¿y ya termina el quiz?",
+        "oye pero termina el quiz?",
+        "contesto esta entonces termina el quiz?",
+        "ya acabé, ¿termina el quiz?",
+        "¿a qué hora entonces termina el quiz?",
+        "ya me cansé termina el quiz?",
+        # after a bare yes, "para el examen" answers a question; "claro, termina el quiz" may agree that it ends
+        "sí, para el examen porfa",
+        "Sí para el examen porfa",
+        "sí, para el quiz por favor",
+        "sí, para el examen ya",
+        "claro, termina el quiz",
         # a bare "para el quiz" after another clause or a bare "no" is "for the quiz"
         "quiero estudiar, para el examen",
         "tengo que estudiar, para el quiz",
@@ -786,6 +852,22 @@ def test_detect_mode_es_ignores(text: str) -> None:
         ("no, para el examen", False),
         ("no para el quiz", False),
         ("termina el quiz luego", False),
+        ("ya me cansé termina el quiz", True),
+        ("ya me aburri para el quiz", True),
+        ("ya me cansé de estudiar para el examen", False),
+        ("ya me cansé termina el quiz mañana", False),
+        ("¿termina el quiz?", True),
+        ("sí, termina el quiz", True),
+        ("no, para el quiz porfa", True),
+        ("sí, para el examen porfa", False),
+        ("sí, para el quiz por favor", False),
+        ("falta una y ya termina el quiz?", False),
+        ("me falta una y ya termina el examen verdad?", False),
+        ("¿y si fallo, termina el quiz?", False),
+        ("y si fallo, termina el quiz", False),
+        ("ya me cansé, termina el quiz?", False),
+        # by design: a plain statement is read as a stop; the server confirms before ending the quiz
+        ("falta una y ya termina el quiz", True),
         # "no le sigo" may be "I don't follow you"
         ("no le sigo", False),
         # by design: it may be asking how to finish
@@ -1047,6 +1129,10 @@ def _growth(make: Callable[[int], Callable[[], object]], size: int, factor: int 
     return _best_of_three(make(size * factor)) / small
 
 
+def _stop_unasked(text: str) -> bool:
+    return lang._opens_with_stop(text, asked=False)
+
+
 # Each input is rejected at every match, so every lookback runs.
 @pytest.mark.parametrize(
     ("check", "unit", "size"),
@@ -1064,8 +1150,16 @@ def _growth(make: Callable[[int], Callable[[], object]], size: int, factor: int 
             500,
             id="statement",
         ),
-        pytest.param(lang._opens_with_stop, "ya me canse , termina el quiz a las tres , ", 1000, id="clauses"),
-        pytest.param(lang._opens_with_stop, "ya me canse pero para el examen de manana ", 1000, id="conjunctions"),
+        pytest.param(
+            lambda text: lang._requested(lang._QUIZ_ES, text),
+            "pero manana en la tarde hazme un quiz ",
+            1000,
+            id="later",
+        ),
+        pytest.param(_stop_unasked, "ya me canse , termina el quiz a las tres , ", 1000, id="clauses"),
+        pytest.param(_stop_unasked, "ya me canse pero para el examen de manana ", 1000, id="conjunctions"),
+        pytest.param(_stop_unasked, "ya me canse termina el quiz a las tres , ", 1000, id="reason-first"),
+        pytest.param(_stop_unasked, "ya ya me canse ya ya termina el quiz a las tres , ", 1000, id="reason-fillers"),
         pytest.param(lang._stuck, "no estoy atorado ", 2000, id="stuck"),
         pytest.param(lang._offered, "no lo hago yo ", 2000, id="offered"),
     ],
