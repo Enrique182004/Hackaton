@@ -160,7 +160,10 @@ Open `http://localhost:5050/dashboard` on your laptop. It has four tabs:
 
 ## Configuration
 
-Everything is an environment variable (see `biobench_sar/config.py`). The ones you are most likely to change:
+Everything is an environment variable (see `biobench_sar/config.py`). They can also go in a `sar.env` file in
+the repo root (copy `sar.env.example`; `SAR_ENV_FILE` points at another file), which `python -m biobench_sar`
+loads at startup; a real environment variable wins over the file. Room and hardware settings:
+[docs/HARDWARE_SETUP.md](docs/HARDWARE_SETUP.md). The ones you are most likely to change:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
