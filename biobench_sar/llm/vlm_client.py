@@ -1320,8 +1320,9 @@ RETRY_NOTES = {
         "line of the student's own writing into board_answer, exactly as written; if the answer takes more than one "
         'line (both roots, or x and y), copy each of them, joined with " ; ".',
         "check_line": "Your last board_answer was the student's check of the answer, not the answer. Look at the photo "
-        "again and copy the student's answer line too (the letter and its value, above the check), exactly as written, "
-        'joined with " ; ".',
+        "again and copy every answer line the student wrote above the check (both roots, or x and y, when there are "
+        'two), exactly as written, joined with " ; ". If there is no answer line above the check, copy the check line '
+        "only: never write an answer yourself.",
         "wrong_answer": 'The student\'s answer "{answer}" is WRONG (it was checked). Do not praise it. Give ONE short hint '
         "about the next step of this problem and ask them to try again. NEVER say the answer or the value of the letter.",
         "incomplete": "It is only part of the answer: tell them there is more to find.",
@@ -1341,8 +1342,9 @@ RETRY_NOTES = {
         "board_answer la última línea de lo que escribió el estudiante, tal como está; si la respuesta ocupa más de "
         'una línea (las dos raíces, o la x y la y), copia cada una, unidas con " ; ".',
         "check_line": "Tu board_answer anterior era la comprobación del estudiante, no su respuesta. Mira otra vez la "
-        "foto y copia también la línea de su respuesta (la letra y su valor, arriba de la comprobación), tal como está, "
-        'unidas con " ; ".',
+        "foto y copia cada línea de respuesta que el estudiante escribió arriba de la comprobación (las dos raíces, o la "
+        'x y la y, si son dos), tal como está, unidas con " ; ". Si no hay ninguna línea de respuesta arriba de la '
+        "comprobación, copia solo la comprobación: nunca escribas una respuesta tú.",
         "wrong_answer": 'La respuesta del estudiante "{answer}" está MAL (ya se revisó). No la felicites. Da UNA pista '
         "corta sobre el siguiente paso de este problema y pídele que lo intente otra vez. NUNCA digas la respuesta ni "
         "el valor de la letra.",

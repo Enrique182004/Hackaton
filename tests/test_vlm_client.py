@@ -1066,6 +1066,20 @@ def test_a_check_that_read_only_the_check_line_asks_again_for_the_answer_line(
     assert action.verdict == "correct"  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_the_check_line_note_asks_for_every_answer_line_and_never_for_one_made_up(language: str) -> None:
+    # Live, a board with only the problem and its check was re-read as "3(5) + 5 = 20 ; x = 5" and given the point:
+    # the note asked for "the answer line (the letter and its value)", which the model then wrote itself.
+    note = vc.RETRY_NOTES[language]["check_line"]
+    every, none, invent = {
+        "en": ("every answer line", "If there is no answer line above the check, copy the check line only", "never"),
+        "es": ("cada línea de respuesta", "Si no hay ninguna línea de respuesta", "nunca escribas una respuesta"),
+    }[language]
+    assert every in note and none in note and invent in note
+    assert "the letter and its value" not in note and "la letra y su valor" not in note
+    assert '" ; "' in note
+
+
 def test_a_check_still_reading_only_the_check_line_is_not_graded() -> None:
     c = _math_client()
     replies = _check_replies("3(5) + 5 = 20", "15 + 5 = 20", spoken="Correct, great job!")
