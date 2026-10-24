@@ -225,8 +225,8 @@ _NOT_A_COMMAND = re.compile(
 # "¿por qué no me haces un quiz?" suggests one; "por que no quiero hacer un quiz" (no accent: "porque") refuses it.
 _SUGGESTION_ES = re.compile(r"\bpor\s+que\s+no\s+$")
 _WANT_ES = re.compile(r"(?:quiero|queremos|quisiera|queria|necesito|ocupo|puedo|podemos|debo|me\s+gusta)\b")
-# "después me haces un quiz" puts it off: not a mode change now.
-_LATER_ES = re.compile(r"\b(?:despues|luego|al\s+rato|mas\s+tarde|otro\s+dia|manana)\s+$")
+# "después me haces un quiz" puts it off: not a mode change now. "luego luego" is Mexican for "right away".
+_LATER_ES = re.compile(r"\b(?:despues|(?<!\bluego )luego|al\s+rato|mas\s+tarde|otro\s+dia)\s+$")
 # Longer than any _NOT_A_COMMAND prefix, so looking back no further than this gives the same answer, in linear time.
 _LOOKBACK = 48
 
@@ -295,11 +295,14 @@ _NOT_NOW_ES = (
     rf"\s+(?:,\s+)?(?:a\s+las?|a\s+la\s+una|en\s+\w+\s+minutos?|cuando|hasta|de\s+{_WHEN_ES}|"
     rf"(?:el|la|este|esta|en\s+la)\s+{_DAY_ES}|{_DAY_ES})\b"
 )
-# Why a student quits, said right after a bare "para el quiz": "ya me cansé", "que ya no quiero", "y ya".
+# Why a student quits, said right after a bare "para el quiz": "ya me cansé", "que ya no quiero", "ya entendí".
+# Without "ya", "para el examen no quiero sacar seis" / "terminé el tema 3" / "me voy a preparar" are "for the exam".
 _QUIT_REASON_ES = (
-    r"(?:(?:porque|que|pues|y|es\s+que)\s+)?(?:ya\s+)?(?:no\s+(?:quiero|queremos|aguanto|puedo\s+mas|me\s+gusta)|"
-    r"me\s+(?:canse|aburri|harte|fastidie|dio\s+sueno|duele)|(?:estoy|ando)\s+(?:muy\s+)?(?:cansad|aburrid|hart)[oa]|"
-    r"tengo\s+(?:sueno|que\s+irme)|estuvo|entendi|le\s+entendi|basta|fue\s+suficiente|termine|acabe|me\s+voy)\b"
+    r"(?:(?:porque|que|pues|y|es\s+que)\s+)?(?:ya\s+(?:no\s+(?:quiero|queremos|aguanto|puedo)|estuvo|entendi|"
+    r"le\s+entendi|termine|acabe)|no\s+(?:quiero|queremos)(?=\s*(?:,|$)|\s+(?:seguir|continuar|mas)\b)|"
+    r"no\s+aguanto|no\s+puedo\s+mas|(?:ya\s+)?me\s+(?:canse|aburri|harte|fastidie|dio\s+sueno)|"
+    r"(?:ya\s+)?(?:estoy|ando)\s+(?:muy\s+)?(?:cansad|aburrid|hart)[oa]|tengo\s+sueno|"
+    r"(?:ya\s+)?me\s+voy(?=\s*(?:,|$))|basta|(?:ya\s+)?fue\s+suficiente)\b"
 )
 # "para" / "termina" / "acaba" are also "for" / "it ends": only commands when they open the sentence. A bare
 # "para el quiz" may then only be followed by fillers or a reason to quit, since "para el examen, ¿qué temas
@@ -427,7 +430,8 @@ _HELP_ES = _compile(
     # "no sé hacerlo" / "no sé resolverlo"; "no se hace así" (it isn't done that way) has no infinitive.
     r"\bno\s+se\s+(?:hacer|resolver|despejar|sacar)\w*",
     # "¿cómo se hace?" on its own; "¿cómo se hace una gráfica?" is a lesson request.
-    r"\bcomo\s+se\s+hace(?:\s+(?:esto|eso|este|esta|ese|esa|aqui))?(?=\s*(?:,|$))",
+    # Not "¡así es como se hace!", which is the student showing off.
+    r"(?<!\bes )(?<!\basi )\bcomo\s+se\s+hace(?:\s+(?:esto|eso|este|esta|ese|esa|aqui))?(?=\s*(?:,|$))",
     r"\bme\s+(?:atore|atasque|trabe|perdi|confundi|revolvi|bloque\w*)\b",
     r"\b(?:estoy|toy|ando|me\s+quede|quede)\s+en\s+blanco\b",
     r"\b(?:h?echame|h?echanos|me\s+h?echas|nos\s+h?echas)\s+(?:la|una)\s+mano(?:ita)?\b",
@@ -707,7 +711,8 @@ _OFFER_OWN_ES = _compile(
     r"\bmis?\s+propi[oa]s?\b",
     r"\bde\s+(?:la|mi)\s+tarea\b",
     r"\bde\s+mi\s+(?:libro|cuaderno|guia|hoja)\b",
-    r"\byo\s+te\s+(?:doy|digo|dicto|paso|pongo|escribo|invento)\s+(?:uno|una)\b",
+    # Not "yo te digo una cosa".
+    rf"\byo\s+te\s+(?:doy|digo|dicto|paso|pongo|escribo|invento)\s+{_ONE_OWN}",
     r"\bya\s+(?:lo|la)\s+(?:escribi|puse|anote|dibuje)\b",
     r"\bahi\s+te\s+va\b",
 )
@@ -743,7 +748,9 @@ _OFFER_GENERATE_ALONE_ES = re.compile(
 # "uno fácil" / "sí, uno de fracciones": the kind of exercise to invent, as the whole clause.
 _OFFER_ONE_ALONE_ES = re.compile(
     rf"(?:(?:si|sip|simon|ok|okay|va|sale|dale|bueno|pues|mejor)\s+)*(?:uno|una|otro|otra)(?:\s+(?:{_HARDER}|facil|"
-    r"dificil|facilito|facilita|nuevo|nueva|rapido|sencillo|sencilla|cortito|cortita|de\s+\w+))+"
+    r"dificil|facilito|facilita|nuevo|nueva|rapido|sencillo|sencilla|cortito|cortita|"
+    # "uno de tarea" / "uno de mi libro" may be the student's own.
+    r"de\s+(?!(?:tarea|mi|mis|la|las|los|el)\b)\w+))+"
     r"(?:\s+(?:porfa|porfis|plis|por\s+favor|gracias))*"
 )
 
