@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import logging
 import sys
-import threading
-import uuid
 import time
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -15,18 +14,13 @@ from flask import Flask, jsonify, render_template, request, send_from_directory
 from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
 
+from biobench_sar.assistant import Assistant
 from biobench_sar.config import Settings
-from biobench_sar.schemas import error_action
 
 log = logging.getLogger("biobench_sar.app")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-WORDS_PER_SECOND = 2.5
-
-
-def estimate_speech_seconds(text: str) -> float:
-    return len(text.split()) / WORDS_PER_SECOND + 1.0
-
 CALIBRATION_SETTLE_SECONDS = 1.5
+MAX_SEARCH_RESULTS = 10
 
 
 @dataclass
@@ -93,79 +87,11 @@ def create_app(
     # None = same-origin only: other pages open in the demo browser can't drive the avatar.
     socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=None)
 
-    state: dict[str, Any] = {"value": "idle", "calibrated": False}
-    busy = threading.Lock()
-
-    def emit_status(value: str, detail: str | None = None) -> None:
-        state["value"] = value
-        payload: dict[str, Any] = {"state": value}
-        if detail:
-            payload["detail"] = detail
-        socketio.emit("status", payload)
-
-    speaking_until = {"t": 0.0}
-
-    def should_listen() -> bool:
-        # The browser keeps playing the answer after the pipeline finishes, so busy alone isn't enough.
-        return not busy.locked() and time.monotonic() >= speaking_until["t"]
-
-    def run_pipeline(text: str) -> None:
-        try:
-            socketio.emit("transcript", {"text": text})
-            emit_status("thinking")
-            from biobench_sar.core.vision_loop import encode_jpeg, find_ink_regions
-
-            warped = svc.vision.latest_warped()
-            have_frame = warped is not None
-            ink = find_ink_regions(warped) if have_frame else []
-            try:
-                context = svc.store.query(text, settings.rag_top_k)
-            except Exception:
-                log.exception("RAG query failed; continuing without context")
-                context = []
-            image = encode_jpeg(warped) if have_frame else None
-            action = svc.vlm.evaluate(text, image, context, ink, settings.projector_size)
-            socketio.emit("avatar_update", action.to_dict())
-            emit_status("speaking")
-            url_name = svc.tts.speak(action.spoken_text)
-            socketio.emit(
-                "speak",
-                {"url": f"/tts/{url_name}" if url_name else None, "text": action.spoken_text},
-            )
-            speaking_until["t"] = time.monotonic() + estimate_speech_seconds(action.spoken_text)
-            emit_status("idle")
-        except Exception:
-            log.exception("query pipeline failed")
-            socketio.emit(
-                "avatar_update",
-                error_action("Sorry, something went wrong. Please try again.", settings.projector_size).to_dict(),
-            )
-            emit_status("idle")
-        finally:
-            busy.release()
-
-    def handle_query(text: str) -> None:
-        text = (text or "").strip()
-        if not text:
-            return
-        if not busy.acquire(blocking=False):
-            emit_status(state["value"], "busy")
-            return
-        try:
-            socketio.start_background_task(run_pipeline, text)
-        except Exception:
-            busy.release()
-            raise
-
-    def on_state(value: str) -> None:
-        # While the pipeline is running, it owns the state machine.
-        if value == "idle" and busy.locked():
-            return
-        emit_status(value)
-
-    svc = services if services is not None else build_services(settings, handle_query, on_state, should_listen)
+    assistant = Assistant(settings, socketio.emit, socketio.start_background_task)
+    svc = services or build_services(settings, assistant.handle_query, assistant.on_state, assistant.should_listen)
+    assistant.services = svc
     if services is None:
-        state["calibrated"] = _load_initial_calibration(settings, svc)
+        assistant.calibrated = _load_initial_calibration(settings)
 
     # ---- pages -------------------------------------------------------------
     def page(name: str) -> str:
@@ -178,6 +104,7 @@ def create_app(
         return page("index.html")
 
     @app.get("/precharge")
+    @app.get("/dashboard")
     def precharge() -> str:
         return page("precharge.html")
 
@@ -217,19 +144,85 @@ def create_app(
             doc_chunks = svc.store.count()
         except Exception:
             doc_chunks = 0
-        calibrated = bool(state.get("calibrated", False))
         return jsonify(
             {
-                "fps": float(getattr(svc.vision, "fps", 0.0)),
-                "camera_running": bool(getattr(svc.vision, "is_running", False)) and svc.vision.latest_frame() is not None,
-                "calibrated": calibrated,
+                "fps": round(float(getattr(svc.vision, "fps", 0.0)), 1),
+                "camera_running": bool(getattr(svc.vision, "is_running", False))
+                and svc.vision.latest_frame() is not None,
+                "calibrated": assistant.calibrated,
                 "doc_chunks": doc_chunks,
                 "vlm_backend": settings.vlm_backend,
                 "vlm_model": settings.vlm_model,
                 "audio_available": bool(getattr(svc.audio, "available", False)),
-                "state": state["value"],
+                "tts_backend": settings.tts_backend,
+                "listen_mode": settings.listen_mode,
+                "state": assistant.state,
+                "busy": assistant.busy,
+                "last_latency_s": assistant.last_latency_s,
+                "uptime_s": round(time.monotonic() - assistant.started_at),
             }
         )
+
+    @app.get("/api/config")
+    def api_config() -> Any:
+        return jsonify(
+            {
+                "camera_index": settings.camera_index,
+                "camera_size": [settings.camera_width, settings.camera_height],
+                "projector_size": list(settings.projector_size),
+                "checkerboard": [settings.checker_cols, settings.checker_rows],
+                "vlm_backend": settings.vlm_backend,
+                "vlm_model": settings.vlm_model,
+                "vlm_base_url": settings.vlm_base_url,
+                "embed_model": settings.embed_model,
+                "rag_top_k": settings.rag_top_k,
+                "whisper_model": settings.whisper_model,
+                "listen_mode": settings.listen_mode,
+                "wake_word": settings.wake_word,
+                "tts_backend": settings.tts_backend,
+                "tts_voice": settings.tts_voice,
+            }
+        )
+
+    @app.get("/api/history")
+    def api_history() -> Any:
+        return jsonify({"interactions": assistant.history()})
+
+    @app.get("/api/documents")
+    def api_documents() -> Any:
+        documents = svc.store.list_sources()
+        return jsonify({"documents": documents, "total_chunks": sum(d["chunks"] for d in documents)})
+
+    @app.delete("/api/documents/<path:source>")
+    def api_delete_document(source: str) -> Any:
+        deleted = svc.store.delete_source(source)
+        if not deleted:
+            return jsonify({"deleted": 0, "error": "no such document"}), 404
+        return jsonify({"deleted": deleted})
+
+    @app.get("/api/search")
+    def api_search() -> Any:
+        text = (request.args.get("q") or "").strip()
+        try:
+            k = max(1, min(int(request.args.get("k", settings.rag_top_k)), MAX_SEARCH_RESULTS))
+        except ValueError:
+            k = settings.rag_top_k
+        if not text:
+            return jsonify({"results": []})
+        results = svc.store.query(text, k)
+        return jsonify(
+            {"results": [{"text": c.text, "source": c.source, "score": round(c.score, 3)} for c in results]}
+        )
+
+    @app.get("/api/ink")
+    def api_ink() -> Any:
+        from biobench_sar.core.vision_loop import find_ink_regions
+
+        frame = svc.vision.latest_warped()
+        if frame is None:
+            return jsonify({"regions": [], "size": list(settings.projector_size), "error": "no frame"}), 503
+        height, width = frame.shape[:2]
+        return jsonify({"regions": find_ink_regions(frame), "size": [width, height]})
 
     @app.post("/api/query")
     def api_query() -> Any:
@@ -266,7 +259,7 @@ def create_app(
         if calibration is None:
             return jsonify({"ok": False, "error": "checkerboard not detected; check camera view and lighting"})
         svc.vision.set_calibration(calibration)
-        state["calibrated"] = True
+        assistant.calibrated = True
         try:
             settings.calibration_file.parent.mkdir(parents=True, exist_ok=True)
             calibration.save(settings.calibration_file)
@@ -317,13 +310,14 @@ def create_app(
         svc.audio.trigger()
 
     app.config["SAR_SERVICES"] = svc
-    app.config["SAR_HANDLE_QUERY"] = handle_query
-    app.config["SAR_ON_STATE"] = on_state
-    app.config["SAR_SHOULD_LISTEN"] = should_listen
+    app.config["SAR_ASSISTANT"] = assistant
+    app.config["SAR_HANDLE_QUERY"] = assistant.handle_query
+    app.config["SAR_ON_STATE"] = assistant.on_state
+    app.config["SAR_SHOULD_LISTEN"] = assistant.should_listen
     return app, socketio
 
 
-def _load_initial_calibration(settings: Settings, svc: Services) -> bool:
+def _load_initial_calibration(settings: Settings) -> bool:
     """True if a saved calibration exists (build_services already applied it, else identity)."""
     try:
         from biobench_sar.core.homography import Calibration
@@ -362,7 +356,7 @@ def main() -> None:
         svc.audio.start()
     except Exception:
         log.exception("audio failed to start; use typed queries")
-    log.info("Open http://%s:%d/ on the projector and /precharge on your laptop", settings.host, settings.port)
+    log.info("Projector: http://%s:%d/   Dashboard: http://%s:%d/dashboard", settings.host, settings.port, settings.host, settings.port)
     try:
         socketio.run(app, host=settings.host, port=settings.port, allow_unsafe_werkzeug=True)
     finally:

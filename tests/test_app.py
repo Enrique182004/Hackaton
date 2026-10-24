@@ -49,10 +49,10 @@ def test_pages_render(built: Any) -> None:
 def test_status_shape(built: Any) -> None:
     app, _ = built
     data = app.test_client().get("/api/status").get_json()
-    assert set(data) == {
-        "fps", "camera_running", "calibrated", "doc_chunks",
-        "vlm_backend", "vlm_model", "audio_available", "state",
-    }
+    assert {
+        "fps", "camera_running", "calibrated", "doc_chunks", "vlm_backend", "vlm_model",
+        "audio_available", "state", "busy", "tts_backend", "listen_mode", "last_latency_s", "uptime_s",
+    } <= set(data)
     assert data["state"] == "idle" and data["audio_available"] is True
 
 
