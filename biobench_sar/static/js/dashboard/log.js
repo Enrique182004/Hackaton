@@ -3,10 +3,22 @@ import { has, onLanguageChange, t } from "../i18n.js";
 
 const MAX_LINES = 200;
 
+// "state: idle · detail: busy" rather than raw JSON: the log is read by whoever is fixing things, not by a parser.
+// Empty values are left out; anything nested stays compact.
+export function describe(data) {
+  if (typeof data === "string") return data;
+  if (data === null || data === undefined) return "";
+  if (typeof data !== "object" || Array.isArray(data)) return JSON.stringify(data);
+  return Object.entries(data)
+    .filter(([, value]) => value !== null && value !== undefined && value !== "")
+    .map(([key, value]) => `${key.replaceAll("_", " ")}: ${typeof value === "object" ? JSON.stringify(value) : value}`)
+    .join(" · ");
+}
+
 export function logEvent(name, data) {
   const list = $("log");
   const time = new Date().toLocaleTimeString([], { hour12: false });
-  const detail = typeof data === "string" ? data : JSON.stringify(data);
+  const detail = describe(data);
   list.prepend(el("li", {}, el("time", { textContent: time }), el("span", { className: "ev", textContent: name }), detail || ""));
   while (list.children.length > MAX_LINES) list.lastChild.remove();
 }

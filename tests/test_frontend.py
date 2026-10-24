@@ -812,6 +812,32 @@ assert.deepEqual(rows(), {
 
 
 @needs_node
+def test_activity_log_reads_as_words_not_json(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+installFetch();
+const { describe } = await import("./dashboard/log.js");
+await import("./dashboard/main.js");
+sock.fire("connect");
+sock.fire("language", { setting: "auto", current: "es" });
+sock.fire("status", { state: "thinking", detail: "busy" });
+assert.match(logText(), /language setting: auto · current: es/);
+assert.match(logText(), /status state: thinking · detail: busy/);
+assert.doesNotMatch(logText(), /[{}"]/);
+assert.equal(describe({ mode: "quiz", learn_topic: null, quiz: { number: 2 }, confirm_stop: false }),
+  'mode: quiz · quiz: {"number":2} · confirm stop: false');
+assert.equal(describe("plain text"), "plain text");
+assert.equal(describe(null), "");
+assert.equal(describe([1, 2]), "[1,2]");
+""",
+    )
+
+
+@needs_node
 def test_checklist_explains_camera_model_and_voice(tmp_path: Path) -> None:
     run_node(
         tmp_path,
