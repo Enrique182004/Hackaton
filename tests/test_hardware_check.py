@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ctypes
 import importlib.util
+import re
+import shutil
 import subprocess
 import types
 from pathlib import Path
@@ -229,3 +231,151 @@ def test_check_tesseract_uses_the_apps_own_search(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(ingestor, "find_tesseract", lambda: None)
     assert hc.check_tesseract(system="Darwin")[0][1] == "FAIL"
+
+
+# ---- setup scripts ----------------------------------------------------------------------------------------------
+
+SETUP_PS1 = ROOT / "scripts" / "setup_windows.ps1"
+SETUP_SH = ROOT / "scripts" / "setup_mac.sh"
+
+
+def _ps1() -> str:
+    return SETUP_PS1.read_text(encoding="utf-8")
+
+
+def _ps_function(text: str, name: str) -> str:
+    start = text.index(f"function {name} {{")
+    depth = 0
+    for i in range(start, len(text)):
+        depth += {"{": 1, "}": -1}.get(text[i], 0)
+        if depth == 0 and text[i] == "}":
+            return text[start : i + 1]
+    raise AssertionError(f"unbalanced {name}")
+
+
+def test_setup_ps1_is_ascii() -> None:
+    # Windows PowerShell 5.1 reads a .ps1 without a BOM as the ANSI code page: any non-ASCII letter would garble.
+    assert SETUP_PS1.read_bytes().isascii()
+
+
+def test_setup_ps1_braces_and_parens_balance() -> None:
+    code = re.sub(r'"[^"\n]*"|\'[^\'\n]*\'|#.*', "", _ps1())  # drop strings and comments
+    assert code.count("{") == code.count("}") and code.count("(") == code.count(")")
+
+
+def test_setup_ps1_runs_programs_outside_stop_mode() -> None:
+    # PowerShell 5.1 + "Stop": the first redirected stderr line of a program would end the script.
+    text = _ps1()
+    assert '$ErrorActionPreference = "Stop"' in text
+    helpers = {name: _ps_function(text, name) for name in ("Invoke-Native", "Get-PythonVersion")}
+    for body in helpers.values():
+        assert '$ErrorActionPreference = "Continue"' in body and "$ErrorActionPreference = $saved" in body
+        assert "finally" in body
+    outside = text
+    for body in helpers.values():
+        outside = outside.replace(body, "")
+    outside = re.sub(r"^\s*#.*$", "", outside, flags=re.M)  # the comment that explains the trap quotes it
+    assert "2>$null" not in outside and "2>&1" not in outside
+    calls = [line.strip() for line in outside.splitlines() if line.strip().startswith("& ")]
+    assert calls == [], f"programs started without Invoke-Native: {calls}"
+    assert not re.search(r"^\s*(py|winget|ollama|\$python)\s+[^=\s]", outside, re.M), (
+        "every program goes through Invoke-Native"
+    )
+
+
+def test_setup_ps1_probes_python_without_assuming_the_py_launcher() -> None:
+    text = _ps1()
+    probe = _ps_function(text, "Get-PythonVersion")
+    assert (
+        "Get-Command $Command -ErrorAction SilentlyContinue" in probe
+    )  # a missing `py` is not a CommandNotFound crash
+    assert '"3.12", "3.11", "3.10"' in text and '"python", "python3"' in text
+    assert "winget install -e --id Python.Python.3.12" in text
+
+
+def test_setup_ps1_puts_tesseract_on_the_user_path() -> None:
+    text = _ps1()
+    finder = _ps_function(text, "Find-TesseractFolder")
+    for root in ("$env:ProgramFiles", "${env:ProgramFiles(x86)}", "$env:LOCALAPPDATA"):
+        assert root in finder
+    assert '"Programs\\Tesseract-OCR"' in finder and '"Tesseract-OCR"' in finder
+    adder = _ps_function(text, "Add-ToUserPath")
+    assert '[Environment]::SetEnvironmentVariable("Path"' in adder and '"User")' in adder
+    assert "Add-ToUserPath $tesseractDir" in text
+    assert "UB-Mannheim.TesseractOCR" in text
+
+
+def test_setup_ps1_creates_sar_env_once() -> None:
+    text = _ps1()
+    assert "if (-not (Test-Path sar.env) -and (Test-Path sar.env.example))" in text
+    assert "Copy-Item sar.env.example sar.env" in text
+
+
+def test_setup_ps1_parses_in_powershell() -> None:
+    pwsh = shutil.which("pwsh") or shutil.which("powershell")
+    if pwsh is None:
+        pytest.skip("PowerShell is not installed")
+    script = (
+        "$errors = $null; [System.Management.Automation.Language.Parser]::ParseFile("
+        f"'{SETUP_PS1}', [ref]$null, [ref]$errors) | Out-Null; if ($errors) {{ $errors; exit 1 }}"
+    )
+    out = subprocess.run([pwsh, "-NoProfile", "-Command", script], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stdout + out.stderr
+
+
+def _stub(folder: Path, name: str, body: str) -> None:
+    path = folder / name
+    path.write_text("#!/bin/sh\n" + body + "\n")
+    path.chmod(0o755)
+
+
+@pytest.fixture
+def mac_checkout(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    """A copy of the setup script in a fake checkout, with brew/uv/ollama stubbed and nothing else on PATH."""
+    if shutil.which("bash") is None:
+        pytest.skip("bash is not installed")
+    repo, bin_dir = tmp_path / "repo", tmp_path / "bin"
+    (repo / "scripts").mkdir(parents=True)
+    bin_dir.mkdir()
+    shutil.copy(SETUP_SH, repo / "scripts" / "setup_mac.sh")
+    shutil.copy(ROOT / "sar.env.example", repo / "sar.env.example")
+    (repo / "requirements.txt").write_text("flask\n")
+    for tool in ("dirname", "cp", "cat", "mkdir", "chmod", "sh"):
+        found = shutil.which(tool)
+        assert found, tool
+        (bin_dir / tool).symlink_to(found)
+    _stub(bin_dir, "brew", 'case "$1" in --prefix) echo /opt/fake ;; *) exit 0 ;; esac')
+    _stub(bin_dir, "ollama", "exit 0")
+    # `uv venv --seed --python 3.12 .venv`: a python that only records what pip was asked.
+    _stub(
+        bin_dir,
+        "uv",
+        'mkdir -p "$5/bin"\nprintf \'#!/bin/sh\\necho "$*" >> pip.log\\n\' > "$5/bin/python"\nchmod +x "$5/bin/python"',
+    )
+    return repo, {"PATH": str(bin_dir), "HOME": str(tmp_path)}
+
+
+def test_setup_mac_creates_sar_env_from_the_kit_example(mac_checkout: tuple[Path, dict[str, str]]) -> None:
+    repo, env = mac_checkout
+    bash = shutil.which("bash")
+    assert bash
+    out = subprocess.run([bash, "scripts/setup_mac.sh"], cwd=repo, env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert (repo / "sar.env").read_bytes() == (repo / "sar.env.example").read_bytes()
+    assert "Created sar.env" in out.stdout
+    assert "-m pip install -r requirements.txt" in (repo / "pip.log").read_text()
+
+
+def test_setup_mac_keeps_an_existing_sar_env(mac_checkout: tuple[Path, dict[str, str]]) -> None:
+    repo, env = mac_checkout
+    (repo / "sar.env").write_text("SAR_CAMERA_INDEX=0\n")
+    bash = shutil.which("bash")
+    assert bash
+    out = subprocess.run([bash, "scripts/setup_mac.sh"], cwd=repo, env=env, capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert (repo / "sar.env").read_text() == "SAR_CAMERA_INDEX=0\n" and "Created sar.env" not in out.stdout
+
+
+def test_setup_mac_accepts_python_3_10_and_3_11() -> None:
+    text = SETUP_SH.read_text(encoding="utf-8")
+    assert "for candidate in python3.12 python3.11 python3.10" in text
