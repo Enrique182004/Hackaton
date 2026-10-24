@@ -44,16 +44,27 @@ is the old one read back; it keeps doing that. Quiz keeps its schema: the proble
 
 - `show_problem(text, source)` — trims, collapses whitespace, caps at 80 characters (cut at a word, `…`);
   empty text is ignored (the card keeps what it shows).
-- The card clears on `start_learning` (a new topic starts clean) and on `set_mode("quiz")`; PR 2 adds a public
-  `clear_problem()` for the watcher.
+- `clear_problem()`. The card also clears on `start_learning` (a new topic starts clean), `set_mode("quiz")` and
+  `start_quiz` (the dashboard's button skips `set_mode`), and `show_problem` is ignored while a quiz runs (a turn
+  that started before the quiz must not leave its problem behind for after it).
 - `to_dict()` gains `"problem": {"text": …, "source": …}` or `None`. During an active quiz the quiz block stays
   the source of truth and `problem` is `None`.
 
 ### Assistant (`assistant.py`)
 
-After each finished math turn (practice, learn, help; not quiz), in this order: `new_problem` non-empty →
-`show_problem(new_problem, "dictated")`; else `board_problem` non-empty → `show_problem(board_problem,
-"board")`. Then `push_tutor()` as today. A failed call (`TutorAction.failed`) changes nothing.
+After each finished math turn, by the turn's task (a failed call changes nothing; `push_tutor()` follows as
+today):
+
+- quiz → nothing (the quiz owns the card);
+- practice, or a lesson at stage `example` → `show_problem(new_problem, "dictated")`, or `clear_problem()` when the
+  reply has no `new_problem`: an older problem must not stand in for the one just read out;
+- help → `show_problem(board_problem, "board")`, only when the frame has ink (an empty board's "problem" is a
+  copied example or a placeholder);
+- a lesson's offer / own stage → nothing.
+
+`VLMClient.evaluate` hands over only problems the card may show (`_card_problems`): `board_problem` in help and
+practice, `new_problem` only in practice and a lesson's example, and only when the final `spoken_text` reads it
+out (`reads_problem`); placeholder values (`N/A`, `none`, text with no digit or operator) are dropped.
 
 ### Projector (`templates/index.html`, `static/js/main.js`, `static/css/style.css`, `static/js/i18n.js`)
 
@@ -77,13 +88,12 @@ After each finished math turn (practice, learn, help; not quiz), in this order: 
 
 ## PR 2 — board watcher + projector-UI masking
 
-### Masking fix (`assistant.py`)
+### Masking (`assistant.py`)
 
-`app.py` already receives the projector page's `ui_rects` and calls `assistant.set_ui_rects`, which does not
-exist, so the projected UI is never masked. Add `Assistant.set_ui_rects(rects)`: keep the rects with their
-arrival time (dropped after 10 s without a refresh; the page sends a heartbeat). Before ink detection — for
-questions and for the watcher — paint those rects white on the warped frame (`mask_ui(warped, rects)` in
-`core/vision_loop.py`, a pure function).
+`app.py` already receives the projector page's `ui_rects` and calls `assistant.set_ui_rects`, which is not on
+`release/candidate` yet: it is built on `feat/fin-tutor-core` / `integrate/tutor-core` (ink regions overlapping a
+UI rect are dropped, rects age out after 3 s; `docs/BUILD_PLAN.md` "Client → server"). PR 2 starts after that work
+lands and reuses it for the watcher's frames; it does not build a second masking path.
 
 ### Watcher (`core/board_watch.py`)
 
@@ -91,7 +101,7 @@ questions and for the watcher — paint those rects white on the warped frame (`
 
 1. Skip unless: math profile, tutor mode is help or practice (not quiz, no pending offer), and
    `assistant.should_listen()` (not busy, not speaking).
-2. Take `vision.latest_warped()`, `mask_ui`, `find_ink_regions`; fingerprint = ink mask downscaled to 64×36,
+2. Take `vision.latest_warped()`, `find_ink_regions`, drop regions under the UI rects (the masking above); fingerprint = ink mask downscaled to 64×36,
    thresholded.
 3. Changed from the last read's fingerprint by more than 2 % of cells, then unchanged for 2 s (writing done,
    hand away) → read, if ≥ 8 s since the last read.
@@ -111,8 +121,7 @@ Settings (`config.py`, `sar.env.example`): `SAR_BOARD_WATCH` (default `1`), `SAR
 
 ### Tests (PR 2)
 
-- `mask_ui` paints exactly the given rects, clipped to the frame.
-- `set_ui_rects` ages rects out.
+- The watcher ignores ink under the projected UI (reusing the tutor-core masking).
 - `BoardWatcher` with a fake clock, fake frames and a fake VLM: no read while writing; one read after settle;
   respects the min gap; skipped in quiz, while busy, while speaking; result dropped when a turn started; erase
   clears a `board` card but not a `dictated` one.

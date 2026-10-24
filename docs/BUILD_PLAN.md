@@ -474,7 +474,7 @@ display_text, language, highlight}`, `speak {url: str | null, text, display_text
 `status {state: "idle"|"listening"|"transcribing"|"thinking"|"speaking", detail?}`, `transcript {text}`,
 `show_calibration {url}`, `hide_calibration {}`, `interaction {...history item}`,
 `documents_changed {...GET /api/documents body}` (after upload, delete and selection changes),
-`tutor {...TutorSession.to_dict()}` (whenever the mode, quiz, learn topic or `confirm_stop` changes),
+`tutor {...TutorSession.to_dict()}` (whenever the mode, quiz, learn topic, problem card or `confirm_stop` changes),
 `language {setting, current}`. Both pages show `display_text` in place of the spoken words.
 On connect the server sends the current `status`, `tutor` and `language` to the new client. The dashboard re-reads
 `/api/config` on every connect, and also takes the subject from `/api/status` `profile`, so a server restarted with
@@ -490,10 +490,12 @@ rect by more than 50 % of its own area is dropped before the model and before sn
 reads Pip, the bubble or the problem card as the student's ink.
 
 Projector UI: hotkey **Space** = push-to-talk, **T** = type a query, **C** = toggle debug overlay, **F** =
-fullscreen. The page also listens to `tutor` and shows the current quiz problem in normal notation (e.g.
-`3x + 5 = 20`) in a small, faint top-left card (thin outline, no glow). The card is hidden when no quiz is
-running and while the status is `listening`, `transcribing` or `thinking`, and it is masked through `ui_rects`
-anyway. When `highlight` is set, the page draws a glowing outline around that box, pulsing for about 2 s and
+fullscreen. The page also listens to `tutor` and shows the problem being worked on in normal notation (e.g.
+`3x + 5 = 20`) in a small, faint top-left card (thin outline, no glow): the quiz problem while a quiz runs
+("Quiz · problem n of N"), otherwise `to_dict()["problem"]` — one the assistant dictated ("Try this") or the
+student's, read off the board in help ("Your problem"). A practice turn or lesson starter whose reply has no
+problem the voice actually read out clears it. The card is hidden when there is no problem and while the status
+is `listening`, `transcribing` or `thinking`, and it is masked through `ui_rects` anyway. When `highlight` is set, the page draws a glowing outline around that box, pulsing for about 2 s and
 fading after about 8 s or at the next update.
 
 ---

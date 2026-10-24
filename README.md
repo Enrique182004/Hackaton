@@ -162,8 +162,8 @@ The assistant remembers the last three questions and answers, so follow-ups like
 make sense.
 
 The same controls exist over HTTP: `GET /api/tutor`, `PUT /api/tutor/mode {"mode": "help"|"practice"|"quiz"}`,
-`POST /api/tutor/quiz/start`, `POST /api/tutor/quiz/stop`. Every change of mode, quiz, topic or pending stop
-question is pushed to the pages as a `tutor` Socket.IO event, whose `confirm_stop` is `true` while the
+`POST /api/tutor/quiz/start`, `POST /api/tutor/quiz/stop`. Every change of mode, quiz, topic, problem card or pending
+stop question is pushed to the pages as a `tutor` Socket.IO event, whose `confirm_stop` is `true` while the
 assistant waits for the yes.
 
 ### Quiz banks
