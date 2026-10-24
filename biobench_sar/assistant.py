@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import re
+import statistics
 import tempfile
 import threading
 import time
@@ -49,8 +50,19 @@ MAX_UI_RECTS = 32
 UI_OVERLAP = 0.5
 # "pointing": the fingertip stops this far left of the ink it points at, so the avatar does not cover it.
 POINT_GAP = 24
+# error / celebrating stand beside the ink, never on it: the page reports the avatar as UI, so writing under it would
+# be dropped on the next turn. Its 160 px sprite (main.js FRAME, centred on the target) reaches AVATAR_HALF from the
+# target; the box the page reports adds its 10 px UI_PAD, and the error shake moves it 10 px more.
+AVATAR_HALF = 80
+AVATAR_REACH = AVATAR_HALF + 20
 # Ink regions are word and symbol blobs; blobs this many line heights apart or closer, side by side, are one line.
 LINE_GAP = 1.5
+# Rows of blobs this close above one another (a share of the board's glyph height), overlapping side to side, are one
+# written line too: a stacked fraction's numerators, bars and denominators, an exponent over its base. A second line
+# of writing sits further down. A flat row (a fraction bar on its own) keeps its glyphs a little further off.
+STACK_GAP = 0.35
+BAR_GAP = 0.6
+FLAT_ROW = 0.5
 NO_ANSWER_TEXT = "I can't see an answer on the board yet. Write it, then ask me to check it."
 TEXTS = {
     "en": {
@@ -217,19 +229,12 @@ def _overlap(a: Box, b: Box) -> float:
     return max(0.0, w) * max(0.0, h)
 
 
-def _is_highlight(rect: Box, highlight: Box | None) -> bool:
-    """The page's own outline around the ink an answer is about: that ink is the student's, so it is never masked."""
-    if highlight is None:
-        return False
-    area = highlight[2] * highlight[3]
-    return _overlap(rect, highlight) >= 0.9 * area and rect[2] * rect[3] <= 4 * area
-
-
-def drop_ui_ink(ink: list[Any], rects: Iterable[Box], highlight: Box | None = None) -> list[Any]:
+def drop_ui_ink(ink: list[Any], rects: Iterable[Box]) -> list[Any]:
     """Ink regions not mostly under projected UI: one that a UI rect covers by more than UI_OVERLAP of its area is
-    the projector's light (the bubble's text, the avatar), not the student's writing. The highlight drawn around the
-    student's own ink is skipped: masking it would hide that ink."""
-    boxes = [r for r in rects if not _is_highlight(r, highlight)]
+    the projector's light (the bubble's text, the avatar), not the student's writing. The page reports the outline
+    around highlighted ink as four bands over its border and glow that stop short of the ink it frames, so the
+    outline's light is masked and the writing inside it never is."""
+    boxes = list(rects)
     if not boxes:
         return ink
 
@@ -253,16 +258,29 @@ def _same_line(a: Box, b: Box) -> bool:
     return shared >= 0.5 * min(a[3], b[3]) and gap <= LINE_GAP * max(a[3], b[3])
 
 
-def ink_lines(boxes: Iterable[Box]) -> list[Box]:
-    """Blobs grouped into written lines ("x", "=", "7" -> "x = 7"): boxes that share half the smaller height or more
-    and sit within LINE_GAP heights of each other side by side. Each line is the union of its blobs."""
+def _stacked(a: Box, b: Box, glyph: float, body_a: tuple[float, float], body_b: tuple[float, float]) -> bool:
+    """One row right above the other, overlapping side to side: the rows of a stacked fraction, an exponent. The gap
+    is measured between the rows' bodies, the (top, bottom) most of their blobs share, so an exponent starting the
+    lower of two lines of writing, or a descender in the upper one, does not pull the lines together."""
+    across = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
+    if across < 0.5 * min(a[2], b[2]):
+        return False
+    (upper, upper_body), (lower, lower_body) = sorted(((a, body_a), (b, body_b)), key=lambda row: row[0][1])
+    gap = lower_body[0] - upper_body[1]
+    if min(body_a[1] - body_a[0], body_b[1] - body_b[0]) > FLAT_ROW * glyph:
+        return gap <= STACK_GAP * glyph
+    # A fraction bar's row: the "+", "=" and whole numbers centred on its bars reach towards its glyphs too.
+    return gap <= BAR_GAP * glyph or lower[1] - (upper[1] + upper[3]) <= STACK_GAP * glyph
+
+
+def _merged(boxes: list[Box], joined: Callable[[Box, Box], bool]) -> list[Box]:
     lines = sorted(boxes, key=lambda b: b[0])
     merged = True
     while merged:
         merged = False
         for i in range(len(lines)):
             for j in range(i + 1, len(lines)):
-                if _same_line(lines[i], lines[j]):
+                if joined(lines[i], lines[j]):
                     lines[i] = _union(lines[i], lines.pop(j))
                     merged = True
                     break
@@ -271,10 +289,90 @@ def ink_lines(boxes: Iterable[Box]) -> list[Box]:
     return lines
 
 
+def ink_lines(boxes: Iterable[Box]) -> list[Box]:
+    """Blobs grouped into written lines ("x", "=", "7" -> "x = 7"): boxes that share half the smaller height or more
+    and sit within LINE_GAP heights of each other side by side form rows; rows stacked within STACK_GAP glyph heights
+    (BAR_GAP next to a flat row), overlapping side to side, are one line ("1/2 + 1/2" written as two stacked
+    fractions, an exponent written apart from its base). Each line is the union of its blobs."""
+    blobs = list(boxes)
+    if not blobs:
+        return []
+    rows = _merged(blobs, _same_line)
+    # The board's glyph height: the median blob, leaving out flat strokes (fraction bars, minus signs).
+    glyph = statistics.median([b[3] for b in blobs if b[3] > 0.4 * b[2]] or [b[3] for b in blobs])
+
+    # Each row's body, the (top, bottom) most of its blobs share: one raised or lowered blob (an exponent, a
+    # descender) does not move it. A blob is the row's it overlaps most, the smaller row's on a tie.
+    owned: list[list[Box]] = [[] for _ in rows]
+    for blob in blobs:
+        owned[min(range(len(rows)), key=lambda i: (-_overlap(blob, rows[i]), rows[i][2] * rows[i][3]))].append(blob)
+    bodies = [
+        (statistics.median_high([b[1] for b in own]), statistics.median_low([b[1] + b[3] for b in own]))
+        if own
+        else (row[1], row[1] + row[3])
+        for row, own in zip(rows, owned, strict=True)
+    ]
+    # Judged row by row before any union, so a fraction bar joins its numerator and its denominator even after one
+    # of them has made the bar's row taller than a bar.
+    group = list(range(len(rows)))
+
+    def root(i: int) -> int:
+        while group[i] != i:
+            i = group[i]
+        return i
+
+    pairs = [
+        (i, j)
+        for i in range(len(rows))
+        for j in range(i + 1, len(rows))
+        if _stacked(rows[i], rows[j], glyph, bodies[i], bodies[j])
+    ]
+
+    def exponent_reaching_up(small: int, above: int) -> bool:
+        """`small`, a row shorter than a glyph stacked on a taller row below it, is that row's exponent: it does not
+        also join the line `above` it ("x² = 9" written under "2x + 3 = 21", its 2 apart from the x)."""
+        height = rows[small][3]
+        if rows[above][1] > rows[small][1] or height >= min(glyph, rows[above][3]):
+            return False
+        if any(b[3] <= min(FLAT_ROW * glyph, 0.5 * b[2]) for k in (small, above) for b in owned[k]):
+            return False  # a fraction bar's row: its glyphs sit above and below it
+        below = [i + j - small for i, j in pairs if small in (i, j) and rows[i + j - small][1] > rows[small][1]]
+        return any(rows[k][3] > height for k in below)
+
+    for i, j in pairs:
+        if not (exponent_reaching_up(i, j) or exponent_reaching_up(j, i)):
+            group[root(j)] = root(i)
+    stacks: dict[int, Box] = {}
+    for i, row in enumerate(rows):
+        r = root(i)
+        stacks[r] = _union(stacks[r], row) if r in stacks else row
+    # A "+" or "=" beside a stacked fraction, out of reach of the bar's short row, is on the line it now spans.
+    return _merged(list(stacks.values()), _same_line)
+
+
 def _distance(x: float, y: float, box: Box) -> float:
     dx = max(box[0] - x, 0.0, x - (box[0] + box[2]))
     dy = max(box[1] - y, 0.0, y - (box[1] + box[3]))
     return math.hypot(dx, dy)
+
+
+def _beside(box: Box, ink: list[Box], projector_size: tuple[int, int]) -> tuple[float, float]:
+    """Where error / celebrating stand: the avatar's centre beside `box`, left of it, else right of it (above or below
+    a line as wide as the board), on the board and over no ink if any spot is; else over the least ink."""
+    width, height = projector_size
+    x, y, w, h = box
+    away = AVATAR_REACH + POINT_GAP
+    cy = min(max(y + h / 2, AVATAR_HALF), height - AVATAR_HALF)
+    spots = [(x - away, cy), (x + w + away, cy), (x + w / 2, y + h + away), (x + w / 2, y - away)]
+
+    def on_board(spot: tuple[float, float]) -> bool:
+        return AVATAR_HALF <= spot[0] <= width - AVATAR_HALF and AVATAR_HALF <= spot[1] <= height - AVATAR_HALF
+
+    def covered(spot: tuple[float, float]) -> float:
+        avatar = (spot[0] - AVATAR_REACH, spot[1] - AVATAR_REACH, 2.0 * AVATAR_REACH, 2.0 * AVATAR_REACH)
+        return sum(_overlap(avatar, line) for line in ink)
+
+    return min([spot for spot in spots if on_board(spot)] or spots, key=covered)
 
 
 def place_target(
@@ -290,9 +388,11 @@ def place_target(
 
     pointing / error (and celebrating, with ink): that region is the one nearest the model's target, or with
     `about_answer` (a quiz check) the lowest one, the student's answer line. pointing stops just left of it (right of
-    it at the board's left edge), error and celebrating at its centre. idle / walking (and `stand_aside`, a failed
-    call) stand on the side of the board farthest from the ink, mid-height; without ink the model's target is kept.
-    `lines` (math): the regions are written lines (ink_lines), not the blobs ink detection finds.
+    it at the board's left edge); error and celebrating stand beside it (_beside), never on it: the page reports the
+    avatar as UI, and the answer rewritten under it would be dropped on the next check. idle / walking (and
+    `stand_aside`, a failed call) stand on the side of the board farthest from the ink, mid-height; without ink the
+    model's target is kept. `lines` (math): the regions are written lines (ink_lines), not the blobs ink detection
+    finds.
     """
     width, height = projector_size
     boxes = [b for b in map(_box, ink) if b is not None]
@@ -312,10 +412,10 @@ def place_target(
         else:
             box = min(boxes, key=lambda b: _distance(action.target_x, action.target_y, b))
         x, y, w, h = box
-        tx = x + w / 2
+        highlight = [round(x), round(y), round(w), round(h)]
         if state == "pointing":
-            tx = x - POINT_GAP if x - POINT_GAP >= 0 else x + w + POINT_GAP
-        return at(tx, y + h / 2), [round(x), round(y), round(w), round(h)]
+            return at(x - POINT_GAP if x - POINT_GAP >= 0 else x + w + POINT_GAP, y + h / 2), highlight
+        return at(*_beside(box, boxes, projector_size)), highlight
     left, right = min(b[0] for b in boxes), max(b[0] + b[2] for b in boxes)
     x = left / 2 if left >= width - right else (right + width) / 2
     return at(x, height / 2), None
@@ -461,11 +561,11 @@ class Assistant:
         self._ui_lock = threading.Lock()
         self._ui_rects: list[Box] = []
         self._ui_rects_at: float | None = None
-        self._highlight: Box | None = None  # the last one sent: the page outlines it and reports it as UI
 
     # ---- projected UI --------------------------------------------------------
     def set_ui_rects(self, rects: Any) -> None:
-        """The projector page's UI boxes ([[x, y, w, h], ...], projector px: avatar, bubble, quiz card, highlight).
+        """The projector page's UI boxes ([[x, y, w, h], ...], projector px: avatar, bubble, quiz card, the
+        highlight's four edge bands).
         Ink mostly under them is dropped before the model and the target snapping; a report older than
         UI_RECTS_TTL_S is ignored. Malformed entries are skipped; anything but a list clears them."""
         boxes: list[Box] = []
@@ -670,7 +770,7 @@ class Assistant:
         rects = self.ui_rects()
         if ink and rects:
             try:
-                ink = drop_ui_ink(ink, rects, self._highlight)
+                ink = drop_ui_ink(ink, rects)
             except Exception:
                 log.exception("projected-UI filter failed; keeping every ink region")
         if not ink or raw is None:
@@ -720,7 +820,6 @@ class Assistant:
                 stand_aside=failed,
                 lines=self.tutoring,
             )
-            self._highlight = _box(highlight) if highlight else None
             said = {
                 "display_text": display,
                 "spoken_text": action.spoken_text,

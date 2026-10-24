@@ -557,6 +557,32 @@ def test_is_repeat_request_any(text: str, repeat: bool) -> None:
         ("x = 5", False),
         ("stop sign", False),
         ("ya", False),  # "ya lo escribí": done writing, not stop
+        # A soft word before an explicit stop still stops; alone it says nothing (test_is_yes_any).
+        ("fine, stop", True),
+        ("fine, stop it", True),
+        ("fine, end it", True),
+        ("okay fine, stop", True),
+        ("bueno, termínalo", True),
+        ("bueno, para", True),
+        ("porfa, para", True),
+        ("por favor termínalo", True),
+        ("bueno ya no", True),
+        ("bueno, ya termínalo", True),
+        ("fine", False),
+        ("bueno", False),
+        ("ya no", False),
+        ("pues para", True),
+        ("pues para resolverlo", False),
+        # Saying not to stop is not stopping.
+        ("no, don't stop the quiz", False),
+        ("don't stop the quiz", False),
+        ("do not end the quiz", False),
+        ("never stop the quiz", False),
+        ("I'm not done with the quiz", False),
+        ("fine, don't stop", False),
+        ("no, no termines el quiz", False),
+        ("I want to stop the quiz", True),
+        ("don't worry, stop the quiz", True),
     ],
 )
 def test_is_stop_intent_any(text: str, stop: bool) -> None:
@@ -581,6 +607,21 @@ def test_is_stop_intent_any(text: str, stop: bool) -> None:
         ("dale", True),
         ("de acuerdo", True),
         ("sí, termina", True),
+        ("Sí, termínalo", True),
+        ("ok, fine", True),
+        ("please, yes", True),
+        ("Bueno, sí", True),
+        ("sí, bueno", True),
+        # Agreeing to nothing in particular: ending the quiz loses its progress, so these keep it going.
+        ("please", False),
+        ("Please.", False),
+        ("fine", False),
+        ("fine, please", False),
+        ("bueno", False),
+        ("Bueno…", False),
+        ("por favor", False),
+        ("porfa", False),
+        ("pues bueno", False),
         ("ok keep going", False),
         ("no", False),
         ("no, sigo", False),
@@ -666,9 +707,10 @@ def test_more_ways_to_ask_never_take_board_questions(text: str) -> None:
     ("text", "topic"),
     [
         ("¿Qué es una fracción?", "fracción"),
-        ("No entiendo las fracciones", "las fracciones"),
-        ("Ayúdame con las ecuaciones", "las ecuaciones"),
-        ("Háblame de la pendiente", "la pendiente"),
+        # The article goes, as "a" / "some" do in English: "un problema fácil de fracciones", "Aprendiendo: pendiente".
+        ("No entiendo las fracciones", "fracciones"),
+        ("Ayúdame con las ecuaciones", "ecuaciones"),
+        ("Háblame de la pendiente", "pendiente"),
         ("¿Qué es esto?", None),
         ("No entiendo el problema", None),
         ("ayúdame con esta ecuación", None),
@@ -681,8 +723,34 @@ def test_more_ways_to_ask_for_a_lesson_in_spanish(text: str, topic: str | None) 
     assert detect_learn_request_any(text, "es", board_in_use=True) is None
 
 
-@pytest.mark.parametrize("text", ["sure", "yes", "ok", "okay", "yeah", "yes please", "sí", "claro", "dale"])
+@pytest.mark.parametrize(
+    ("text", "topic"),
+    [
+        ("Quiero aprender las fracciones", "fracciones"),
+        ("Enséñame la jerarquía de operaciones", "jerarquía de operaciones"),
+        ("quiero aprender el álgebra", "álgebra"),
+        ("Enséñame los números negativos", "números negativos"),
+        ("enséñame unas ecuaciones", "ecuaciones"),
+        ("Quiero aprender sobre las fracciones", "fracciones"),
+        ("Enséñame a sumar las fracciones", "sumar las fracciones"),  # only a leading article goes
+    ],
+)
+def test_spanish_lesson_topics_drop_the_leading_article(text: str, topic: str) -> None:
+    from biobench_sar.tutor import TutorSession, detect_learn_request_any
+
+    assert detect_learn_request_any(text, "es") == topic
+    assert detect_learn_request_any(text, "en") == topic, "found from either language"
+    t = TutorSession()
+    t.start_learning(topic)
+    assert t.to_dict()["learn_topic"] == topic
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["sure", "yes", "ok", "okay", "yeah", "yes please", "sí", "claro", "dale", "please", "fine", "bueno", "porfa"],
+)
 def test_a_plain_yes_to_the_offer_makes_one_up(text: str) -> None:
+    # A soft "please" / "bueno" is enough here: making a problem up loses nothing, unlike ending a quiz.
     from biobench_sar.tutor import detect_offer_reply_any
 
     assert detect_offer_reply_any(text, "en") == "generate" and detect_offer_reply_any(text, "es") == "generate"

@@ -36,12 +36,17 @@ def _compile(*patterns: str) -> tuple[re.Pattern[str], ...]:
     return tuple(re.compile(p) for p in patterns)
 
 
+# "No, don't stop the quiz" / "I'm not done with the quiz" say to keep going: a negation right before the verb voids it.
+_NOT_BEFORE = (
+    r"(?<!n't )(?<!dont )(?<!not )(?<!never )(?<!n't want to )(?<!dont want to )(?<!not want to )(?<!n't wanna )"
+    r"(?<!dont wanna )"
+)
 _STOP_QUIZ = _compile(
-    r"\b(?:stop|end|quit|exit|cancel|finish|leave)\s+(?:the\s+|this\s+|my\s+)?quiz\b",
+    rf"\b{_NOT_BEFORE}(?:stop|end|quit|exit|cancel|finish|leave)\s+(?:the\s+|this\s+|my\s+)?quiz\b",
     r"\bno\s+more\s+quiz",
     r"\bquiz\s+(?:is\s+)?over\b",
-    r"\bdone\s+with\s+(?:the\s+|this\s+|my\s+)?quiz",
-    r"\bstop\s+quizzing\b",
+    rf"\b{_NOT_BEFORE}done\s+with\s+(?:the\s+|this\s+|my\s+)?quiz",
+    rf"\b{_NOT_BEFORE}stop\s+quizzing\b",
 )
 _QUIZ = _compile(
     r"\bquiz\s+me\b",
@@ -96,9 +101,10 @@ def is_quiz_stop(text: str) -> bool:
     return _any(_STOP_QUIZ, _norm(text))
 
 
-# Mid-quiz, these ask to stop too; the assistant asks to confirm first, so a plain "stop" is enough.
+# Mid-quiz, these ask to stop too; the assistant asks to confirm first, so a plain "stop" is enough. A soft word in
+# front ("fine, stop", "okay fine, end it") still says stop, and answers "Do you want to end the quiz?" as a yes.
 _STOP_INTENT = _compile(
-    r"^(?:please\s+|ok\s+|okay\s+|can\s+we\s+|let's\s+|lets\s+)?(?:stop|quit|exit|cancel|end\s+it|stop\s+it)"
+    r"^(?:(?:please|fine|ok|okay)\s+)*(?:can\s+we\s+|let's\s+|lets\s+)?(?:stop|quit|exit|cancel|end\s+it|stop\s+it)"
     r"(?:\s+(?:please|now|here|it|this|that|for\s+now|for\s+today))*$",
     r"\b(?:i|we)\s+(?:want|wanna|would\s+like|need|have)\s+to\s+(?:stop|quit|end\s+this|leave)\b",
     r"\b(?:i|we)\s+(?:don't|dont|do\s+not)\s+want\s+to\s+(?:do\s+this|play|continue|keep\s+going)\b",
@@ -116,24 +122,32 @@ def is_stop_intent(text: str) -> bool:
 
 
 _YES_WORDS = (
-    r"(?:yes|yeah|yep|yup|sure|ok|okay|alright|all\s+right|of\s+course|definitely|please|yes\s+please|"
-    r"do\s+it|go\s+ahead|i\s+do|i'm\s+sure|im\s+sure|i\s+am\s+sure|sounds\s+good|why\s+not|fine)"
+    r"(?:yes|yeah|yep|yup|sure|ok|okay|alright|all\s+right|of\s+course|definitely|"
+    r"do\s+it|go\s+ahead|i\s+do|i'm\s+sure|im\s+sure|i\s+am\s+sure|sounds\s+good|why\s+not)"
 )
+# Agreeing without saying to what: "please", "fine", "bueno" (Mexican Spanish's "well..."). With a clear yes they
+# still agree ("yes please", "sí, bueno"); alone they never end a quiz, which would lose its progress.
+_SOFT_YES_WORDS = r"(?:please|fine)"
 _YES = re.compile(
-    rf"^(?:{_YES_WORDS})(?:\s+(?:{_YES_WORDS}|thanks|thank\s+you|stop|stop\s+it|end\s+it|i\s+want\s+to\s+stop))*$"
+    rf"^(?:{_SOFT_YES_WORDS}\s+)*(?:{_YES_WORDS})"
+    rf"(?:\s+(?:{_YES_WORDS}|{_SOFT_YES_WORDS}|thanks|thank\s+you|stop|stop\s+it|end\s+it|i\s+want\s+to\s+stop))*$"
 )
+_SOFT_YES = re.compile(rf"^{_SOFT_YES_WORDS}(?:\s+{_SOFT_YES_WORDS})*$")
 _YES_WORDS_ES = (
-    r"(?:si|claro|dale|ok|okey|okay|va|sale|orale|andale|bueno|de\s+acuerdo|esta\s+bien|por\s+favor|porfa|"
+    r"(?:si|claro|dale|ok|okey|okay|va|sale|orale|andale|de\s+acuerdo|esta\s+bien|"
     r"si\s+quiero|claro\s+que\s+si|seguro|simon|sip|obvio)"
 )
+_SOFT_YES_WORDS_ES = r"(?:bueno|pues|por\s+favor|porfa)"
 _YES_ES = re.compile(
-    rf"^(?:{_YES_WORDS_ES})(?:\s+(?:{_YES_WORDS_ES}|gracias|termina|terminalo|terminar|para|paralo|ya\s+no|"
-    r"quiero\s+terminar))*$"
+    rf"^(?:{_SOFT_YES_WORDS_ES}\s+)*(?:{_YES_WORDS_ES})(?:\s+(?:{_YES_WORDS_ES}|{_SOFT_YES_WORDS_ES}|gracias|termina|"
+    r"terminalo|terminar|para|paralo|ya\s+no|quiero\s+terminar))*$"
 )
+_SOFT_YES_ES = re.compile(rf"^{_SOFT_YES_WORDS_ES}(?:\s+{_SOFT_YES_WORDS_ES})*$")
 
 
 def is_yes(text: str) -> bool:
-    """A plain yes ("yes", "sure", "ok", "yeah, please"): nothing else in it, so "ok, keep going" is not one."""
+    """A plain yes ("yes", "sure", "ok", "yeah, please"): nothing else in it, so "ok, keep going" is not one, and a
+    lone "please" or "fine" is not one either."""
     return bool(_YES.match(_norm(text)))
 
 
@@ -293,8 +307,8 @@ def detect_offer_reply(text: str) -> str | None:
         return "own"
     if _any(_OFFER_GENERATE, norm):
         return "generate"
-    if is_yes(norm):
-        return "generate"  # "sure" to "...or should I make one up?": make one up
+    if is_yes(norm) or _SOFT_YES.match(norm):
+        return "generate"  # "sure" (or "please") to "...or should I make one up?": make one up
     return None
 
 
@@ -345,9 +359,11 @@ def is_quiz_stop_any(text: str) -> bool:
     return is_quiz_stop(text) or bool(_spanish("is_quiz_stop_es", text, False))
 
 
+# As in English, a soft word in front ("bueno, termínalo", "porfa, para", "bueno, ya no") still says stop.
 _STOP_INTENT_ES = _compile(
-    r"^(?:ya\s+)?(?:para|paremos|alto|basta|ya\s+basta|detente|deten|termina|terminemos|terminalo|salir|salte|"
-    r"cancela|cancelalo)(?:\s+(?:ya|por\s+favor|porfa|aqui|ahi|ahora))*$",
+    rf"^(?:{_SOFT_YES_WORDS_ES}\s+)*(?:ya\s+)?(?:para|paremos|alto|basta|ya\s+basta|detente|deten|termina|terminemos|"
+    r"terminalo|salir|salte|cancela|cancelalo)(?:\s+(?:ya|por\s+favor|porfa|aqui|ahi|ahora))*$",
+    rf"^(?:{_SOFT_YES_WORDS_ES}\s+)+ya\s+no(?:\s+(?:por\s+favor|porfa|gracias))*$",  # a lone "ya no" is unclear
     r"\b(?:quiero|queremos|podemos|vamos\s+a|me\s+gustaria)\s+(?:parar|terminar|salir|dejarlo|acabar|detenerlo)\b"
     r"(?!\s+(?:el|la|este|esta|mi)\s+(?:problema|ejercicio|ecuacion|paso|respuesta|tarea))",
     r"\bya\s+no\s+quiero\s+(?:seguir|continuar|jugar|hacer\s+esto)\b",
@@ -360,7 +376,8 @@ def is_stop_intent_any(text: str) -> bool:
 
 
 def is_yes_any(text: str) -> bool:
-    """A plain yes in English or Spanish: "yes", "sure", "ok", "sí", "claro", "dale", "de acuerdo"."""
+    """A plain yes in English or Spanish: "yes", "sure", "ok", "sí", "claro", "dale", "de acuerdo". A lone "please",
+    "fine", "bueno" or "por favor" is not: after "Do you want to end the quiz?" it keeps the quiz going."""
     return is_yes(text) or bool(_YES_ES.match(_norm_es(text)))
 
 
@@ -410,7 +427,9 @@ _LEARN_MORE_ES = _compile(
     r"\b(?:ayudame|me\s+ayudas|ayuda|necesito\s+ayuda)\s+(?:con|a\s+entender)\s+(?P<rest>.+)",
     r"\bhablame\s+(?:de|sobre)\s+(?P<rest>.+)",
 )
-_ARTICLE_ES = re.compile(r"^(?:un|una|unos|unas)\s+")
+# "las fracciones" -> "fracciones": the topic is said inside other sentences ("un problema fácil de {topic}",
+# "Aprendiendo: {topic}"), the way English topics come without "a" or "some".
+_ARTICLE_ES = re.compile(r"^(?:el|la|los|las|un|una|unos|unas)\s+")
 
 
 def _norm_es_pair(text: str) -> tuple[str, str]:
@@ -457,7 +476,7 @@ def _learn_request_es(text: str, board_in_use: bool) -> str | None:
         topic = more
     if topic is None or (not trusted and _EXPLICIT_ES.search(plain)):
         return None
-    return topic
+    return _ARTICLE_ES.sub("", topic.strip()) or None
 
 
 def detect_learn_request_any(text: str, language: str = "en", *, board_in_use: bool = False) -> str | None:
@@ -473,8 +492,8 @@ def detect_offer_reply_any(text: str, language: str = "en") -> str | None:
     """Answer to the lesson offer in English or Spanish: "invéntame uno" -> "generate", "tengo uno" -> "own"; a plain
     "sure" / "sí" / "claro" to "...or should I make one up?" -> "generate"."""
     found = _first(language, lambda: detect_offer_reply(text), lambda: _spanish("detect_offer_reply_es", text, None))
-    if found is None and is_yes_any(text):
-        return "generate"
+    if found is None and (is_yes_any(text) or _SOFT_YES_ES.match(_norm_es(text))):
+        return "generate"  # a soft "bueno" / "porfa" is enough to make one up, unlike ending a quiz
     return found
 
 

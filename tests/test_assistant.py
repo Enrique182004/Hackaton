@@ -1418,12 +1418,108 @@ def test_pointing_at_ink_on_the_left_edge_stands_right_of_it(h: Harness, monkeyp
     assert (avatar["target_x"], avatar["target_y"]) == (5 + 50 + POINT_GAP, 120)
 
 
-def test_error_and_celebrating_go_to_the_centre_of_the_region(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+# Beside the region, not on it (it used to be its centre): the page reports the avatar's box as UI, so the answer
+# rewritten under it was dropped on the next check. The avatar's centre is AVATAR_REACH + POINT_GAP = 124 px out.
+BESIDE = 124
+
+
+def test_error_and_celebrating_stand_beside_the_region(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     _with_ink(monkeypatch, LINE_1, LINE_2)
     error = _reply(h, "is this right?", AvatarAction("A step is missing.", "error", 900, 700))
-    assert (error["target_x"], error["target_y"]) == (500, 440) and error["highlight"] == [400, 400, 200, 80]
+    assert (error["target_x"], error["target_y"]) == (400 - BESIDE, 440) and error["highlight"] == [400, 400, 200, 80]
     cheer = _reply(h, "is this right?", AvatarAction("All there!", "celebrating", 10, 10))
-    assert (cheer["target_x"], cheer["target_y"]) == (550, 240) and cheer["highlight"] == [400, 200, 300, 80]
+    assert (cheer["target_x"], cheer["target_y"]) == (400 - BESIDE, 240) and cheer["highlight"] == [400, 200, 300, 80]
+
+
+def _avatar_box(x: float, y: float) -> tuple[float, float, float, float]:
+    from biobench_sar.assistant import AVATAR_REACH
+
+    return (x - AVATAR_REACH, y - AVATAR_REACH, 2.0 * AVATAR_REACH, 2.0 * AVATAR_REACH)
+
+
+def _covers(a: tuple[float, ...], b: tuple[float, ...]) -> bool:
+    return min(a[0] + a[2], b[0] + b[2]) > max(a[0], b[0]) and min(a[1] + a[3], b[1] + b[3]) > max(a[1], b[1])
+
+
+@pytest.mark.parametrize(
+    ("ink", "state", "spot"),
+    [
+        # Left of the line, as pointing stands.
+        ([(500.0, 300.0, 300.0, 56.0)], "error", (500 - BESIDE, 328)),
+        # No room on the left: on the right.
+        ([(60.0, 300.0, 300.0, 56.0)], "celebrating", (360 + BESIDE, 328)),
+        # Other writing on the left: the free side.
+        ([(150.0, 300.0, 220.0, 56.0), (420.0, 300.0, 250.0, 56.0)], "error", (670 + BESIDE, 328)),
+        # A line across the whole board: under it, or over it at the bottom.
+        ([(40.0, 300.0, 1200.0, 56.0)], "error", (640, 356 + BESIDE)),
+        ([(40.0, 640.0, 1200.0, 56.0)], "celebrating", (640, 640 - BESIDE)),
+    ],
+)
+def test_error_and_celebrating_never_stand_on_ink(
+    ink: list[tuple[float, float, float, float]], state: str, spot: tuple[int, int]
+) -> None:
+    from biobench_sar.assistant import AVATAR_HALF, place_target
+
+    regions = [{"x": x, "y": y, "w": w, "h": hgt} for x, y, w, hgt in ink]
+    target = ink[-1]
+    model = AvatarAction("a", state, round(target[0] + target[2] / 2), round(target[1] + target[3] / 2))
+    action, box = place_target(model, regions, (1280, 800))
+    assert box == [round(v) for v in target]
+    assert (action.target_x, action.target_y) == spot
+    avatar = _avatar_box(action.target_x, action.target_y)
+    assert not any(_covers(avatar, line) for line in ink), "the avatar's box covers no writing"
+    assert AVATAR_HALF <= action.target_x <= 1280 - AVATAR_HALF, "the whole sprite is on the board"
+
+
+def _page_ui(avatar: dict[str, Any]) -> list[list[int]]:
+    """What main.js reports after this answer on a full-screen page (1 window px = 1 projector px): the avatar's
+    160 px sprite centred on the target plus its 10 px UI_PAD, and the outline's four bands, from 10 px past its
+    3 px border (14 px out from the ink) to 4 px short of the ink (test_frontend checks the page itself)."""
+    tx, ty = avatar["target_x"], avatar["target_y"]
+    rects = [[tx - 90, ty - 90, 180, 180]]
+    if avatar["highlight"]:
+        x, y, w, hgt = avatar["highlight"]
+        left, top, wide, tall = x - 27, y - 27, w + 54, hgt + 54
+        rects += [
+            [left, top, wide, 23],
+            [left, y + hgt + 4, wide, 23],
+            [left, top, 23, tall],
+            [x + w + 4, top, 23, tall],
+        ]
+    return rects
+
+
+# "3x + 5 = 20" over the student's answer, camera blobs about 55 px tall (a 1.40 m board at 1280 px: ~4 cm digits).
+PROBLEM_BLOBS = [
+    {"x": 300, "y": 300, "w": 92, "h": 55, "cx": 346, "cy": 327},
+    {"x": 420, "y": 308, "w": 40, "h": 40, "cx": 440, "cy": 328},
+    {"x": 488, "y": 300, "w": 36, "h": 55, "cx": 506, "cy": 327},
+    {"x": 552, "y": 315, "w": 45, "h": 25, "cx": 574, "cy": 327},
+    {"x": 625, "y": 300, "w": 80, "h": 55, "cx": 665, "cy": 327},
+]
+ANSWER_BLOBS = [  # "x = 7", rewritten as "x = 5" in the same place
+    {"x": 300, "y": 400, "w": 40, "h": 40, "cx": 320, "cy": 420},
+    {"x": 345, "y": 408, "w": 30, "h": 22, "cx": 360, "cy": 419},
+    {"x": 385, "y": 393, "w": 36, "h": 55, "cx": 403, "cy": 420},
+]
+
+
+def test_a_rewritten_answer_is_read_again_beside_the_avatar(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The live quiz loop: wrong, rewritten, checked again. Centred on the answer, the avatar's box (reported as UI)
+    # covered it and the second check said "no answer"; beside it, the new answer is read and graded.
+    _bank(h, "a.md", ("3x + 5 = 20", "x = 5", 1), ("x + 1 = 2", "x = 1", 1))
+    _ask(h, "quiz me")
+    _with_ink(monkeypatch, *PROBLEM_BLOBS, *ANSWER_BLOBS)
+    wrong = _reply(h, "check my answer", AvatarAction("Not quite.", "error", 500, 420))
+    assert wrong["highlight"] == [300, 393, 121, 55]
+    assert (wrong["target_x"], wrong["target_y"]) == (300 - BESIDE, 420)
+    h.assistant.set_ui_rects(_page_ui(wrong))
+    right = _reply(h, "check my answer", AvatarAction("Correct!", "celebrating", 500, 420))
+    assert h.vlm.seen[-1][2] == [*PROBLEM_BLOBS, *ANSWER_BLOBS], "nothing the student wrote is masked"
+    assert right["highlight"] == [300, 393, 121, 55] and h.assistant.tutor.quiz_number == 2
+    h.assistant.set_ui_rects(_page_ui(right))
+    _reply(h, "check my answer", AvatarAction("Correct!", "celebrating", 500, 420))
+    assert h.vlm.seen[-1][2] == [*PROBLEM_BLOBS, *ANSWER_BLOBS]
 
 
 def test_quiz_check_highlights_the_answer_line(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1431,7 +1527,7 @@ def test_quiz_check_highlights_the_answer_line(h: Harness, monkeypatch: pytest.M
     _ask(h, "quiz me")
     _with_ink(monkeypatch, LINE_1, LINE_2)
     avatar = _reply(h, "check my answer", AvatarAction("Correct!", "celebrating", 550, 240))  # the model: line 1
-    assert (avatar["target_x"], avatar["target_y"]) == (500, 440), "the lowest line is the answer"
+    assert (avatar["target_x"], avatar["target_y"]) == (400 - BESIDE, 440), "beside the lowest line, the answer"
     assert avatar["highlight"] == [400, 400, 200, 80]
 
 
@@ -1522,11 +1618,18 @@ def test_set_ui_rects_skips_malformed_entries(h: Harness) -> None:
     assert len(h.assistant.ui_rects()) == MAX_UI_RECTS
 
 
+# What main.js reports for the outline around LINE_1 ([400, 200, 300, 80]) on a full-screen 1280×800 page: four bands
+# from 10 px past the 3 px border, 14 px out from the ink, to 10 px inside it (test_frontend checks the page itself).
+LINE_1_OUTLINE = [[373, 173, 354, 23], [373, 284, 354, 23], [373, 173, 23, 134], [704, 173, 23, 134]]
+
+
 def test_the_highlight_never_masks_the_ink_it_outlines(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The page never reports the outline's whole box (the old server exemption for one never fired): its four
+    # edges mask its glow and leave the writing inside alone.
     _with_ink(monkeypatch, LINE_1, LINE_2)
     first = _reply(h, "help", AvatarAction("Look.", "pointing", 410, 210))
-    x, y, w, hgt = first["highlight"]
-    h.assistant.set_ui_rects([[x - 10, y - 10, w + 20, hgt + 20], [380, 380, 300, 150]])  # glow + the bubble
+    assert first["highlight"] == [400, 200, 300, 80]
+    h.assistant.set_ui_rects([*LINE_1_OUTLINE, [380, 380, 300, 150]])  # the outline + the bubble
     _reply(h, "and now?", AvatarAction("Look.", "pointing", 410, 210))
     assert h.vlm.seen[-1][2] == [LINE_1], "the outlined line stays, the line under the bubble goes"
 
@@ -1537,9 +1640,13 @@ def test_drop_ui_ink() -> None:
     ink = [dict(LINE_1), dict(LINE_2), {"x": 1}]
     assert drop_ui_ink(ink, []) == ink
     assert drop_ui_ink(ink, [(380.0, 380.0, 300.0, 150.0)]) == [LINE_1, {"x": 1}], "no box: kept"
-    outline = (400.0, 200.0, 300.0, 80.0)
-    assert drop_ui_ink(ink, [(395.0, 195.0, 310.0, 90.0)], outline) == ink, "the highlight itself"
-    assert drop_ui_ink(ink, [(0.0, 0.0, 1280.0, 800.0)], outline) == [{"x": 1}], "a full-screen card is no highlight"
+    assert drop_ui_ink(ink, [(0.0, 0.0, 1280.0, 800.0)]) == [{"x": 1}], "a full-screen card hides everything"
+    bands = [tuple(map(float, band)) for band in LINE_1_OUTLINE]
+    glow = [
+        {"x": 380, "y": 176, "w": 200, "h": 12, "cx": 480, "cy": 182},  # the bright border read as a stroke
+        {"x": 376, "y": 220, "w": 14, "h": 40, "cx": 383, "cy": 240},  # its halo down the left side
+    ]
+    assert drop_ui_ink([*ink, *glow], bands) == ink, "the outline's light goes, the ink inside it stays"
 
 
 def test_place_target_unit() -> None:
@@ -1571,7 +1678,43 @@ def test_anything_but_yes_keeps_the_quiz_and_is_handled_as_usual(h: Harness) -> 
     assert _tutor_events(h)[-1]["confirm_stop"] is False
 
 
-@pytest.mark.parametrize("yes", ["yes", "yeah", "ok", "sure", "Sí", "claro", "dale", "stop the quiz"])
+@pytest.mark.parametrize("unsure", ["please", "fine", "Bueno", "por favor", "porfa", "no, don't stop the quiz"])
+def test_an_unsure_reply_to_the_question_keeps_the_quiz(h: Harness, unsure: str) -> None:
+    # Ending the quiz loses its progress, so only a clear yes ends it; this reply is handled as any other turn.
+    _bank(h, "a.md", ("1 + 1", "2", 1), ("2 + 2", "4", 1))
+    _ask(h, "quiz me")
+    h.assistant.handle_query("stop")
+    assert h.assistant.tutor.pending_stop
+    task = _ask(h, unsure, state="celebrating", ink=True)["task"]
+    tutor = h.assistant.tutor
+    assert task["stage"] == "check" and tutor.quiz_active and not tutor.pending_stop
+    assert "the quiz is over" not in h.payloads("speak")[-1]["text"]
+
+
+@pytest.mark.parametrize(
+    "yes",
+    [
+        "yes",
+        "yeah",
+        "yes please",
+        "ok",
+        "sure",
+        "Sí",
+        "Sí, termínalo",
+        "claro",
+        "dale",
+        "stop the quiz",
+        # A soft word before an explicit stop is a yes; alone it is not (test_an_unsure_reply_...).
+        "fine, stop",
+        "fine, stop it",
+        "fine, end it",
+        "bueno, termínalo",
+        "bueno, para",
+        "porfa, para",
+        "por favor termínalo",
+        "bueno ya no",
+    ],
+)
 def test_yes_after_the_question_stops_with_the_score(h: Harness, yes: str) -> None:
     _bank(h, "a.md", ("1 + 1", "2", 1), ("2 + 2", "4", 1))
     _ask(h, "quiz me")
@@ -1627,6 +1770,216 @@ def test_ink_lines_groups_blobs_into_written_lines() -> None:
     assert ink_lines([]) == []
 
 
+# Blobs as vision_loop.find_ink_regions finds them on a 1920×1080 board, digits ~55 px tall (marker strokes drawn with
+# OpenCV). Stacked fractions: the gap between each glyph and its bar, in board px.
+Blob = tuple[int, int, int, int]
+HALVES = {  # "1/2 + 1/2 = 1"
+    8: [
+        (394, 441, 78, 66),
+        (410, 520, 44, 55),
+        (494, 480, 44, 43),
+        (561, 441, 139, 76),
+        (577, 520, 44, 55),
+        (732, 476, 43, 54),
+    ],
+    14: [
+        (394, 494, 78, 13),
+        (410, 526, 44, 55),
+        (411, 435, 43, 54),
+        (494, 480, 44, 43),
+        (561, 486, 139, 31),
+        (577, 526, 44, 55),
+        (578, 435, 43, 54),
+        (732, 476, 43, 54),
+    ],
+    22: [
+        (394, 494, 78, 13),
+        (410, 534, 44, 55),
+        (411, 427, 43, 54),
+        (494, 480, 44, 43),
+        (561, 486, 139, 31),
+        (577, 534, 44, 55),
+        (578, 427, 43, 54),
+        (732, 476, 43, 54),
+    ],
+}
+THREE_QUARTERS = {
+    14: [(394, 494, 78, 13), (408, 527, 48, 54), (409, 435, 45, 55)],
+    22: [(394, 494, 78, 13), (408, 535, 48, 54), (409, 427, 45, 55)],
+}
+PROBLEM_7_4 = [
+    (398, 341, 43, 42),
+    (455, 338, 44, 43),
+    (515, 329, 98, 54),
+    (632, 329, 41, 54),
+    (672, 323, 39, 66),
+    (707, 329, 48, 54),
+]  # "x + 1 = 7/4", written inline
+ANSWER_3_4 = {  # "x = 3/4" under it, the fraction stacked
+    14: [(398, 488, 96, 42), (519, 494, 78, 13), (533, 527, 48, 54), (534, 435, 45, 55)],
+    22: [(398, 488, 96, 42), (519, 494, 78, 13), (533, 535, 48, 54), (534, 427, 45, 55)],
+}
+TWO_LINES = [
+    (399, 349, 45, 55),
+    (442, 361, 43, 42),
+    (499, 358, 44, 43),
+    (558, 349, 44, 55),
+    (620, 348, 98, 55),
+    (718, 348, 44, 56),
+    (398, 461, 96, 42),
+    (511, 449, 44, 55),
+]  # "3x + 5 = 20" over "x = 5"
+TIGHT_LINES = [
+    (399, 349, 45, 55),
+    (442, 361, 90, 42),
+    (611, 348, 98, 55),
+    (399, 434, 45, 55),
+    (442, 446, 96, 42),
+    (555, 433, 88, 56),
+    (398, 531, 96, 42),
+    (511, 518, 88, 56),
+    (597, 513, 39, 66),
+    (633, 519, 45, 55),
+]  # "3x - 5 = 20", "3x = 25", "x = 25/3", 85 px apart
+
+
+def _boxes(blobs: list[Blob]) -> list[tuple[float, float, float, float]]:
+    return [tuple(map(float, b)) for b in blobs]  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("blobs", "line"),
+    [
+        (HALVES[8], (394, 441, 381, 134)),
+        (HALVES[14], (394, 435, 381, 146)),
+        (HALVES[22], (394, 427, 381, 162)),
+        (THREE_QUARTERS[14], (394, 435, 78, 146)),  # a bar alone in its row holds its glyphs a little further off
+        (THREE_QUARTERS[22], (394, 427, 78, 162)),
+    ],
+)
+def test_ink_lines_keeps_a_stacked_fraction_on_one_line(blobs: list[Blob], line: Blob) -> None:
+    from biobench_sar.assistant import ink_lines
+
+    assert ink_lines(_boxes(blobs)) == [tuple(map(float, line))]
+
+
+@pytest.mark.parametrize(
+    ("blobs", "lines"),
+    [
+        (TWO_LINES, [(398, 449, 157, 55), (399, 348, 363, 56)]),
+        (TIGHT_LINES, [(398, 513, 280, 66), (399, 348, 310, 56), (399, 433, 244, 56)]),
+        (PROBLEM_7_4 + ANSWER_3_4[14], [(398, 323, 357, 66), (398, 435, 199, 146)]),
+        (PROBLEM_7_4 + ANSWER_3_4[22], [(398, 323, 357, 66), (398, 427, 199, 162)]),
+    ],
+)
+def test_ink_lines_keeps_lines_of_writing_apart(blobs: list[Blob], lines: list[Blob]) -> None:
+    from biobench_sar.assistant import ink_lines
+
+    assert sorted(ink_lines(_boxes(blobs))) == [tuple(map(float, b)) for b in lines]
+
+
+# A lower line that starts with an exponent: the exponent raises its first blob (or, written further from its base,
+# stands alone between the lines) and must not pull the line into the one above. Same board and detector as above,
+# lines 75 px apart (85 for the raised exponents, still under the TIGHT_LINES pitch's gap).
+SQUARE_UNDER = [
+    (398, 441, 37, 38),
+    (400, 356, 72, 48),
+    (436, 418, 66, 54),
+    (482, 364, 39, 38),
+    (515, 431, 38, 47),
+    (532, 356, 39, 48),
+    (584, 356, 121, 47),
+]  # "2x + 3 = 21" over "x² = 9", the 2 in the x's blob
+POWER_UNDER = [
+    (399, 356, 73, 48),
+    (400, 441, 38, 47),
+    (439, 419, 66, 48),
+    (472, 441, 84, 48),
+    (482, 364, 39, 38),
+    (532, 356, 39, 48),
+    (584, 356, 121, 48),
+]  # "3x + 5 = 20" over "2ˣ = 8", the x raised high
+COMPLETE_SQUARE = [
+    (398, 266, 37, 38),
+    (398, 341, 37, 38),
+    (398, 416, 77, 38),
+    (436, 243, 61, 47),
+    (436, 318, 61, 47),
+    (489, 406, 37, 47),
+    (510, 256, 117, 48),
+    (510, 331, 72, 48),
+    (539, 406, 86, 47),
+    (592, 339, 39, 38),
+    (641, 256, 74, 48),
+    (644, 331, 83, 47),
+    (741, 331, 74, 48),
+]  # "x² - 2x = 15", "x² - 2x + 1 = 16", "x - 1 = 4"
+COMPLETE_SQUARE_APART = [
+    (398, 266, 37, 38),
+    (398, 351, 37, 38),
+    (398, 436, 77, 38),
+    (436, 227, 28, 34),
+    (436, 312, 28, 34),
+    (471, 256, 158, 48),
+    (471, 341, 113, 48),
+    (489, 426, 37, 47),
+    (539, 426, 86, 47),
+    (594, 349, 39, 38),
+    (643, 256, 74, 48),
+    (646, 341, 83, 47),
+    (743, 341, 74, 48),
+]  # the same steps, each 2 its own blob, between the lines
+
+
+@pytest.mark.parametrize(
+    ("blobs", "lines"),
+    [
+        (SQUARE_UNDER, [(398, 418, 155, 61), (400, 356, 305, 48)]),
+        (POWER_UNDER, [(399, 356, 306, 48), (400, 419, 156, 70)]),
+        (COMPLETE_SQUARE, [(398, 243, 317, 61), (398, 318, 417, 61), (398, 406, 227, 48)]),
+        (COMPLETE_SQUARE_APART, [(398, 227, 319, 77), (398, 312, 419, 77), (398, 426, 227, 48)]),
+        ([b for b in COMPLETE_SQUARE_APART if b[1] < 400], [(398, 227, 319, 77), (398, 312, 419, 77)]),  # two steps
+    ],
+)
+def test_ink_lines_keeps_a_line_starting_with_an_exponent_apart(blobs: list[Blob], lines: list[Blob]) -> None:
+    from biobench_sar.assistant import ink_lines
+
+    assert sorted(ink_lines(_boxes(blobs))) == [tuple(map(float, b)) for b in lines]
+
+
+def test_ink_lines_keeps_an_exponent_written_apart_on_its_line() -> None:
+    from biobench_sar.assistant import ink_lines
+
+    alone = [b for b in COMPLETE_SQUARE_APART if b[1] < 300]  # "x² - 2x = 15", its 2 a blob of its own
+    assert ink_lines(_boxes(alone)) == [(398.0, 227.0, 319.0, 77.0)]
+
+
+def test_pointing_at_a_line_starting_with_an_exponent_outlines_that_line() -> None:
+    # Help mode: the model points at the second step; the outline and the fingertip are on it, not between two lines.
+    from biobench_sar.assistant import POINT_GAP, place_target
+
+    ink = [{"x": x, "y": y, "w": w, "h": h} for x, y, w, h in COMPLETE_SQUARE]
+    action, highlight = place_target(AvatarAction("a", "pointing", 600, 350), ink, (1920, 1080), lines=True)
+    assert highlight == [398, 318, 417, 61]
+    assert (action.target_x, action.target_y) == (398 - POINT_GAP, 348)
+
+
+def test_quiz_check_highlights_a_stacked_fraction_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The lowest row of "x = 3/4" is its denominator alone; the answer is the whole line.
+    monkeypatch.setenv("SAR_PROJECTOR_WIDTH", "1920")
+    monkeypatch.setenv("SAR_PROJECTOR_HEIGHT", "1080")
+    h = Harness()
+    _bank(h, "a.md", ("x + 1 = 7/4", "x = 3/4", 1), ("x + 1 = 2", "x = 1", 1))
+    _ask(h, "quiz me")
+    blobs = PROBLEM_7_4 + ANSWER_3_4[22]
+    _with_ink(
+        monkeypatch, *({"x": x, "y": y, "w": w, "h": b, "cx": x + w // 2, "cy": y + b // 2} for x, y, w, b in blobs)
+    )
+    avatar = _reply(h, "check my answer", AvatarAction("Correct!", "celebrating", 556, 562))
+    assert avatar["highlight"] == [398, 427, 199, 162]
+    assert (avatar["target_x"], avatar["target_y"]) == (398 - BESIDE, 508), "beside the whole line, not its 4"
+
+
 def test_math_highlight_outlines_the_whole_answer_line(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     _bank(h, "a.md", ("3x + 5 = 20", "x = 5", 1), ("x + 1 = 2", "x = 1", 1))
     _ask(h, "quiz me")
@@ -1639,7 +1992,8 @@ def test_math_highlight_outlines_the_whole_answer_line(h: Harness, monkeypatch: 
     _with_ink(monkeypatch, *blobs)
     avatar = _reply(h, "check my answer", AvatarAction("Correct!", "celebrating", 239, 400))
     assert avatar["highlight"] == [198, 371, 132, 48], "x = 7, not just its first blob"
-    assert (avatar["target_x"], avatar["target_y"]) == (264, 395)
+    # No room left of it on the board (198 - 124 < 80): beside it on the right.
+    assert (avatar["target_x"], avatar["target_y"]) == (198 + 132 + BESIDE, 395)
 
 
 def test_biology_keeps_each_box_its_own_region(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1651,4 +2005,6 @@ def test_biology_keeps_each_box_its_own_region(monkeypatch: pytest.MonkeyPatch) 
     ]
     _with_ink(monkeypatch, *boxes)
     avatar = _reply(bio, "check my flowchart", AvatarAction("A step is missing.", "error", 600, 500))
-    assert avatar["highlight"] == [420, 480, 300, 120] and (avatar["target_x"], avatar["target_y"]) == (570, 540)
+    assert avatar["highlight"] == [420, 480, 300, 120]
+    # Its left side is the other box: the avatar stands right of it, over no ink.
+    assert (avatar["target_x"], avatar["target_y"]) == (720 + BESIDE, 540)
