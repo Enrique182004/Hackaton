@@ -4,8 +4,8 @@ Teachers should not need Python, a terminal or `pip`. CI turns the repo into:
 
 | Platform | File | What it is |
 | --- | --- | --- |
-| Windows 10/11 (x64) | `SAR-Whiteboard-Assistant-Setup-<version>.exe` | Per-user installer (no administrator rights), Start-menu shortcut, optional desktop shortcut, uninstaller |
-| macOS 12+ (Apple Silicon) | `SAR-Whiteboard-Assistant-<version>-macOS-arm64.zip` (~480 MB) | `SAR Whiteboard Assistant.app` (~1.2 GB unpacked) |
+| Windows 10/11 (x64) | `SAR-Whiteboard-Assistant-Setup-<version>.exe` (~450 MB) | Per-user installer (no administrator rights), Start-menu shortcut, optional desktop shortcut, uninstaller; ~1.3 GB installed |
+| macOS 12+ (Apple Silicon) | `SAR-Whiteboard-Assistant-<version>-macOS-arm64.zip` (~560 MB) | `SAR Whiteboard Assistant.app` (~1.3 GB unpacked) |
 
 Both bundle Python, every package in `requirements.txt` (CPU-only PyTorch) and the
 `all-MiniLM-L6-v2` embedding model (~90 MB), so the knowledge base works offline from the first start.
@@ -33,7 +33,7 @@ it: see [Phones and tablets](#phones-and-tablets).
   match `__version__`, builds both platforms and attaches them to a GitHub release (a tag with a `-`,
   such as `v0.2.0-rc1`, makes a pre-release).
 
-Every build is smoke-tested before it is uploaded: CI runs the built app with `--self-test` (see
+Each platform takes about 8 minutes with warm caches. Every build is smoke-tested before it is uploaded: CI runs the built app with `--self-test` (see
 [Command line](#command-line)), which starts the real server with a mock model and checks the pages,
 Socket.IO, every lazily imported library, the bundled embedding model and Whisper's assets.
 
@@ -167,9 +167,9 @@ bash scripts/build_macos.sh                # --whisper, --skip-self-test, --out 
 ```
 
 Both install PyInstaller into `.venv`, run `packaging/fetch_models.py`, build `packaging/sar.spec`, run
-the self-test, then make the installer / zip in `dist/`. Sizes from a macOS arm64 build: the app is
-~1.2 GB unpacked (PyTorch alone is ~400 MB), the zip ~480 MB, the PyInstaller work folder ~300 MB; it
-took about 2 minutes on an M4 with packages already installed. Plan for ~3 GB of free disk and delete
+the self-test, then make the installer / zip in `dist/`. A local macOS arm64 build: the app is ~1.2 GB
+unpacked (PyTorch alone is ~400 MB), the PyInstaller work folder ~300 MB, and it took about 2 minutes on
+an M4 with packages already installed. Plan for ~3 GB of free disk and delete
 `build/` and `dist/` afterwards.
 `packaging/models/`, `packaging/build/` and `packaging/dist/` are git-ignored.
 
