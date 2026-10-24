@@ -4,6 +4,8 @@ import base64
 import json
 import logging
 
+import cv2
+import numpy as np
 import requests
 
 from biobench_sar.schemas import (
@@ -17,27 +19,44 @@ from biobench_sar.schemas import (
 logger = logging.getLogger(__name__)
 
 MAX_CHUNK_CHARS = 800
+KEEP_ALIVE = "30m"
+NUM_PREDICT = 200
 
 SYSTEM_PROMPT = """You are an expert environmental-biology research assistant, shown as an animated avatar \
 projected on a whiteboard. You support a thesis on identifying Acanthamoeba in Laguna de Bustillos and on the \
 hydrology and soil runoff of Leptosol and Feozem soils in Cuauhtemoc, Chihuahua, Mexico.
 
-You verify flowcharts drawn on the whiteboard and sterile laboratory procedures (e.g. sampling, filtration, \
-NNA agar with an E. coli lawn, incubation, microscopy, PCR), flagging missing steps such as autoclaving or \
-flame sterilization. Use the provided reference context when it is relevant and say which source you used.
+You verify flowcharts and sterile lab procedures drawn on the whiteboard. A COMPLETE Acanthamoeba isolation \
+flowchart must contain ALL of: "Autoclave media + tools", "Flame-sterilize loop", water sampling, filtration, \
+NNA + E. coli plating, incubation, microscopy. Use the reference context when relevant and name the source.
 
-Be concise: spoken_text is spoken aloud, so use at most 3 short sentences, no markdown.
+Be concise: spoken_text is spoken aloud, at most 3 short sentences, no markdown.
 
-Respond with ONLY a JSON object, no prose before or after:
+Respond with ONLY a JSON object:
 {"spoken_text": str, "animation_state": "idle|walking|pointing|celebrating|error", "target_x": int, "target_y": int}
 
-animation_state:
-- "pointing": you refer to a specific drawing; target is the center of that ink region.
-- "error": you found a mistake or missing step; target is where it is (or should be).
-- "celebrating": the procedure is correct and complete.
-- "walking" or "idle": anything else (general answers, no specific target).
+animation_state rules (apply the first that fits):
+1. "error": the user asks you to check/verify a flowchart or procedure AND any required step is missing, \
+wrong, or out of order (e.g. no autoclave or no flame-sterilize box). Name the missing step. target = the gap \
+between the two neighbouring boxes (midpoint of their centers), or the wrong box's center.
+2. "celebrating": the user asks you to check a procedure AND every required step is present and in order. \
+target = center of the last box.
+3. "pointing": the question is about one specific drawing; target = that ink region's center.
+4. "idle" or "walking": the question is NOT about the drawing (general science or small talk); target = \
+screen center.
+Check each required step by name. If the "Autoclave" and "Flame-sterilize" boxes ARE both drawn before the \
+sample and the rest of the order is right, the answer is "celebrating", never "error". If either is absent, \
+the answer is "error", never "celebrating".
 
-target_x / target_y are projector pixel coordinates within the given width and height."""
+target_x / target_y are projector pixels within the given width and height.
+
+Examples (JSON only):
+Chart: Sample -> Filter -> NNA -> Incubate -> Microscopy. Query: "Is this right?"
+{"spoken_text": "Not yet. There is no autoclave or flame-sterilize step before plating.", "animation_state": "error", "target_x": 640, "target_y": 540}
+Chart: Autoclave -> Flame-sterilize -> Sample -> Filter -> NNA -> Incubate -> Microscopy. Query: "Check it."
+{"spoken_text": "Every sterile step is present and in order. Great work!", "animation_state": "celebrating", "target_x": 1700, "target_y": 540}
+Query: "Why is the lake water turbid?"
+{"spoken_text": "Runoff carries fine sediment from Leptosol soils into the lake.", "animation_state": "idle", "target_x": 960, "target_y": 540}"""
 
 
 def build_prompt(
@@ -73,13 +92,49 @@ class VLMClient:
         base_url: str,
         api_key: str | None = None,
         timeout: float = 90,
+        max_image_side: int = 1024,
     ) -> None:
         self.backend = backend.lower()
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self.max_image_side = max_image_side
         self.session = requests.Session()
+
+    def warmup(self) -> None:
+        """Load the model into memory ahead of the first question. Never raises."""
+        if self.backend != "ollama":
+            return
+        try:
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": "ok"}],
+                "stream": False,
+                "keep_alive": KEEP_ALIVE,
+                "options": {"num_predict": 1},
+            }
+            self.session.post(f"{self.base_url}/api/chat", json=payload, timeout=self.timeout).raise_for_status()
+        except Exception as exc:
+            logger.warning("VLM warmup failed: %s", exc)
+
+    def _prepare_image(self, image_jpeg: bytes | None) -> bytes | None:
+        if not image_jpeg:
+            return image_jpeg
+        try:
+            img = cv2.imdecode(np.frombuffer(image_jpeg, np.uint8), cv2.IMREAD_COLOR)
+            if img is None:
+                return image_jpeg
+            h, w = img.shape[:2]
+            scale = self.max_image_side / max(h, w)
+            if scale >= 1:
+                return image_jpeg
+            img = cv2.resize(img, (max(1, round(w * scale)), max(1, round(h * scale))), interpolation=cv2.INTER_AREA)
+            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            return buf.tobytes() if ok else image_jpeg
+        except Exception as exc:
+            logger.warning("Image downscale failed, sending original: %s", exc)
+            return image_jpeg
 
     def evaluate(
         self,
@@ -93,6 +148,7 @@ class VLMClient:
             if self.backend == "mock":
                 return self._mock(query, context, ink_regions, projector_size)
             prompt = build_prompt(query, context, ink_regions, projector_size)
+            image_jpeg = self._prepare_image(image_jpeg)
             if self.backend == "ollama":
                 text = self._ollama(prompt, image_jpeg)
             elif self.backend == "openai":
@@ -122,7 +178,8 @@ class VLMClient:
             "messages": [{"role": "system", "content": SYSTEM_PROMPT}, user],
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0.2},
+            "keep_alive": KEEP_ALIVE,
+            "options": {"temperature": 0.2, "num_predict": NUM_PREDICT},
         }
         resp = self.session.post(f"{self.base_url}/api/chat", json=payload, timeout=self.timeout)
         resp.raise_for_status()
