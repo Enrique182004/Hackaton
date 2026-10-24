@@ -67,10 +67,14 @@ When generating the VLM prompt and backend logic, enforce these core tutoring be
   > **How this is built:** the problems are not searched in ChromaDB. When a CSV quiz bank or a worksheet is
   > uploaded, its problems and answers are parsed into the quiz bank (`rag/quiz_bank.py`, JSON at
   > `SAR_QUIZ_BANK_FILE`); a quiz takes them from the ticked files, easiest level first, at most
-  > `SAR_QUIZ_LENGTH` (default 10) per quiz, and the model makes problems up when none are ticked. ChromaDB
-  > holds the files' text for answering questions; answer keys are removed before that text reaches the
-  > model, so an answer reaches it only when a quiz answer is checked. Asking for help during a quiz ("I'm stuck", "hint") gives one hint
-  > on the same problem without ending the quiz. Details: [BUILD_PLAN.md](BUILD_PLAN.md) contracts C, G and H.
+  > `SAR_QUIZ_LENGTH` (default 10) per quiz, and when no worksheet problems are ticked the code makes up
+  > progressive problems (the model only reads them out). ChromaDB holds the files' text for answering
+  > questions; answer keys are removed from every file when it is added, so the model never sees them.
+  > Answers are **graded in code** (`grading.py`, with sympy): the model only reads what the student wrote,
+  > and the code compares it with the answer key (equivalent forms, several answers and systems count).
+  > Asking for help during a quiz ("I'm stuck", "hint") gives one hint on the same problem without ending
+  > the quiz, and saying "stop the quiz" asks for a yes before it ends. Details:
+  > [BUILD_PLAN.md](BUILD_PLAN.md) contracts C, G and H.
 
 ### C. Learning a Topic (works with an empty board)
 
