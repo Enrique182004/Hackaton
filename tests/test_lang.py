@@ -119,6 +119,10 @@ def test_normalize_language(code: str | None, expected: str) -> None:
         ("toy atorao", "en", "es"),
         ("me neither", "es", "en"),
         ("no me neither", "en", "en"),
+        # short answers: the verbs and units of a word problem
+        ("me sale 7 y sobra 1", "en", "es"),
+        ("da 2.5 litros", "en", "es"),
+        ("cuesta 20 pesos", "en", "es"),
         # Spanglish follows the language most of the words are in
         ("can you help me with this, por favor", "es", "en"),
         ("what's the next paso", "es", "en"),
@@ -291,6 +295,46 @@ def test_word_lists_do_not_overlap() -> None:
         ("mejor dejamos el examen para mañana", "help"),
         ("ya me aburrió el quiz", "help"),
         ("suficiente quiz por hoy", "help"),
+        ("ya estuvo, termina el quiz", "help"),
+        ("mejor ya no le sigo al quiz", "help"),
+        ("ya no le sigo", "help"),
+        ("ya no quiero contestar más", "help"),
+        ("¿cómo se sale del quiz?", "help"),
+        ("¿cómo dejo el examen?", "help"),
+        ("ya estuvo de preguntas", "help"),
+        ("basta de preguntas", "help"),
+        ("ya dejamos el examen", "help"),
+        ("suficiente prueba por hoy", "help"),
+        # a quit with more after it: a new clause, a topic, or "hasta aquí" ("let's stop here")
+        ("ya termina el quiz, mañana sigo", "help"),
+        ("termina el examen, mañana le seguimos", "help"),
+        ("termina el quiz, hoy ya no quiero", "help"),
+        ("termina el quiz, el lunes lo acabamos", "help"),
+        ("termina el quiz, mañana le seguimos", "help"),
+        ("termina el examen, hoy ya no puedo", "help"),
+        ("termina el quiz, a las tres tengo clase", "help"),
+        ("termina el quiz, cuando quieras", "help"),
+        ("ya termina el quiz, el viernes lo seguimos", "help"),
+        ("Termina el quiz. Mañana le seguimos.", "help"),
+        ("Termina el quiz. Hasta aquí.", "help"),
+        ("Termina el quiz. Hoy no puedo.", "help"),
+        ("termina el quiz, hasta aquí", "help"),
+        ("ya me aburrió el quiz, mañana sigo", "help"),
+        ("ya termina el quiz mañana sigo", "help"),
+        ("termina el quiz hoy ya no quiero", "help"),
+        ("termina el quiz el lunes lo acabamos", "help"),
+        ("ya acaba el examen de los decimales porfa", "help"),
+        ("termina el quiz de la tabla del 7", "help"),
+        ("termina el examen de la unidad 2", "help"),
+        ("termina la prueba de las fracciones", "help"),
+        ("párale al quiz de las ecuaciones", "help"),
+        ("termina el quiz de hoy", "help"),
+        ("termina el quiz hasta aquí", "help"),
+        ("acaba el examen hasta aquí", "help"),
+        ("termina el quiz luego luego", "help"),
+        ("Sí termina el quiz", "help"),
+        ("no, para el quiz, ya no quiero", "help"),
+        ("para el quiz ya me cansé de las preguntas", "help"),
         ("otro problema parecido", "practice"),
         ("dame uno similar", "practice"),
         ("uno similar", "practice"),
@@ -325,8 +369,26 @@ def test_word_lists_do_not_overlap() -> None:
         ("ponme ejercicios de fracciones", "practice"),
         ("dame unos ejercicios", "practice"),
         ("dame problemas para practicar", "practice"),
-        ("sigamos con otro", "practice"),
-        ("sigamos con otro ejercicio", "practice"),
+        ("sigamos con otro ejercicio parecido", "practice"),
+        ("vamos con otro de práctica", "practice"),
+        ("¿hay otro así?", "practice"),
+        ("¿hay otro problema así?", "practice"),
+        ("¿hay otro ejercicio parecido?", "practice"),
+        ("¿hay otro así porfa?", "practice"),
+        ("otro igual a la segunda", "practice"),
+        ("dame otra ecuación más difícil", "practice"),
+        ("ok, vamos a practicar", "practice"),
+        ("ahora sí vamos a practicar", "practice"),
+        ("practiquemos luego luego", "practice"),
+        # "luego" before an order is "then", not "later"
+        ("luego dame otro ejercicio", "practice"),
+        ("y luego hazme un quiz", "quiz"),
+        ("primero explícame y luego hazme un quiz", "quiz"),
+        ("explícame fracciones y luego me haces un quiz", "quiz"),
+        ("luego hazme un quiz", "quiz"),
+        ("hazme un quiz luego luego", "quiz"),
+        ("hazme un quiz y luego me explicas", "quiz"),
+        ("para el examen de mañana hazme un quiz", "quiz"),
         ("ayuda", "help"),
         ("¡ayúdame!", "help"),
         ("¿me ayudas?", "help"),
@@ -384,6 +446,20 @@ def test_word_lists_do_not_overlap() -> None:
         ("sin tu ayuda no puedo", "help"),
         # "¿cómo le hago para salir del quiz?" quits rather than asking for a hint
         ("¿cómo le hago para salir del quiz?", "help"),
+        # stuck, the way Mexican students say it
+        ("este problema me tiene atorado", "help"),
+        ("este ejercicio me tiene bien confundida", "help"),
+        ("me tienes confundido", "help"),
+        ("me dejaste más confundido", "help"),
+        ("me dejó confundida", "help"),
+        ("otra vez atorado", "help"),
+        ("otra vez atorada", "help"),
+        ("estoy todavía atorado", "help"),
+        ("estoy como atorado", "help"),
+        ("estoy re confundido", "help"),
+        ("estoy demasiado confundido", "help"),
+        ("neta atorado", "help"),
+        ("no sé sacarlo", "help"),
     ],
 )
 def test_detect_mode_es(text: str, expected: str) -> None:
@@ -476,6 +552,75 @@ def test_detect_mode_es(text: str, expected: str) -> None:
         "no se hace así",
         "¿cómo se hace una gráfica?",
         "¡así es como se hace!",
+        "no me tiene confundido",
+        "no se sacaron bien los valores",
+        # a time right after the quiz word says when it ends
+        "termina el quiz del viernes",
+        "termina el quiz de hoy a las tres",
+        "termina el quiz mañana a las tres",
+        "termina el quiz luego",
+        "termina el quiz en un rato",
+        "termina el quiz hasta el viernes",
+        "termina el examen en una hora",
+        "termina el examen en media hora",
+        # yes/no questions about the quiz, in the command's word order
+        "¿termina el quiz si fallo una?",
+        "¿termina el examen solo o le pico algo?",
+        "¿termina la prueba con la pregunta 5?",
+        # "for the exam": an answer, or a reason that goes on
+        "sí, para el examen",
+        "no, para el examen",
+        "para el examen ya no quiero sacar seis",
+        "para el examen ya estoy cansado de estudiar",
+        "para el quiz ya me cansé de estudiar",
+        "para el quiz ya terminé de estudiar",
+        "para el examen ya acabé la guía",
+        "para el quiz ya entendí las fracciones",
+        "para el quiz ya terminé el tema 3",
+        "para el quiz ya no puedo con las fracciones",
+        "para el quiz basta con estudiar",
+        "eso es suficiente prueba",
+        "suficiente prueba",
+        "ya dejamos el examen en la mesa",
+        "¿cómo salgo del examen con buena calificación?",
+        # mid-quiz "sigamos con otro" is "next": practice mode would end the quiz
+        "sigamos con otro",
+        "sigamos con otro ejercicio",
+        "vamos con otro",
+        "seguimos con otro, porfa",
+        "continuemos con otro",
+        "sale, vamos con otro",
+        "mejor vamos con otro",
+        "no sé, vamos con otro",
+        "sáltatelo, vamos con otro",
+        "vamos con otro problema",
+        # and "otra" / "una" alone is "pregunta"
+        "dame otra más fácil",
+        "una más difícil",
+        "otra más difícil",
+        # "el otro igual" describes; "a la tercera parte" / "a los dos" is dictation
+        "una fracción es 1/2 y la otra igual a la primera",
+        "el otro igual a la segunda",
+        "uno es 5 y el otro igual a lo que falta",
+        "un lado mide 5 y el otro igual",
+        "un ángulo mide 40 y el otro igual al anterior",
+        "otra igual a la tercera parte",
+        "otra igual a la cuarta parte",
+        "otro igual a los dos",
+        "¿hay otro así en la hoja?",
+        # put off, before or after the request
+        "practiquemos luego",
+        "practiquemos más tarde",
+        "practiquemos otro día",
+        "quiero practicar más tarde",
+        "mañana vamos a practicar",
+        "en la clase vamos a practicar fracciones",
+        "si vamos a practicar 2 horas diarias, ¿cuántas horas son en una semana?",
+        "hazme un quiz después",
+        "hazme un quiz luego",
+        "luego me haces un quiz",
+        "mañana me haces un quiz",
+        "dame otro ejercicio después",
     ],
 )
 def test_detect_mode_es_ignores(text: str) -> None:
@@ -505,6 +650,22 @@ def test_detect_mode_es_ignores(text: str) -> None:
         ("no quiero un quiz", False),
         ("termina el quiz a las tres", False),
         ("¿cómo le hago para terminar el quiz a tiempo?", False),
+        ("ya termina el quiz, mañana sigo", True),
+        ("termina el quiz de la tabla del 7", True),
+        ("termina el quiz hasta aquí", True),
+        ("Sí termina el quiz", True),
+        ("ya no le sigo", True),
+        ("termina el quiz de mañana a las tres", False),
+        ("termina el quiz el viernes", False),
+        ("termina el quiz del viernes", False),
+        ("¿termina el quiz si fallo una?", False),
+        ("si termina el quiz me avisas", False),
+        ("sí, para el examen", False),
+        ("para el quiz ya terminé el tema 3", False),
+        # "no le sigo" may be "I don't follow you"
+        ("no le sigo", False),
+        # by design: it may be asking how to finish
+        ("¿cómo le hago para terminar el quiz?", False),
     ],
 )
 def test_is_quiz_stop_es(text: str, expected: bool) -> None:
@@ -539,6 +700,10 @@ def test_is_quiz_stop_es(text: str, expected: bool) -> None:
         ("¿cómo se le saca la raíz a un número?", "sacar la raíz a un número"),
         ("como le saco la raiz a un numero", "sacar la raiz a un numero"),
         ("¿por qué no me enseñas fracciones?", "fracciones"),
+        # what follows "y luego" is the next request, not the topic
+        ("explícame fracciones y luego me haces un quiz", "fracciones"),
+        ("explícame fracciones y también hazme un quiz", "fracciones"),
+        ("quiero aprender fracciones y también decimales", "fracciones y también decimales"),
     ],
 )
 def test_detect_learn_request_es(text: str, expected: str) -> None:
@@ -658,6 +823,21 @@ def test_learn_topic_is_capped() -> None:
         ("tengo uno bien difícil", "own"),
         ("no, yo lo hago", "own"),
         ("¿dónde lo escribo?", "own"),
+        ("no lo tengo aquí, pero te lo dicto", "own"),
+        ("te lo dicto", "own"),
+        ("te lo digo", "own"),
+        ("uno del libro", "own"),
+        ("el de la página 45", "own"),
+        # Whisper drops the comma of "no, yo lo hago"
+        ("no yo lo hago", "own"),
+        ("no yo lo escribo", "own"),
+        ("tengo uno bien largo", "own"),
+        ("tengo uno bien padre", "own"),
+        ("tengo uno bueno", "own"),
+        ("uno de porcentajes con descuentos", "generate"),
+        ("uno con decimales", "generate"),
+        ("uno de 3 pasos", "generate"),
+        ("hazme uno con decimales", "generate"),
     ],
 )
 def test_detect_offer_reply_es(text: str, expected: str) -> None:
@@ -686,6 +866,8 @@ def test_detect_offer_reply_es(text: str, expected: str) -> None:
         "no lo tengo claro",
         "yo te digo una cosa",
         "uno de tarea",
+        "no te lo digo",
+        "tengo una buena noticia",
         "tengo hambre",
         "no entiendo",
         "make one up",
@@ -707,7 +889,7 @@ def test_input_past_the_cap_is_ignored() -> None:
     assert detect_language("2 " * lang.MAX_INPUT_CHARS + "hola, ¿qué sigue?", "en") == "en"
 
 
-# The limits are far above the few milliseconds these take: they catch a quadratic regression, not a slow runner.
+# The limit is far above the few milliseconds these take: it catches a runaway pattern, not a slow runner.
 def _seconds(call: Callable[..., object], *args: object, **kwargs: object) -> float:
     start = time.perf_counter()
     call(*args, **kwargs)
@@ -721,24 +903,64 @@ def test_pathological_input_stays_fast(fresh_english: None, monkeypatch: pytest.
     assert _seconds(detect_language, "y " * 50000) < 2.0
 
 
-def test_negation_lookback_is_linear() -> None:
-    assert _seconds(lang._commanded, lang._QUIZ_ES, "no quiero un quiz " * 1500) < 2.0
+# A fast machine runs quadratic code on these inputs under any generous time limit, so the internals are checked
+# by growth instead: 4x the input takes about 4x as long when linear and about 16x when quadratic.
+_LINEAR_GROWTH = 8.0
+
+
+def _best_of_three(call: Callable[[], object]) -> float:
+    return min(_seconds(call) for _ in range(3))
+
+
+def _growth(make: Callable[[int], Callable[[], object]], size: int, factor: int = 4) -> float:
+    small = _best_of_three(make(size))
+    assert small < 1.0, "already far too slow; not timing the larger input"
+    return _best_of_three(make(size * factor)) / small
+
+
+# Each input is rejected at every match, so every lookback runs.
+@pytest.mark.parametrize(
+    ("check", "unit", "size"),
+    [
+        pytest.param(lambda text: lang._commanded(lang._QUIZ_ES, text), "no quiero un quiz ", 1000, id="commanded"),
+        pytest.param(lambda text: lang._requested(lang._QUIZ_ES, text), "no quiero un quiz ", 1000, id="requested"),
+        pytest.param(lambda text: lang._requested(lang._QUIZ_ES, text), "hazme un quiz luego , ", 1000, id="put-off"),
+        pytest.param(
+            lambda text: lang._requested(lang._PRACTICE_ES, text, unless=lang._describes),
+            "hay otro problema asi en la hoja ",
+            500,
+            id="statement",
+        ),
+        pytest.param(lang._stuck, "no estoy atorado ", 2000, id="stuck"),
+        pytest.param(lang._offered, "no lo hago yo ", 2000, id="offered"),
+    ],
+)
+def test_lookback_is_linear(check: Callable[[str], bool], unit: str, size: int) -> None:
+    assert not check(unit * size)
+    assert _growth(lambda count: lambda: check(unit * count), size) < _LINEAR_GROWTH
 
 
 def test_filler_trim_is_linear() -> None:
-    words = ["porfa"] * 4000
-    assert _seconds(lang._trim, words, words, lang._TRAILING_FILLER_ES, leading=False) < 2.0
+    def trim(count: int) -> Callable[[], object]:
+        words = ["porfa"] * count
+        return lambda: lang._trim(words, words, lang._TRAILING_FILLER_ES, leading=False)
+
+    assert _growth(trim, 2000) < _LINEAR_GROWTH
 
 
 def test_variable_check_does_not_copy_the_text() -> None:
-    text = "y " * 1_000_000
-    middle = len(text) // 2
+    def checks(size: int) -> Callable[[], object]:
+        text = "y " * size
+        middle = len(text) // 2
 
-    def check() -> None:
-        for start in range(middle, middle + 4000, 2):
-            lang._is_variable(text, start, start + 1)
+        def check() -> None:
+            for start in range(middle, middle + 4000, 2):
+                lang._is_variable(text, start, start + 1)
 
-    assert _seconds(check) < 2.0
+        return check
+
+    # The same 2000 checks on a text 8x as long: as fast if nothing is copied, about 8x slower if it is.
+    assert _growth(checks, 250_000, factor=8) < 3.0
 
 
 # ---- detect_all ------------------------------------------------------------------
@@ -762,6 +984,12 @@ def test_detect_all_reads_spanish(fresh_english: None, monkeypatch: pytest.Monke
     assert detect_all("examíname") == {"language": "es", "mode": "quiz", "learn_topic": None, "offer_reply": None}
     assert detect_all("enséñame ecuaciones")["learn_topic"] == "ecuaciones"
     assert detect_all("invéntame uno")["offer_reply"] == "generate"
+    assert detect_all("explícame fracciones y luego me haces un quiz") == {
+        "language": "es",
+        "mode": "quiz",
+        "learn_topic": "fracciones",
+        "offer_reply": None,
+    }
 
 
 def test_detect_all_without_tutor_module(

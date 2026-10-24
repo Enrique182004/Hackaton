@@ -273,10 +273,10 @@ def _put_off(plain: str, found: re.Match[str]) -> bool:
     return bool(_LATER_AFTER_ES.match(plain, found.end()))
 
 
-Unless = Callable[[str, re.Match[str]], bool]
+_Unless = Callable[[str, re.Match[str]], bool]
 
 
-def _requested(patterns: tuple[re.Pattern[str], ...], plain: str, unless: Unless | None = None) -> bool:
+def _requested(patterns: tuple[re.Pattern[str], ...], plain: str, unless: _Unless | None = None) -> bool:
     """Commanded now: not negated, not put off ("luego"), and not ruled out by `unless` ("hay otro así en la hoja")."""
     for pattern in patterns:
         for found in pattern.finditer(plain):
@@ -733,7 +733,7 @@ def _first_request(plain: list[str], accented: list[str]) -> tuple[list[str], li
         if plain[index] != "y":
             continue
         then = plain[index + 1]
-        after = " ".join(plain[index + 2 : index + 3])
+        after = plain[index + 2] if index + 2 < len(plain) else ""
         if then in _THEN_WORDS or (then in _ALSO_WORDS and (after in _ASKING_WORDS or _ORDER_ES.fullmatch(after))):
             return plain[:index], accented[:index]
     return plain, accented
