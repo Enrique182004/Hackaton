@@ -48,6 +48,7 @@ Windows PowerShell: use `.\.venv\Scripts\python.exe` for `.venv/bin/python`, and
 | J | Language | `lang.py`, `tests/test_lang.py` | — |
 | K | Phones (LAN mode) | `lan.py`, `static/sw.js`, `static/manifest.webmanifest`, `static/icons/`, `tests/test_lan.py`, `tests/test_mobile.py` | F wires it ([MOBILE.md](MOBILE.md)) |
 | L | Desktop builds | `packaging/**`, `paths.py`, `scripts/build_*`, `.github/workflows/build.yml` | F (`app.main`) ([DESKTOP_BUILDS.md](DESKTOP_BUILDS.md)) |
+| M | Accessibility | `accessibility.py`, `jsonfile.py`, `tests/test_accessibility.py` | F wires it, D (`TTSEngine.set_rate`), E draws it on both pages |
 
 ## Phase 2 — Integrate
 1. All unit tests green: `.venv/bin/python -m pytest -q`; lint clean: `.venv/bin/ruff check . && .venv/bin/ruff format --check .`.
@@ -105,6 +106,8 @@ All paths are inside the `biobench_sar` package. Imports are package-absolute
   - `seed_marker_file: Path` (property) — `chroma_dir / ".seeded"`, the profiles whose seed docs are already in
     the store. Each profile is seeded once per store, and deleting `chroma_dir` seeds it again.
   - `quiz_bank_file: Path` — env `SAR_QUIZ_BANK_FILE`, default `DATA_DIR / "quiz_bank.json"`.
+  - `accessibility_file: Path` — env `SAR_ACCESSIBILITY_FILE`, default `DATA_DIR / "accessibility.json"`: the
+    room's accessibility settings (contract M).
   - `quiz_length: int` — env `SAR_QUIZ_LENGTH`, default `10`. The most problems one quiz asks, and how many the
     code invents when no ticked file has any.
   - `language: str` — env `SAR_LANGUAGE`, `"auto" | "en" | "es"` (`lang.normalize_language`), default `"auto"`.
@@ -283,6 +286,9 @@ class TTSEngine:
         # edge: writes mp3 to out_dir, returns file name for browser playback (en-US-AriaNeural / es-MX-DaliaNeural);
         # say/pyttsx3: plays locally (non-blocking) with the best installed voice for lang (es_MX first), returns None;
         # falls back edge → say → pyttsx3 → none
+    def set_rate(self, factor: float) -> None  # voice speed (contract M), clamped to 0.5–2.0
+        # edge: rate="+25%" / "-25%"; say: "-r", round(175 × factor); pyttsx3: the engine's own rate × factor.
+        # At 1.0 nothing extra is passed, so the commands are the same as without it.
 ```
 
 ### G — `tutor.py`
@@ -418,6 +424,38 @@ def detect_mode_es(text) / is_quiz_stop_es(text) / detect_learn_request_es(text)
 (six-digit PIN, per-device and server-wide lockouts, hashed 12 h device tokens), `cookie_kwargs()` (`sar_lan`,
 `HttpOnly`, `SameSite=Lax`, `Max-Age` 12 h), `PhoneSessions`, `SocketIOGate`, `local_ip_addresses`, `join_url`.
 
+### M — `accessibility.py`, `jsonfile.py` (accessibility for the whole room; the routes and the pages are in E/F)
+```python
+TEXT_SIZES = ("normal", "large", "xlarge")                       # board text 1× / 1.25× / 1.5×
+SPEECH_RATES = {"slower": 0.75, "normal": 1.0, "faster": 1.25}  # voice speed factor
+@dataclass(frozen=True)
+class AccessibilitySettings:
+    captions_stay: bool = False; text_size: str = "normal"; speech_rate: str = "normal"; calm: bool = False
+    high_contrast: bool = False
+    def to_dict(self) -> dict[str, bool | str]  # all five keys, in this order
+    rate_factor: float                          # property: SPEECH_RATES[speech_rate]
+def parse_changes(body: object) -> dict[str, bool | str]
+    # a JSON object holding a non-empty subset of the five keys. Booleans must be real JSON booleans and strings
+    # match exactly (case-sensitive, like /api/language). Anything else raises ValueError with an English message
+    # naming the key and its allowed values ("text_size must be one of: normal, large, xlarge").
+class AccessibilityStore:  # persisted as JSON at Settings.accessibility_file; thread-safe
+    def __init__(self, path: Path) -> None  # loads once; a missing or broken file gives the defaults, a bad key its own
+    current: AccessibilitySettings         # property
+    def update(self, changes: Mapping[str, bool | str]) -> AccessibilitySettings
+        # changes already parsed; saves, and a failed save logs a warning and keeps the new value in memory
+# jsonfile.py: the one atomic JSON write (mkstemp in the same folder, then os.replace)
+def save_json(path: Path, payload: object, what: str) -> bool
+    # False, the temp file removed and the warning "could not save {what} to {path}: {exc}" on OSError.
+    # DocumentSelection ("document selection") and QuizBank ("quiz bank") use it too. Calibration.save keeps its
+    # own write, because it raises on failure on purpose.
+```
+`Assistant` owns the store (`assistant.accessibility`). `accessibility_body()` is the five keys.
+`set_accessibility(body)` parses, saves, calls `push_speech_rate()` and emits `accessibility` to every client; a
+`ValueError` becomes the route's 400, with nothing saved or pushed. `push_speech_rate()` hands `rate_factor` to
+`TTSEngine.set_rate` (contract D) through a `getattr(tts, "set_rate", None)` + `callable` guard, once when the
+services are attached and again on every change. `estimate_speech_seconds(text, rate)` divides the spoken part by
+the factor, so slower speech keeps the wake-word loop deaf for longer.
+
 ### E/F — HTTP + Socket.IO contract
 HTTP (F implements, E calls). Every `/api/*` response sends `Cache-Control: no-store`.
 | Method | Path | Body / result |
@@ -427,6 +465,8 @@ HTTP (F implements, E calls). Every `/api/*` response sends `Cache-Control: no-s
 | GET | `/api/config` | active non-secret settings, including `"profile"`, `"camera_size"`, `"projector_size"`, `"language"`, `"current_language"` |
 | GET | `/api/language` | `{"setting": "auto" \| "en" \| "es", "current": "en" \| "es"}` |
 | PUT | `/api/language` | `{"language": "auto" \| "en" \| "es"}` → the `GET` body; 400 otherwise. Also pushed as a `language` event |
+| GET | `/api/accessibility` | `{"captions_stay": bool, "text_size": "normal" \| "large" \| "xlarge", "speech_rate": "slower" \| "normal" \| "faster", "calm": bool, "high_contrast": bool}` (contract M) |
+| PUT | `/api/accessibility` | any non-empty subset of those keys → the full `GET` body, saved to `SAR_ACCESSIBILITY_FILE`; 400 `{"error": str}` otherwise, with nothing saved or pushed. Behind the PIN gate like every route, and phones may change it. Also pushed as an `accessibility` event |
 | GET | `/api/history` | `{"interactions": [...]}` newest first; each item `{id, at, query, spoken_text, animation_state, target_x, target_y, sources, ink_regions, had_frame, latency_s, error, mode, task_kind, display_text, language, highlight}` (`ink_regions` = count; `task_kind` = the task's `kind` or `null`; `display_text` = the answer in normal notation; `highlight` see below) |
 | GET | `/api/documents` | `{"documents": [{"source", "type", "chunks", "active": bool}], "total_chunks": int, "active_count": int, "all_active": bool}`. `active` = answers may use this file; `all_active` = no explicit selection (every file, default) |
 | PUT | `/api/documents/selection` | `{"all": true}` → every file active, or `{"sources": ["a.md", ...]}` → exactly those active (unknown names ignored; `[]` = none, answers skip RAG); non-list `sources` / other body → 400. Returns the `GET /api/documents` body. Persisted to `SAR_SELECTION_FILE` |
@@ -468,10 +508,12 @@ display_text, language, highlight}`, `speak {url: str | null, text, display_text
 `show_calibration {url}`, `hide_calibration {}`, `interaction {...history item}`,
 `documents_changed {...GET /api/documents body}` (after upload, delete and selection changes),
 `tutor {...TutorSession.to_dict()}` (whenever the mode, quiz, learn topic or `confirm_stop` changes),
-`language {setting, current}`. Both pages show `display_text` in place of the spoken words.
-On connect the server sends the current `status`, `tutor` and `language` to the new client. The dashboard re-reads
-`/api/config` on every connect, and also takes the subject from `/api/status` `profile`, so a server restarted with
-another `SAR_PROFILE` is followed without a reload. The math mode picker stays hidden until the subject is known.
+`language {setting, current}`, `accessibility {captions_stay, text_size, speech_rate, calm, high_contrast}` (after
+every change). Both pages show `display_text` in place of the spoken words.
+On connect the server sends the current `status`, `tutor`, `language` and `accessibility` to the new client. The
+dashboard re-reads `/api/config` on every connect, and also takes the subject from `/api/status` `profile`, so a
+server restarted with another `SAR_PROFILE` is followed without a reload. The math mode picker stays hidden until
+the subject is known.
 Busy handling: `/api/query` → 409 while a query runs; `/api/listen` → 409 already recording, 503 no mic;
 `/api/calibrate` → 503 without a frame, 409 while another calibration runs.
 
@@ -488,6 +530,29 @@ fullscreen. The page also listens to `tutor` and shows the current quiz problem 
 running and while the status is `listening`, `transcribing` or `thinking`, and it is masked through `ui_rects`
 anyway. When `highlight` is set, the page draws a glowing outline around that box, pulsing for about 2 s and
 fading after about 8 s or at the next update.
+
+Accessibility on the projector (contract M): `<body>` carries `data-text-size="normal|large|xlarge"`,
+`data-captions="stay|timed"`, `data-calm="on|off"` and `data-contrast="on|off"`. `page()` renders them from
+`access` (the `GET /api/accessibility` body), so the first paint is already right. The `accessibility` event and a
+`GET /api/accessibility` on every reconnect keep them current, with a version counter like the language's. Every
+change re-fits the bubble and sends `ui_rects` again.
+- **Captions stay up**: the bubble gets no hide timer. The next answer replaces it, and a real new question
+  (`transcript`, or status `thinking`) clears it, so it never covers the board while the camera reads it. The
+  heard words stay until the answer arrives instead of 5 s. Switching captions off while one is held hides it
+  after 4 s.
+- **Text size**: `var(--text-scale)` (1 / 1.25 / 1.5) multiplies the font sizes of the bubble, the quiz card's
+  label and problem, the transcript and the status label. The bubble's width grows with it, up to `50vw`.
+- **Calm mode**: the `prefers-reduced-motion` rules (no bob, hop, shake, nudge, highlight pulse, status ring or
+  dots), the avatar gliding on `left`/`top` only, and softer glows. The calibration checkerboard is untouched.
+- **High contrast**: a 6 px bubble border and highlight outline (the JS geometry follows), pure white text with no
+  blurred glow, a dashed error border and a double celebrating border, so right and wrong differ by more than
+  colour. The quiz card's text goes to full opacity, but its border stays at most 2 px with no glow and its width
+  at most `30vw`, because the camera reads thick bright lines as ink.
+
+The dashboard's **Accessibility** card (`static/js/dashboard/accessibility.js`, at the top of the third **More
+tools** column) stays hidden until `GET /api/accessibility` answers. A change sends `PUT /api/accessibility` with
+only that key, and the card follows the `accessibility` event (the 2 s status poll refreshes it while the socket
+is down).
 
 ---
 
@@ -511,6 +576,7 @@ built, each with its reason.
 | The camera reads the student's ink | Projected UI boxes (`ui_rects`) are masked from ink detection | Bright projected text and shapes were segmented as ink |
 | Camera at 30+ FPS | The camera loop never waits on the model; the hardware check passes at ≥ 28 FPS | A 30 fps webcam that measures 29.x must still pass |
 | English only | English and Spanish end to end (`lang.py`, `mathspeak_es.py`, es-MX voices, translated dashboard) | The classroom is bilingual |
+| Nothing on accessibility (both specs) | An **Accessibility** card for the whole room: captions that stay up, text size on the board, voice speed, calm mode and high contrast (contract M, saved in `SAR_ACCESSIBILITY_FILE`) | A student with a disability uses the same board. It is additive: the defaults are exactly the specs' behaviour |
 | `/precharge` dashboard (biology §5) | `/dashboard`, with `/precharge` kept as an alias | Clearer name for teachers |
 
 ---
@@ -579,6 +645,7 @@ Seed docs in `biobench_sar/knowledge/biology/`. The assistant must:
 | G Tutor / H Quiz bank / I Math speech / J Language | ✅ built and merged; `grading.py` in the final round | contracts above |
 | K Phones | 🟡 groundwork merged (`lan.py`, manifest, icons, `sw.js`); server wiring in the final round | `tests/test_lan.py`, `tests/test_mobile.py` |
 | L Desktop builds | ✅ Windows installer + macOS arm64 app, smoke-tested in CI (#66) | the launcher's self-test prints `SELF-TEST OK` |
+| M Accessibility | ✅ built: captions stay up, text size, voice speed (edge, `say`, pyttsx3), calm mode, high contrast; one atomic JSON write (`jsonfile.py`) shared with the file selection and the quiz bank | `tests/test_accessibility.py`; routes, push and on-connect in `tests/test_app.py`; the voice in `tests/test_tts.py`; both pages under node in `tests/test_frontend.py` |
 | Phase 2 integrate | ✅ both profiles | full suite green on `release/candidate`; live loop verified in the browser with `qwen2.5vl:3b` |
 | Phase 3 hardware | 🟡 pending: runbook ready ([HARDWARE_DAY.md](HARDWARE_DAY.md)), kit is a C930e + Epson WXGA on a cart | camera + mic need OS permissions; projector not yet connected |
 

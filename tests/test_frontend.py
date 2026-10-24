@@ -1893,6 +1893,32 @@ def test_documented_settings_exist_in_config() -> None:
     assert documented - known - pending == set()
 
 
+@needs_node
+def test_docs_describe_the_accessibility_settings() -> None:
+    from biobench_sar.accessibility import SPEECH_RATES, TEXT_SIZES, AccessibilitySettings
+
+    en = strings()["en"]
+    keys = list(AccessibilitySettings().to_dict())
+    readme = DOCS["README.md"]
+    assert f"**{en['tab.more']} → {en['access.title']}**" in readme, "the README should say where the card is"
+    assert "| `SAR_ACCESSIBILITY_FILE` | `data/accessibility.json` |" in readme
+    assert "`GET /api/accessibility`" in readme and "`PUT /api/accessibility`" in readme
+    plan = DOCS["docs/BUILD_PLAN.md"]
+    contract = plan.split("### M — `accessibility.py`")[1].split("\n### ")[0]
+    assert [key for key in keys if key not in contract] == []
+    assert [size for size in TEXT_SIZES if f'"{size}"' not in contract] == []
+    assert [name for name, factor in SPEECH_RATES.items() if f'"{name}": {factor}' not in contract] == []
+    assert "| GET | `/api/accessibility` |" in plan and "| PUT | `/api/accessibility` |" in plan
+    assert f"`accessibility {{{', '.join(keys)}}}`" in plan, "the socket event should list every key"
+    assert "`status`, `tutor`, `language` and `accessibility` to the new client" in plan
+    assert "`accessibility_file: Path` — env `SAR_ACCESSIBILITY_FILE`" in plan
+    modules = DOCS["CONTRIBUTING.md"].split("## Modules")[1]
+    assert "`accessibility.py`" in modules and "`jsonfile.py`" in modules
+    mobile = (ROOT / "docs" / "MOBILE.md").read_text(encoding="utf-8")
+    works = mobile.split("## What works on a phone")[1].split("\n## ")[0]
+    assert f"**{en['access.title']}**" in works, "MOBILE.md should say phones can change the card"
+
+
 # ---- final integration contract: highlight, ui_rects, stop confirmation, phone mode, join page ----------------
 
 # Every timer is recorded, so a test can run the 8 s fade (or any other one) now instead of waiting for it.
