@@ -13,6 +13,23 @@ const STATUS_MS = 2000;
 const CONNECT_GRACE_MS = 3000;
 
 let socketLive = false;
+let configLoaded = false;
+let configRequest = null;
+
+// The subject decides the wording and whether the math mode picker shows, so it is fetched again on every
+// reconnect (the server may have restarted with another SAR_PROFILE) and retried until it first succeeds.
+function loadConfig() {
+  configRequest ??= request("/api/config")
+    .then((config) => {
+      configLoaded = true;
+      renderConfig(config);
+      setProfile(config.profile);
+    })
+    .finally(() => {
+      configRequest = null;
+    });
+  return configRequest;
+}
 
 function applyState(state, detail) {
   renderState(state, detail);
@@ -37,6 +54,7 @@ function initSocket() {
     errorLogged = false;
     renderConnection(true);
     logEvent("connect", "");
+    loadConfig().catch(() => {});
     loadHistory().catch(() => {});
     refreshFiles().catch(() => {});
     refreshTutor().catch(() => {});
@@ -118,15 +136,13 @@ initTutor();
 initCalibration();
 every(STATUS_MS, async () => {
   const status = await request("/api/status");
+  // /api/status names the subject too, so a failed /api/config can't leave the wrong one showing.
+  if (status.profile) setProfile(status.profile);
+  if (!configLoaded) loadConfig().catch(() => {});
   renderStatus(status);
   // Without a live socket the poll is the only source of state changes (e.g. the push-to-talk note,
   // or the student switching mode by voice).
   if (!socketLive && status.state) applyState(status.state);
   if (!socketLive) refreshTutor().catch(() => {});
 });
-request("/api/config")
-  .then((config) => {
-    renderConfig(config);
-    setProfile(config.profile);
-  })
-  .catch(() => {});
+loadConfig().catch(() => {});

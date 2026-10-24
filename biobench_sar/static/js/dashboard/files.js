@@ -20,6 +20,8 @@ const KINDS = {
 };
 
 let documents = [];
+// Until the first /api/documents reply, `documents` is only the page's placeholder, not "no files".
+let loaded = false;
 
 // The extension first: the ingestor reports every photo as type "image".
 function kindOf(doc) {
@@ -59,6 +61,7 @@ function fileRow(doc, index) {
 }
 
 export function renderFiles(body) {
+  loaded = true;
   documents = body.documents || [];
   $("files").replaceChildren(...documents.map((doc, i) => fileRow(doc, i)));
   $("files-summary").textContent = summary();
@@ -105,6 +108,8 @@ async function removeFile(source, button) {
 
 function describeFailure(f) {
   if (/unsupported/i.test(f.error)) return `${f.name} (that type of file can't be read)`;
+  // Saving a scan again as a PDF still gives a picture of text, so that advice would not help.
+  if (/no readable text/i.test(f.error)) return `${f.name} (it looks like a scan with no text, so type it up or upload a clearer photo)`;
   logEvent("upload", `${f.name}: ${f.error}`);
   return `${f.name} (try saving it again as a PDF or text file)`;
 }
@@ -155,7 +160,10 @@ export function initFiles() {
     upload([...e.dataTransfer.files]);
   });
   $("use-all-btn").addEventListener("click", () => saveSelection(true));
-  onProfileChange(() => renderFiles({ documents }));
+  // Only re-word a list that has arrived: an empty placeholder would send a first visit to this tab.
+  onProfileChange(() => {
+    if (loaded) renderFiles({ documents });
+  });
   $("search-form").addEventListener("submit", (e) => {
     e.preventDefault();
     // Shown in the results list: the upload note lives on the files tab, out of sight from here.

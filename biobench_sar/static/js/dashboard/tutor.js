@@ -1,7 +1,7 @@
 import { $, request } from "./api.js";
-import { note } from "./ask.js";
+import { sideNote } from "./ask.js";
 import { logEvent } from "./log.js";
-import { MODE_LABELS, currentProfile, onProfileChange } from "./profile.js";
+import { MODE_LABELS, currentProfile, onProfileChange, profileKnown } from "./profile.js";
 import { setIdleBadge } from "./status.js";
 
 export const MODES = ["help", "practice", "quiz"];
@@ -18,18 +18,20 @@ const OFFLINE_HINT = "Check the assistant's Terminal window is still open, then 
 let version = 0;
 let last = null;
 
+// The server's score counts only answers right on the first try: a fixed answer moves on but scores nothing.
 function quizSummary(quiz, active) {
-  if (active) return `Problem ${quiz.number} of ${quiz.total} · ${quiz.score} right so far`;
+  if (active) return `Problem ${quiz.number} of ${quiz.total} · ${quiz.score} right on the first try`;
   // A quiz that never got past its first problem has nothing worth reporting.
-  if (quiz && (quiz.score > 0 || quiz.number > 1)) return `Last quiz: ${quiz.score} right. Press Start quiz to go again.`;
+  if (quiz && (quiz.score > 0 || quiz.number > 1)) return `Last quiz: ${quiz.score} right on the first try. Press Start quiz to go again.`;
   return QUIZ_SOURCE;
 }
 
 export function renderTutor(data) {
   version += 1;
   last = data;
-  // Tutor modes are a math thing; the biology assistant answers every question the same way.
-  const math = currentProfile() === "math";
+  // Tutor modes are a math thing; the biology assistant answers every question the same way. The picker's
+  // buttons change the server's state, so it waits until the server has said it runs the math subject.
+  const math = currentProfile() === "math" && profileKnown();
   const mode = MODES.includes(data.mode) ? data.mode : "help";
   const quiz = data.quiz || null;
   const active = Boolean(quiz && quiz.active);
@@ -57,7 +59,7 @@ export async function refreshTutor() {
 
 function failed(what, err) {
   logEvent("tutor", `${what}: ${err.message}`);
-  note(`Couldn't ${what}. ${OFFLINE_HINT}`, "warn");
+  sideNote(`Couldn't ${what}. ${OFFLINE_HINT}`, "warn");
 }
 
 async function chooseMode(mode) {
@@ -67,7 +69,7 @@ async function chooseMode(mode) {
     const data = await request("/api/tutor/mode", { method: "PUT", json: { mode } });
     renderTutor(data);
     const running = data.quiz && data.quiz.active;
-    note(running ? "A quiz is already running. Write your answer on the board." : CHOSEN_NOTES[mode], "ok");
+    sideNote(running ? "A quiz is already running. Write your answer on the board." : CHOSEN_NOTES[mode], "ok");
   } catch (err) {
     failed("change how the assistant helps", err);
   } finally {
@@ -84,7 +86,7 @@ async function quizAction(kind) {
   try {
     const data = await request(`/api/tutor/quiz/${kind}`, { method: "POST" });
     renderTutor(data);
-    note(kind === "start" ? STARTED_NOTE : "Quiz stopped.", "ok");
+    sideNote(kind === "start" ? STARTED_NOTE : "Quiz stopped.", "ok");
   } catch (err) {
     failed(kind === "start" ? "start the quiz" : "stop the quiz", err);
   } finally {
