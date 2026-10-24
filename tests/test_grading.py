@@ -837,3 +837,24 @@ def test_only_what_solves_fast_is_solved() -> None:
     ):
         assert solve_text(slow) is None, slow
     assert format_answers(solve_text("x + y = 10 and x - y = 4") or frozenset()) == "x = 7 and y = 3"
+
+
+@pytest.mark.parametrize(
+    ("problem", "solution"),
+    [
+        ("y = x^2 and x + y = 2", "x = 1 and x = -2 and y = 4 and y = 1"),
+        ("x^2 + y^2 = 25 and x - y = 1", "x = 4 and x = -3 and y = 3 and y = -4"),
+        ("√2 x + y = 3 and x - y = 1", "x = -4 + 4√(2) and y = -5 + 4√(2)"),
+        ("x^3 = 2", "x = 2^(1/3)"),
+        ("x^4 = 7", "x = 7^(1/4) or x = -7^(1/4)"),
+    ],
+)
+def test_a_system_with_one_quadratic_a_root_coefficient_or_a_power_still_solves(problem: str, solution: str) -> None:
+    # tutor-core solved these in 3-39 ms; the round-one gate (linear systems only, a root counted as a letter,
+    # cubics only when they factor) gave None, so the help guard was off and a keyless quiz problem never graded.
+    solve_text("x + y = 10 and x - y = 4")  # sympy warmed up before the clock starts
+    start = time.perf_counter()
+    solved = solve_text(problem)
+    assert time.perf_counter() - start < 0.5, "still fast"
+    assert format_answers(solved or frozenset()) == solution
+    assert grading.board_solution(problem) == solved

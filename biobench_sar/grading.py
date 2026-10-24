@@ -11,9 +11,10 @@ problem itself (linear, quadratic, a system), so a help reply can be checked for
 Nothing here raises on bad input: unreadable text gives an empty set or None. The parser is our own (no eval), so a
 model's reply or an uploaded file can never run code. Nothing here takes long either (it runs on the assistant
 thread, and a big-int power holds the GIL): the size of a power or a root and the degree of an equation are bounded
-before they are worked out (MAX_BITS, MAX_POWER_DEGREE, MAX_DEGREE), and only what solves fast is solved (linear
-systems, one letter up to a quadratic or what factors into them). Without sympy, plain numbers and one-letter linear
-problems still work (quiz_bank.solve_problem); square roots, quadratics and systems then give None.
+before they are worked out (MAX_BITS, MAX_POWER_DEGREE, MAX_DEGREE), and only what solves fast is solved (systems
+with at most one quadratic, one letter up to a quadratic, what factors into them or a power "x^3 = 2"). Without
+sympy, plain numbers and one-letter linear problems still work (quiz_bank.solve_problem); square roots, quadratics
+and systems then give None.
 """
 
 from __future__ import annotations
@@ -1068,20 +1069,24 @@ def _solve(parts: list[str], sp: Any) -> Answers | None:
     symbols = sorted(set().union(*(d.free_symbols for d in differences)), key=str)
     if not symbols or len(symbols) > MAX_LETTERS or (len(differences) < len(symbols) and len(symbols) > 1):
         return None
-    # A system only when linear: sympy took seconds on two quadratics with messy roots.
-    most = 1 if len(symbols) > 1 else MAX_DEGREE
-    if any(_size(d)[1] > most for d in differences):
-        return None  # never multiplied out: "(((x + 1)^6)^6)^6 = 0" took seconds
+    if any(_size(d)[1] > MAX_DEGREE for d in differences):
+        return None  # never multiplied out: "(((x + 1)^6)^6)^6 = 0" took seconds (a root counts as a letter here)
     equations = [sp.expand(d) for d in differences]
+    degrees: list[int] = []
     for equation in equations:
         try:
             poly = sp.Poly(equation, *symbols)
         except sp.PolynomialError:
             return None
-        if poly.total_degree() > most:
-            return None
-        if poly.total_degree() > 2 and any(factor.degree() > 2 for factor, _ in poly.factor_list()[1]):
+        degree = poly.total_degree()
+        degrees.append(degree)
+        unfactored = len(symbols) == 1 and degree > 2 and len(poly.terms()) > 2  # "x^3 = 2" is a power
+        if unfactored and any(factor.degree() > 2 for factor, _ in poly.factor_list()[1]):
             return None  # a cubic or quartic that does not factor: its roots in radicals took a third of a second
+    # A system with at most one quadratic, the rest linear ("y = x^2 and x + y = 2"): sympy took seconds on two
+    # quadratics with messy roots. One letter: up to a quartic that factors, or a power ("x^3 = 2").
+    if len(symbols) > 1 and (max(degrees) > 2 or sum(degree > 1 for degree in degrees) > 1):
+        return None
     found: set[Answer] = set()
     for solution in sp.solve(equations, symbols, dict=True):
         if set(solution) != set(symbols):
