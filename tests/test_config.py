@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from biobench_sar.config import DATA_DIR, Settings
+from biobench_sar.config import DATA_DIR, PACKAGE_DIR, Settings
 
 
 def _clear(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,15 +81,16 @@ def test_silence_rms_invalid_or_negative_falls_back(monkeypatch: pytest.MonkeyPa
     assert Settings().silence_rms == 0.01
 
 
-def test_build_services_passes_silence_rms_to_audio(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+class Dummy:
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.args, self.kwargs = args, kwargs
+
+
+def _build(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> object:
     from biobench_sar import app as app_module
     from biobench_sar.core import vision_loop
     from biobench_sar.llm import tts_engine, vlm_client
     from biobench_sar.rag import vector_store
-
-    class Dummy:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            pass
 
     for module, name in (
         (vision_loop, "VisionLoop"),
@@ -98,9 +99,55 @@ def test_build_services_passes_silence_rms_to_audio(monkeypatch: pytest.MonkeyPa
         (tts_engine, "TTSEngine"),
     ):
         monkeypatch.setattr(module, name, Dummy)
-    settings = Settings(silence_rms=0.042, calibration_file=tmp_path / "calibration.json")
-    svc = app_module.build_services(settings, on_query=lambda q: None, on_state=lambda s: None)
-    assert svc.audio.silence_rms == 0.042
+    return app_module.build_services(settings, on_query=lambda q: None, on_state=lambda s: None)
+
+
+def test_build_services_passes_silence_rms_to_audio(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    svc = _build(monkeypatch, Settings(silence_rms=0.042, calibration_file=tmp_path / "calibration.json"))
+    assert svc.audio.silence_rms == 0.042  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("profile", ["math", "biology"])
+def test_build_services_passes_profile_to_vlm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, profile: str) -> None:
+    svc = _build(monkeypatch, Settings(profile=profile, calibration_file=tmp_path / "calibration.json"))
+    assert svc.vlm.kwargs["profile"] == profile  # type: ignore[attr-defined]
+
+
+def test_profile_defaults_to_math(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SAR_PROFILE", raising=False)
+    assert Settings().profile == "math"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("math", "math"),
+        ("biology", "biology"),
+        (" Biology ", "biology"),
+        ("MATH", "math"),
+        ("chem", "math"),
+        ("", "math"),
+    ],
+)
+def test_profile_env(monkeypatch: pytest.MonkeyPatch, raw: str, expected: str) -> None:
+    monkeypatch.setenv("SAR_PROFILE", raw)
+    assert Settings().profile == expected
+
+
+def test_knowledge_dir_follows_profile() -> None:
+    assert Settings(profile="math").knowledge_dir == PACKAGE_DIR / "knowledge" / "math"
+    assert Settings(profile="biology").knowledge_dir == PACKAGE_DIR / "knowledge" / "biology"
+
+
+def test_quiz_bank_file_default_and_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("SAR_QUIZ_BANK_FILE", raising=False)
+    assert Settings().quiz_bank_file == DATA_DIR / "quiz_bank.json"
+    monkeypatch.setenv("SAR_QUIZ_BANK_FILE", str(tmp_path / "bank.json"))
+    assert Settings().quiz_bank_file == tmp_path / "bank.json"
+
+
+def test_seed_marker_lives_with_the_store(tmp_path: Path) -> None:
+    assert Settings(chroma_dir=tmp_path / "db").seed_marker_file == tmp_path / "db" / ".seeded"
 
 
 def test_selection_file_defaults_to_data_dir(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -97,7 +97,9 @@ _MATH_TOPIC = re.compile(
 )
 _DEIXIS = re.compile(r"\b(?:this|that|these|those|it|here|there|board|above|mine)\b")
 _LEADING_FILLER = re.compile(r"^(?:more\s+about|a\s+bit\s+about|a\s+little\s+about|about|the\s+basics\s+of|some)\s+")
-_TRAILING_FILLER = re.compile(r"(?:^|\s+)(?:please|now|today|thanks|thank\s+you|again|for\s+me|with\s+me|right\s+now)$")
+_TRAILING_FILLER = re.compile(
+    r"(?:^|\s+)(?:please|now|today|thanks|thank\s+you|again|for\s+me|to\s+me|with\s+me|right\s+now)$"
+)
 _IRREGULAR_GERUNDS = {"do": "doing", "be": "being", "see": "seeing", "plot": "plotting", "get": "getting"}
 _IRREGULAR_GERUNDS |= {"set": "setting", "put": "putting", "cut": "cutting", "sum": "summing"}
 
