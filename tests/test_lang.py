@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import importlib.abc
+import importlib.machinery
+import importlib.util
+import logging
 import sys
+import time
 import types
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 
@@ -38,8 +43,14 @@ from biobench_sar.lang import (
         ("es_419", "es"),
         ("spanish", "es"),
         ("Español", "es"),
+        # display names, as a voice or locale picker shows them
+        ("Spanish (Mexico)", "es"),
+        ("Español (México)", "es"),
+        ("English (United States)", "en"),
+        ("(es)", "es"),
         ("fr", "auto"),
         ("klingon", "auto"),
+        ("French (France)", "auto"),
     ],
 )
 def test_normalize_language(code: str | None, expected: str) -> None:
@@ -86,6 +97,21 @@ def test_normalize_language(code: str | None, expected: str) -> None:
         ("x es igual a cinco", "en", "es"),
         ("dos más tres", "en", "es"),
         ("Hola profe, no le entiendo al paso dos, ¿me puede explicar otra vez?", "en", "es"),
+        # short replies and slang a Mexican student types without accents
+        ("nel", "en", "es"),
+        ("sip", "en", "es"),
+        ("simón", "en", "es"),
+        ("simon", "en", "es"),
+        ("a ver", "en", "es"),
+        ("espera", "en", "es"),
+        ("esperame tantito", "en", "es"),
+        ("no me sale", "en", "es"),
+        ("ocupo ayuda", "en", "es"),
+        ("ando atorado", "en", "es"),
+        ("neta no le entiendo", "en", "es"),
+        ("q onda profe, como le hago?", "en", "es"),
+        ("because", "es", "en"),
+        ("because I don't get it", "es", "en"),
         # Spanglish follows the language most of the words are in
         ("can you help me with this, por favor", "es", "en"),
         ("what's the next paso", "es", "en"),
@@ -151,7 +177,56 @@ def test_word_lists_do_not_overlap() -> None:
         ("hagamos un quiz", "quiz"),
         ("ponme a prueba", "quiz"),
         ("modo quiz", "quiz"),
+        # feminine "la prueba" / "la evaluación", and how students really type it
+        ("hazme la prueba", "quiz"),
+        ("empecemos la prueba", "quiz"),
+        ("inicia la prueba", "quiz"),
+        ("dame la prueba", "quiz"),
+        ("hagamos la prueba", "quiz"),
+        ("quiero hacer la prueba", "quiz"),
+        ("aplicame la evaluacion", "quiz"),
+        ("ponme un examen", "quiz"),
+        ("hazme un quiz porfa", "quiz"),
+        ("me haces un examen?", "quiz"),
+        ("¿podemos hacer un quiz?", "quiz"),
+        ("puedes hacerme un quiz", "quiz"),
+        ("hay que hacer un quiz", "quiz"),
+        ("pregúntame", "quiz"),
+        ("preguntame", "quiz"),
+        ("hazme preguntas", "quiz"),
+        ("hazme unas preguntas de fracciones", "quiz"),
+        ("hazme cinco preguntas", "quiz"),
+        ("otro quiz", "quiz"),
+        ("ok, otro quiz porfa", "quiz"),
+        ("otra prueba", "quiz"),
+        ("¿por qué no me haces un quiz?", "quiz"),
+        ("por que no hacemos un examen", "quiz"),
+        ("vamos al quiz", "quiz"),
+        ("tómame la lección", "quiz"),
+        ("tomame la leccion", "quiz"),
         ("termina el quiz", "help"),
+        ("termina la prueba", "help"),
+        ("terminemos esta prueba", "help"),
+        ("cancela la evaluación", "help"),
+        ("cancela la evaluacion", "help"),
+        ("ya no quiero la prueba", "help"),
+        ("sal de la prueba", "help"),
+        ("ya párale al quiz", "help"),
+        ("parale al examen", "help"),
+        ("ya parale a la prueba", "help"),
+        ("para esta evaluación", "help"),
+        ("para la prueba", "help"),
+        ("para el quiz, porfa", "help"),
+        ("termina la prueba de fracciones", "help"),
+        ("termina el quiz, ya me cansé", "help"),
+        ("no quiero seguir con el quiz", "help"),
+        ("ya no quiero seguir con la prueba", "help"),
+        ("no mas pruebas", "help"),
+        ("basta de la prueba", "help"),
+        ("ya me canse del quiz", "help"),
+        ("ya estuvo con el examen", "help"),
+        ("quiero salirme de la prueba", "help"),
+        ("salte del quiz", "help"),
         ("para el quiz", "help"),
         ("¡Para el quiz!", "help"),
         ("ya para el quiz", "help"),
@@ -170,6 +245,18 @@ def test_word_lists_do_not_overlap() -> None:
         ("más práctica", "practice"),
         ("necesito más práctica", "practice"),
         ("quiero practicar más", "practice"),
+        ("quiero practicar mas", "practice"),
+        ("más ejercicios", "practice"),
+        ("mas ejercicios", "practice"),
+        ("dame mas ejercicios", "practice"),
+        ("dame otro ejercicio", "practice"),
+        ("otro ejercicio porfa", "practice"),
+        ("otro ejercicio más", "practice"),
+        ("más problemas de fracciones", "practice"),
+        ("quiero hacer mas ejercicios", "practice"),
+        ("quiero seguir practicando", "practice"),
+        ("dame otro igual a este", "practice"),
+        ("otro igualito", "practice"),
         ("ayuda", "help"),
         ("¡ayúdame!", "help"),
         ("¿me ayudas?", "help"),
@@ -185,6 +272,26 @@ def test_word_lists_do_not_overlap() -> None:
         ("y ahora", "help"),
         ("¿me das una pista?", "help"),
         ("no sé qué hacer", "help"),
+        ("ando atorado", "help"),
+        ("toy atorado", "help"),
+        ("atorado", "help"),
+        ("atorada", "help"),
+        ("estoy bien perdido", "help"),
+        ("no le se", "help"),
+        ("no le sé", "help"),
+        ("no le agarro la onda", "help"),
+        ("¿cómo le hago?", "help"),
+        ("como le hago", "help"),
+        ("no me sale", "help"),
+        ("no me sale el resultado", "help"),
+        ("échame la mano", "help"),
+        ("¿me echas la mano?", "help"),
+        ("hechame una mano", "help"),
+        ("no me queda claro", "help"),
+        ("ayudame porfa", "help"),
+        ("neta no le entiendo", "help"),
+        ("no estoy atorado, pero no entiendo el paso dos", "help"),
+        ("no entiendo el otro ejercicio", "help"),
     ],
 )
 def test_detect_mode_es(text: str, expected: str) -> None:
@@ -210,6 +317,35 @@ def test_detect_mode_es(text: str, expected: str) -> None:
         "quiz",
         "help",
         "",
+        # "para el examen ..." opening a question is "for the exam", not "stop the exam"
+        "para el examen de mañana, ¿qué temas vienen?",
+        "para el quiz de manana tengo que estudiar fracciones",
+        "para el examen, ¿qué temas vienen?",
+        "para la prueba necesito calculadora?",
+        "termina el quiz de mañana a las tres",
+        # "hacer la prueba" is also checking an answer
+        "hagamos la prueba con x = 2",
+        "haz la prueba sustituyendo",
+        "vamos a hacer la prueba para ver si está bien",
+        # dictation and talk about the worksheet
+        "otro igual a cinco",
+        "es otro igual a cinco",
+        "uno más",
+        "hay más ejercicios en la hoja",
+        "tengo mas problemas con las fracciones",
+        "el otro quiz estuvo fácil",
+        "encuentra el número perdido",
+        # the student asking, or turning one down
+        "otra pregunta",
+        "dame otro ejemplo",
+        "tengo una pregunta",
+        "te hago una pregunta",
+        "no quiero otro quiz",
+        "no quiero más ejercicios",
+        "no podemos hacer un quiz",
+        "¿por qué hacemos un quiz?",
+        "no estoy atorado",
+        "ya no estoy atorada",
     ],
 )
 def test_detect_mode_es_ignores(text: str) -> None:
@@ -225,6 +361,14 @@ def test_detect_mode_es_ignores(text: str) -> None:
         ("estoy atorado", False),
         ("¿para qué sirve el quiz?", False),
         ("no puedo terminar el quiz", False),
+        ("termina la prueba", True),
+        ("cancela la evaluación", True),
+        ("ya párale al quiz", True),
+        ("ya párale a la prueba", True),
+        ("para esta evaluacion", True),
+        ("para el quiz de mañana, ¿qué temas vienen?", False),
+        ("para el examen de mañana, ¿qué temas vienen?", False),
+        ("para el quiz de manana tengo que estudiar fracciones", False),
     ],
 )
 def test_is_quiz_stop_es(text: str, expected: bool) -> None:
@@ -253,6 +397,12 @@ def test_is_quiz_stop_es(text: str, expected: bool) -> None:
         ("¿cómo resuelvo ecuaciones con fracciones?", "resolver ecuaciones con fracciones"),
         ("explícame las fracciones equivalentes", "las fracciones equivalentes"),
         ("explícame cómo se multiplican números negativos", "multiplicar números negativos"),
+        ("¿cómo se factoriza un trinomio?", "factorizar un trinomio"),
+        ("como se factoriza un binomio", "factorizar un binomio"),
+        ("¿cómo se simplifican los racionales?", "simplificar los racionales"),
+        ("¿cómo se le saca la raíz a un número?", "sacar la raíz a un número"),
+        ("como le saco la raiz a un numero", "sacar la raiz a un numero"),
+        ("¿por qué no me enseñas fracciones?", "fracciones"),
     ],
 )
 def test_detect_learn_request_es(text: str, expected: str) -> None:
@@ -277,6 +427,12 @@ def test_detect_learn_request_es(text: str, expected: str) -> None:
         "hola",
         "teach me fractions",
         "",
+        # no topic to teach
+        "quiero aprender más",
+        "quiero aprender mas",
+        "quiero aprender lo de ayer",
+        "quiero aprender todo",
+        "quiero aprender más cosas",
     ],
 )
 def test_detect_learn_request_es_ignores(text: str) -> None:
@@ -322,6 +478,30 @@ def test_learn_topic_is_capped() -> None:
         ("yo lo escribo", "own"),
         ("el mío", "own"),
         ("No, tengo uno", "own"),
+        ("tengo uno pero está difícil", "own"),
+        ("tengo uno pero esta dificil", "own"),
+        ("simon, tengo uno", "own"),
+        ("yo lo hago", "own"),
+        ("lo hago yo", "own"),
+        ("tengo los míos", "own"),
+        ("tengo los mios", "own"),
+        ("tengo mis propios ejercicios", "own"),
+        ("cualquiera", "generate"),
+        ("dame cualquiera", "generate"),
+        ("el que tú quieras", "generate"),
+        ("el que tu quieras", "generate"),
+        ("como tu digas", "generate"),
+        ("lo que sea", "generate"),
+        ("mándame uno", "generate"),
+        ("echame uno", "generate"),
+        ("aviéntame uno", "generate"),
+        ("uno tuyo", "generate"),
+        ("mejor tú", "generate"),
+        ("mejor tu", "generate"),
+        ("me da igual", "generate"),
+        ("dame otro ejercicio", "generate"),
+        ("no, ninguno", "generate"),
+        ("no, nada", "generate"),
     ],
 )
 def test_detect_offer_reply_es(text: str, expected: str) -> None:
@@ -339,6 +519,7 @@ def test_detect_offer_reply_es(text: str, expected: str) -> None:
         "dame una pista",
         "tengo una duda",
         "tengo una pregunta",
+        "tengo una muy buena idea",
         "tengo hambre",
         "no entiendo",
         "make one up",
@@ -347,6 +528,50 @@ def test_detect_offer_reply_es(text: str, expected: str) -> None:
 )
 def test_detect_offer_reply_es_ignores(text: str) -> None:
     assert detect_offer_reply_es(text) is None
+
+
+# ---- long input ------------------------------------------------------------------
+def test_input_past_the_cap_is_ignored() -> None:
+    padding = "x " * lang.MAX_INPUT_CHARS
+    assert detect_mode_es("examíname " + padding) == "quiz"
+    assert detect_mode_es(padding + "examíname") is None
+    assert is_quiz_stop_es(padding + "termina el quiz") is False
+    assert detect_learn_request_es(padding + "quiero aprender fracciones") is None
+    assert detect_offer_reply_es(padding + "invéntame uno") is None
+    assert detect_language("2 " * lang.MAX_INPUT_CHARS + "hola, ¿qué sigue?", "en") == "en"
+
+
+def _seconds(call: Callable[..., object], *args: object, **kwargs: object) -> float:
+    start = time.perf_counter()
+    call(*args, **kwargs)
+    return time.perf_counter() - start
+
+
+def test_pathological_input_stays_fast(fresh_english: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "biobench_sar.tutor", None)
+    assert _seconds(detect_all, "no quiero un quiz " * 3000) < 0.5
+    assert _seconds(detect_learn_request_es, "aprender " + "porfa " * 10000) < 0.5
+    assert _seconds(detect_language, "y " * 50000) < 0.5
+
+
+def test_negation_lookback_is_linear() -> None:
+    assert _seconds(lang._commanded, lang._QUIZ_ES, "no quiero un quiz " * 1500) < 0.3
+
+
+def test_filler_trim_is_linear() -> None:
+    words = ["porfa"] * 4000
+    assert _seconds(lang._trim, words, words, lang._TRAILING_FILLER_ES, leading=False) < 0.3
+
+
+def test_variable_check_does_not_copy_the_text() -> None:
+    text = "y " * 1_000_000
+    middle = len(text) // 2
+
+    def check() -> None:
+        for start in range(middle, middle + 4000, 2):
+            lang._is_variable(text, start, start + 1)
+
+    assert _seconds(check) < 0.25
 
 
 # ---- detect_all ------------------------------------------------------------------
@@ -372,10 +597,58 @@ def test_detect_all_reads_spanish(fresh_english: None, monkeypatch: pytest.Monke
     assert detect_all("invéntame uno")["offer_reply"] == "generate"
 
 
-def test_detect_all_without_tutor_module(fresh_english: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_detect_all_without_tutor_module(
+    fresh_english: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     monkeypatch.setitem(sys.modules, "biobench_sar.tutor", None)
+    with caplog.at_level(logging.WARNING, logger="biobench_sar.lang"):
+        assert lang._english_detectors() is None
+        assert detect_all("quiz me") == {"language": "en", "mode": None, "learn_topic": None, "offer_reply": None}
+    assert not caplog.records
+
+
+class _BrokenTutor(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """Finds biobench_sar.tutor, then fails importing it the way a broken dependency would."""
+
+    def __init__(self, error: ImportError) -> None:
+        self.error = error
+
+    def find_spec(self, name: str, path: object = None, target: object = None) -> importlib.machinery.ModuleSpec | None:
+        return importlib.util.spec_from_loader(name, self) if name == "biobench_sar.tutor" else None
+
+    def create_module(self, spec: importlib.machinery.ModuleSpec) -> None:
+        return None
+
+    def exec_module(self, module: types.ModuleType) -> None:
+        raise self.error
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ImportError("cannot import name 'QuizBank' from 'biobench_sar.rag.quiz_bank'"),
+        ModuleNotFoundError("No module named 'chromadb'", name="chromadb"),
+    ],
+)
+def test_a_broken_tutor_is_logged(
+    error: ImportError, fresh_english: None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delitem(sys.modules, "biobench_sar.tutor", raising=False)
+    monkeypatch.setattr(sys, "meta_path", [_BrokenTutor(error), *sys.meta_path])
+    with caplog.at_level(logging.WARNING, logger="biobench_sar.lang"):
+        assert lang._english_detectors() is None
+    assert any("biobench_sar.tutor" in record.getMessage() for record in caplog.records)
+    assert detect_all("examíname")["mode"] == "quiz"
+
+
+def test_a_half_imported_tutor_is_looked_at_again(fresh_english: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    loading = types.SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "biobench_sar.tutor", loading)
     assert lang._english_detectors() is None
-    assert detect_all("quiz me") == {"language": "en", "mode": None, "learn_topic": None, "offer_reply": None}
+    finished = _fake_tutor("quiz")
+    for name in ("detect_mode", "detect_learn_request", "detect_offer_reply"):
+        setattr(loading, name, getattr(finished, name))
+    assert detect_all("quiz me")["mode"] == "quiz"
 
 
 def test_detect_all_uses_english_detectors(fresh_english: None, monkeypatch: pytest.MonkeyPatch) -> None:
