@@ -1119,6 +1119,18 @@ def board_solution(text: Any) -> Answers | None:
     ("1/2 + 1/3 = 2/5" -> 5/6, worked out from its left side) or steps and an answer below it ("2x + 3 = 11 ; x = 5"
     -> x = 4, "x + y = 10 ; x - y = 4 ; x = 8" -> x = 7 and y = 3). Answers before it are skipped. None when the
     board holds no problem ("x = 5") or none code can solve."""
+    found = _board_problem(text)
+    return found[1] if found else None
+
+
+def board_problem(text: Any) -> str | None:
+    """The problem a board starts with, as plain math ("1/2 + 1/3" for "1/2 + 1/3 = 2/5", "2x + 3 = 11" for
+    "2x + 3 = 11 ; x = 5"); None as for board_solution."""
+    found = _board_problem(text)
+    return found[0] if found else None
+
+
+def _board_problem(text: Any) -> tuple[str, Answers] | None:
     parts: list[str] = []
     for raw in _EQUATIONS.split(to_math(_INSTRUCTION.sub("", _plain(text).strip()))):
         clause = raw.strip(" .?!")
@@ -1130,9 +1142,10 @@ def board_solution(text: Any) -> Answers | None:
             parts.append(clause)
     # One equation, or a system of as many as it has letters: the first that solves is the problem.
     for count in range(1, min(len(parts), MAX_LETTERS) + 1):
-        solved = solve_text(" ; ".join(parts[:count]))
+        problem = " ; ".join(parts[:count])
+        solved = solve_text(problem)
         if solved:
-            return solved
+            return problem, solved
     return None
 
 

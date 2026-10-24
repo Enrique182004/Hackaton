@@ -2338,6 +2338,33 @@ def test_help_reply_saying_what_it_comes_to_is_asked_again_and_cut(board: str, l
     assert action.spoken_text == step, "what still states it is cut"
 
 
+@pytest.mark.usefixtures("no_mathspeak")
+@pytest.mark.parametrize(
+    ("board", "leak", "language", "said"),
+    [
+        # Already solved on the board: the guard stays on (the model may have written that line), the text is a check.
+        ("x^2 - 2x - 15 = 0\nx = 5\nx = -3", "Yes, the roots are five and negative three.", "en", "check_it"),
+        ("1/2 + 1/3 = 5/6", "Yes, one half plus one third is five sixths.", "en", "check_it"),
+        ("x^2 - 2x - 15 = 0\nx = 5\nx = -3", "Sí, las raíces son cinco y menos tres.", "es", "check_it"),
+        # Not solved: one hint for the board's own problem, never the step about x on a fraction board.
+        ("1/2 + 1/3 = 2/5", "Five sixths is the answer.", "en", "Find a common denominator first."),
+        ("1/2 + 1/3 = 2/5", "Te debe dar cinco sextos.", "es", "Primero busca un denominador común."),
+        ("2x + 3 = 11\nx = 5", "So it is four.", "en", "Subtract 3 from both sides first."),
+    ],
+)
+def test_help_fallback_fits_the_board_when_the_whole_reply_states_the_solution(
+    board: str, leak: str, language: str, said: str
+) -> None:
+    c = _math_client()
+    reply = {**MATH_GOOD, "board_problem": board, "spoken_text": leak, "animation_state": "celebrating"}
+    with _posts(c, reply, reply) as post:
+        action = c.evaluate("Is this right?", JPEG, [], REGIONS, SIZE, language=language)
+    assert post.call_count == 2
+    assert action.spoken_text.startswith(vc.TEXTS[language].get(said, said)), action.spoken_text
+    assert action.spoken_text != vc.TEXTS[language]["step"], "no step about x"
+    assert not grading.states_solution(action.spoken_text, grading.board_solution(board), language)
+
+
 def test_quiz_hint_stating_the_solution_is_asked_again() -> None:
     c = _math_client()
     assert not vc.reveals_value("Divide and you get x = 5.")

@@ -64,6 +64,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "no_answer": NO_ANSWER_TEXT,
         "wrong": WRONG_TEXT,
         "step": STEP_TEXT,
+        "check_it": "Check it: go over each step once more, or put your answer back into the problem.",
+        "next_step": "Look at your work one step at a time, and write the next step on the board.",
         "correct": "Correct, great job!",
         "not_quite": "Not quite.",
         "incomplete": "Not quite. That is only part of the answer: there is more to find.",
@@ -89,6 +91,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "no_answer": "Todavía no veo tu respuesta. Escríbela en el pizarrón y luego pídeme que la revise.",
         "wrong": "Casi. Revisa tus pasos y vuelve a intentarlo.",
         "step": "Fíjate qué le están haciendo a la x y deshazlo en ambos lados. Escribe ese paso en el pizarrón.",
+        "check_it": "Compruébalo: revisa cada paso otra vez o pon tu respuesta en el problema.",
+        "next_step": "Revisa tu trabajo paso a paso y escribe el siguiente paso en el pizarrón.",
         "correct": "¡Correcto, muy bien!",
         "not_quite": "Casi.",
         "incomplete": "Casi. Esa es solo una parte de la respuesta: falta encontrar más.",
@@ -1460,12 +1464,31 @@ def _salvage(
         and not copied(s)
         and in_language(s, language)
     ]
-    out = " ".join(kept) if kept else fallback_text(kind, task, has_ink, language)
+    fallback = (_help_fallback(board, solutions, language) if kind == "help" else None) or fallback_text(
+        kind, task, has_ink, language
+    )
+    out = " ".join(kept) if kept else fallback
     if kind == "learn" and _starter_missing(replace(action, spoken_text=_spoken(out, language)), task, language):
         out = fallback_text(kind, task, has_ink, language)
     if kind == "learn" and learn_stage(task) == "offer":
         out = _with_offer_question(out, language)
     return replace(action, spoken_text=out)
+
+
+def _help_fallback(board: str | None, solutions: grading.Answers | None, language: str) -> str | None:
+    """What help says when no sentence of its reply could stay, for the problem on the board: a check when the board
+    already shows its solution ("x^2 - 2x - 15 = 0 ; x = 5 ; x = -3": never the value, the guard stays on, since the
+    model may have written that line itself), else one hint for its first step (grading.hint_for: a fraction board
+    gets a fraction hint, not the step about x). None when code can't tell (then the generic step)."""
+    problem = grading.board_problem(board) if board else None
+    if problem is None:
+        return None
+    if solutions and grading.compare(grading.parse_answers(board, problem), solutions):
+        return text_for(language, "check_it")
+    hint = grading.hint_for(problem, normalize_reply_language(language))
+    if hint is None and not re.search(r"[a-z]", problem.replace("sqrt", "")):
+        return text_for(language, "next_step")
+    return hint
 
 
 def _speech_function(language: str = "en") -> Callable[[str], str] | None:

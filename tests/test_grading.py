@@ -399,6 +399,13 @@ def test_board_solution_of_a_board_with_an_arrow() -> None:
         assert grading.board_solution(board) == solve_text("2x + 3 = 11"), board
 
 
+def test_board_problem_is_the_part_that_board_solution_solves() -> None:
+    assert grading.board_problem("1/2 + 1/3 = 2/5") == "1/2 + 1/3"
+    assert grading.board_problem("2x + 3 = 11\nx = 5") == "2x + 3 = 11"
+    assert grading.board_problem("x + y = 10 ; x - y = 4 ; x = 8") == "x + y = 10 ; x - y = 4"
+    assert grading.board_problem("x = 5") is None and grading.board_problem("") is None
+
+
 def test_states_the_roots_said_together() -> None:
     roots = solve_text("x^2 - 2x - 15 = 0")
     assert states_solution("The roots are 5 and -3.", roots)
