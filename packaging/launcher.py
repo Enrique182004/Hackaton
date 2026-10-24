@@ -84,6 +84,155 @@ def say(line: str) -> None:
         print(line.encode(encoding, "replace").decode(encoding), file=stream, flush=True)
 
 
+# ---- startup failures ----------------------------------------------------------------------------------
+# A double-clicked app has no terminal: an uncaught error would close the Windows console (or end the macOS
+# app) before anyone can read it, so each startup step says in plain words what went wrong and what to do.
+
+
+class StartupFailed(Exception):
+    """A startup step failed; the message is advice for the teacher, the cause (__cause__) the technical error."""
+
+
+@contextlib.contextmanager
+def startup_step(advice: str | Callable[[], str]) -> Iterator[None]:
+    """Re-raise any error inside the block as StartupFailed(advice), chained to the original error."""
+    try:
+        yield
+    except StartupFailed:
+        raise
+    except Exception as exc:
+        if callable(advice):
+            try:
+                advice = advice()
+            except Exception:
+                advice = "Something went wrong while starting."
+        raise StartupFailed(advice) from exc
+
+
+def unreadable_settings(build: Callable[[], object]) -> list[str]:
+    """The SAR_* variables that make `build` (Settings) fail, each tried on its own; [] if none is to blame."""
+    saved = {key: value for key, value in os.environ.items() if key.startswith("SAR_")}
+    for key in saved:
+        del os.environ[key]
+    try:
+        try:
+            build()
+        except Exception:
+            return []  # fails with no settings at all: not a settings problem
+        bad: list[str] = []
+        for key, value in saved.items():
+            os.environ[key] = value
+            try:
+                build()
+            except Exception:
+                bad.append(key)
+            finally:
+                del os.environ[key]
+        return sorted(bad)
+    finally:
+        os.environ.update(saved)
+
+
+def settings_advice(env_files: Sequence[Path]) -> str:
+    from biobench_sar.config import Settings
+
+    where = "sar.env (" + ", ".join(str(p) for p in env_files) + ")" if env_files else "the environment variables"
+    bad = unreadable_settings(Settings)
+    if not bad:
+        return f"The settings could not be read. Check the SAR_* lines in {where}."
+    values = ", ".join(f"{key}={os.environ.get(key, '')}" for key in bad)
+    if len(bad) == 1:
+        lead, it = f"This setting has a value the app can't read: {values}.", "it"
+    else:
+        lead, it = f"These settings have values the app can't read: {values}.", "them"
+    return f"{lead} Fix or delete {it} in {where}. Numbers must be plain numbers, for example SAR_VLM_TIMEOUT=90."
+
+
+def damaged_install_advice() -> str:
+    if is_frozen():
+        return (
+            "Part of the program could not be loaded, so this installation is probably damaged or incomplete "
+            "(an antivirus program may have removed a file). Install the app again."
+        )
+    return "Part of the program could not be loaded. Install the packages again: pip install -r requirements.txt"
+
+
+def busy_port_advice(port: int) -> str:
+    other = 5051 if port != 5051 else 5052
+    where = "its icon in the Dock" if sys.platform == "darwin" else "its other window"
+    return (
+        f"Port {port} is already in use: the assistant is probably running already (look for {where}), or "
+        f"another program uses that port. Close it and start again, or set SAR_PORT={other} in sar.env."
+    )
+
+
+def exit_code(exc: SystemExit) -> int:
+    if exc.code is None:
+        return 0
+    return exc.code if isinstance(exc.code, int) else 1
+
+
+def _known_log_file() -> Path | None:
+    if _log_redirect is not None:
+        return _log_redirect
+    try:
+        return log_file()
+    except OSError:
+        return None
+
+
+def save_failure_log(text: str) -> Path | None:
+    """Put a failure report where the teacher can find it and send it on; None if no log can be written."""
+    if _log_redirect is not None:
+        return _log_redirect  # all output already goes there, the report included
+    try:
+        path = log_file()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _keep_previous_log(path)
+        path.write_text(text + "\n", encoding="utf-8")
+    except OSError:
+        return None
+    return path
+
+
+def report_failure(exc: BaseException, out: Out = say) -> int:
+    """Print the traceback, then what to do in plain words; save both to the log; show a dialog from Finder.
+
+    Returns the exit code, 1.
+    """
+    details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
+    if isinstance(exc, StartupFailed):
+        headline, advice = f"{APP_NAME} could not start.", str(exc)
+    else:
+        headline = f"{APP_NAME} stopped because of an unexpected error."
+        advice = (
+            "Start it again; if this keeps happening, send the log file below to whoever looks after this computer."
+        )
+    cause = exc.__cause__ if isinstance(exc, StartupFailed) and exc.__cause__ is not None else exc
+    summary = [headline, advice, f"Technical detail: {type(cause).__name__}: {cause}"]
+    out(details)
+    log = save_failure_log(f"{APP_NAME} {__version__} ({sys.platform})\n\n{details}\n\n" + "\n".join(summary))
+    for line in ["", "-" * 72, *summary]:
+        out(line)
+    out(f"Details are saved in {log}" if log else "The details above could not be saved to a log file.")
+    alert("\n\n".join([headline, advice, f"Details are saved in {log}" if log else ""]).strip())
+    return 1
+
+
+def run_guarded(entry: Callable[[], int], out: Out = say) -> int:
+    """Run `entry` and return its exit code; any error that escapes it is reported by report_failure."""
+    try:
+        return entry()
+    except SystemExit as exc:
+        if isinstance(exc.code, str):
+            out(exc.code)
+        return exit_code(exc)
+    except KeyboardInterrupt:
+        return 0
+    except Exception as exc:
+        return report_failure(exc, out)
+
+
 # ---- environment -------------------------------------------------------------------------------------
 
 
@@ -145,7 +294,12 @@ def prepare_environment(frozen: bool | None = None) -> list[Path]:
     loaded: list[Path] = []
     for path in env_file_candidates():
         if path.is_file():
-            load_env_file(path)
+            # Notepad's "Unicode" encoding (UTF-16) is the likely culprit; load_env_file only expects OSError.
+            with startup_step(
+                f"The settings file {path} could not be read. Open it in Notepad or TextEdit and save it as "
+                "plain text (UTF-8), or delete it."
+            ):
+                load_env_file(path)
             loaded.append(path)
     os.environ.setdefault("SAR_DATA_DIR", str(user_data_dir() / "data"))
     _sync_config_data_dir()
@@ -197,8 +351,10 @@ def check_ollama(
 ) -> OllamaStatus:
     try:
         body = json.loads(fetch(base_url.rstrip("/") + "/api/tags", timeout) or b"{}")
-    except (OSError, ValueError) as exc:  # URLError and timeouts are OSErrors
-        return OllamaStatus(reachable=False, has_model=False, error=str(exc))
+    # Not just OSError: another program answering on Ollama's port can raise http.client.HTTPException, and a
+    # failed check must only produce advice, never stop the app.
+    except Exception as exc:
+        return OllamaStatus(reachable=False, has_model=False, error=f"{type(exc).__name__}: {exc}")
     models = body.get("models", []) if isinstance(body, dict) else []
     names = {str(m.get(key, "")) for m in models if isinstance(m, dict) for key in ("name", "model")}
     wanted = {model, model if ":" in model else f"{model}:latest"}
@@ -253,12 +409,15 @@ def lan_address() -> str | None:
 
 
 def port_free(host: str, port: int) -> bool:
+    """False when something already listens there; raises for a host or port that can never work."""
     with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM) as sock:
         # On Windows SO_REUSEADDR lets a bind succeed next to a live listener, which would hide a busy port.
         if sys.platform != "win32":
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
+        except socket.gaierror:  # SAR_HOST isn't an address (a typo), which "port busy" would misreport
+            raise
         except OSError:
             return False
     return True
@@ -312,15 +471,24 @@ def log_file() -> Path:
     return user_data_dir() / "logs" / "sar.log"
 
 
-def redirect_output_to_log() -> Path:
-    path = log_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
+_log_redirect: Path | None = None  # set once stdout/stderr go to the log file
+
+
+def _keep_previous_log(path: Path) -> None:
     with contextlib.suppress(OSError):
         path.replace(path.with_name("sar.previous.log"))
+
+
+def redirect_output_to_log() -> Path:
+    global _log_redirect
+    path = log_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _keep_previous_log(path)
     # Not a with-block: the stream stays open for the life of the process.
     stream = open(path, "a", encoding="utf-8", buffering=1)  # noqa: SIM115
     sys.stdout = stream
     sys.stderr = stream
+    _log_redirect = path
     return path
 
 
@@ -432,6 +600,15 @@ def torch_on_cpu() -> Iterator[None]:
         mps.is_available = original
 
 
+def utf8_mode_detail(frozen: bool, utf8_mode: int) -> str:
+    """sar.spec turns on UTF-8 mode, so open() without an encoding reads sar.env-style files right on Windows."""
+    if utf8_mode:
+        return "on"
+    if frozen:
+        raise CheckFailed('UTF-8 mode is off: the build lost the "X utf8" run-time option in packaging/sar.spec')
+    return "off (source checkout, not required)"
+
+
 def bundle_checks(services: Any) -> list[Check]:
     """What a frozen build can lose: lazily imported modules, package data and the bundled embedding model."""
 
@@ -469,7 +646,15 @@ def bundle_checks(services: Any) -> list[Check]:
             raise CheckFailed("whisper tokenizer returned no tokens")
         return f"mel filters {tuple(filters.shape)}, tokenizer ok"
 
-    return [Check("imports", imports), Check("embeddings", embeddings), Check("whisper assets", whisper_assets)]
+    def utf8() -> str:
+        return utf8_mode_detail(is_frozen(), sys.flags.utf8_mode)
+
+    return [
+        Check("utf-8 mode", utf8),
+        Check("imports", imports),
+        Check("embeddings", embeddings),
+        Check("whisper assets", whisper_assets),
+    ]
 
 
 def free_port(host: str = "127.0.0.1") -> int:
@@ -577,14 +762,30 @@ def run_self_test(
 # ---- run -------------------------------------------------------------------------------------------------
 
 
-def run_app(open_browser: bool = True, out: Out = say) -> int:
-    from biobench_sar.config import Settings
+def run_app(open_browser: bool = True, out: Out = say, env_files: Sequence[Path] = ()) -> int:
+    """Start the dashboard server and return its exit code; a startup step that fails raises StartupFailed.
 
-    settings = Settings()
+    `env_files` are the sar.env files applied, named in the advice when a setting can't be read.
+    """
+    with startup_step(lambda: settings_advice(env_files)):
+        from biobench_sar.config import Settings
+
+        settings = Settings()
+    with startup_step(damaged_install_advice):
+        from biobench_sar import app as app_module
     url = dashboard_url(settings.host, settings.port)
     out(f"{APP_NAME} {__version__}")
     out(f"  Data folder  {os.environ.get('SAR_DATA_DIR', '')}")
     out(f"  Dashboard    {url}")
+    with startup_step(
+        f"{settings.host}:{settings.port} is not an address this computer can serve on. Set SAR_HOST to "
+        "127.0.0.1 (this computer only) or 0.0.0.0 (phones and tablets too), and SAR_PORT to a number "
+        "from 1024 to 65535."
+    ):
+        free = port_free(settings.host, settings.port)
+    # app.main() would stop on a busy port too, with a message meant for developers.
+    if not free:
+        raise StartupFailed(busy_port_advice(settings.port))
     if serves_network(settings.host):
         address = lan_address()
         if address:
@@ -595,25 +796,19 @@ def run_app(open_browser: bool = True, out: Out = say) -> int:
             out(line)
         if advice:
             alert("\n".join(advice))
-    # A busy port means app.main() is about to exit with an error; don't open someone else's page.
-    if open_browser and port_free(settings.host, settings.port):
+    if open_browser:
         open_browser_when_ready(url, settings.host, settings.port)
-
-    from biobench_sar import app as app_module
 
     try:
         app_module.main()
     except KeyboardInterrupt:
         return 0
     except SystemExit as exc:
-        code = exc.code if isinstance(exc.code, int) else (0 if exc.code is None else 1)
+        code = exit_code(exc)
         if code:
-            alert(f"{APP_NAME} could not start. Details are in {log_file()}")
+            out(f"{APP_NAME} stopped (exit code {code}); the reason is in the messages above.")
+            alert(f"{APP_NAME} could not start. Details are in {_known_log_file()}")
         return code
-    except Exception:
-        out(traceback.format_exc().rstrip())
-        alert(f"{APP_NAME} stopped with an error. Details are in {log_file()}")
-        return 1
     return 0
 
 
@@ -642,21 +837,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if launched_from_finder() or sys.stdout is None or sys.stderr is None:
-        redirect_output_to_log()
-    loaded = prepare_environment()
+        with contextlib.suppress(OSError):  # no log is no reason not to start; a failure still shows a dialog
+            redirect_output_to_log()
+    with startup_step(
+        "The app could not set up its data folder or read its settings (sar.env). "
+        "Check that your user account can create files in its own folders."
+    ):
+        loaded = prepare_environment()
     if args.self_test:
         return run_self_test()
     for path in loaded:
         say(f"Settings from {path}")
     if args.port is not None:
         os.environ["SAR_PORT"] = str(args.port)
-    return run_app(open_browser=not args.no_browser)
+    return run_app(open_browser=not args.no_browser, env_files=loaded)
 
 
 def _pause_if_console_closes(code: int) -> None:
     # A double-clicked .exe closes its console on exit, taking the error message with it.
-    if code and is_frozen() and sys.platform == "win32" and sys.stdin is not None and sys.stdin.isatty():
-        with contextlib.suppress(EOFError, OSError):
+    if not (code and is_frozen() and sys.platform == "win32" and sys.stdin is not None):
+        return
+    with contextlib.suppress(EOFError, OSError, ValueError):  # ValueError: stdin already closed
+        if sys.stdin.isatty():
             input("\nPress Enter to close this window...")
 
 
@@ -673,7 +875,7 @@ def _utf8_output() -> None:
 def _run() -> None:
     multiprocessing.freeze_support()
     _utf8_output()
-    code = main()
+    code = run_guarded(main)
     _pause_if_console_closes(code)
     for stream in (sys.stdout, sys.stderr):
         with contextlib.suppress(Exception):

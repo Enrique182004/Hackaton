@@ -167,9 +167,10 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    # Unbuffered output, so logs show up live. UTF-8 mode is requested too, but CI builds have reported it
-    # off (the self-test header says which), so the launcher also switches piped output to UTF-8 itself.
-    [("u", None, "OPTION"), ("X utf8_mode=1", None, "OPTION")],
+    # Unbuffered output, so logs show up live, and UTF-8 mode, so open() without an encoding doesn't fall back
+    # to cp1252 on Windows. The bootloader silently ignores keys it doesn't know, as it did the earlier
+    # "X utf8_mode=1", so the self-test fails a frozen build that runs with UTF-8 mode off.
+    [("u", None, "OPTION"), ("X utf8", None, "OPTION")],
     exclude_binaries=True,
     name=APP_NAME,
     debug=False,
@@ -198,7 +199,9 @@ if IS_MAC:
             "CFBundleDisplayName": APP_NAME,
             "CFBundleShortVersionString": VERSION,
             "CFBundleVersion": VERSION,
-            "LSMinimumSystemVersion": "12.0",
+            # The bundled wheels (torch, numpy, scipy, onnxruntime) and Homebrew's portaudio are built for the
+            # macos-14 runner; CI's packaging/check_macos_app.py fails if a binary needs newer than this.
+            "LSMinimumSystemVersion": "14.0",
             "NSHighResolutionCapable": True,
             # Without these keys macOS refuses camera / microphone access instead of asking.
             "NSCameraUsageDescription": "The assistant watches the whiteboard through the webcam to see what is drawn.",

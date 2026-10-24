@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import builtins
+import http.client
 import importlib.util
 import json
 import os
@@ -46,14 +48,31 @@ def _load_launcher() -> ModuleType:
 
 
 launcher = _load_launcher()
+REAL_PORT_FREE = launcher.port_free
 
 
 @pytest.fixture(autouse=True)
-def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Whatever the launcher sets in os.environ / config.DATA_DIR is undone after each test."""
+def clean_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whatever the launcher sets in os.environ / config.DATA_DIR is undone after each test.
+
+    Failure reports go to a log in a temporary data folder, never the developer's own, and run_app's port
+    check is stubbed: a copy of the app already running on 5050 must not fail these tests.
+    """
     for key in ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(config, "DATA_DIR", config.DATA_DIR)
+    data = tmp_path / "default-userdata"
+    data.mkdir()
+    monkeypatch.setattr(launcher, "user_data_dir", lambda: data)
+    monkeypatch.setattr(launcher, "_log_redirect", None)
+    monkeypatch.setattr(launcher, "port_free", lambda host, port: True)
+
+
+@pytest.fixture
+def alerts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    shown: list[str] = []
+    monkeypatch.setattr(launcher, "alert", shown.append)
+    return shown
 
 
 @pytest.fixture
@@ -202,7 +221,13 @@ def test_untagged_model_names_match_latest() -> None:
 
 
 @pytest.mark.parametrize(
-    "failure", [urllib.error.URLError("connection refused"), TimeoutError("timed out"), b"not json"]
+    "failure",
+    [
+        urllib.error.URLError("connection refused"),
+        TimeoutError("timed out"),
+        b"not json",
+        http.client.BadStatusLine("SSH-2.0-OpenSSH"),  # another program on Ollama's port
+    ],
 )
 def test_unreachable_or_garbled_ollama_is_reported(failure: Any) -> None:
     def fetch(url: str, timeout: float) -> bytes:
@@ -290,8 +315,8 @@ def test_port_free_sees_a_listening_socket() -> None:
     with socket.socket() as server:
         server.bind(("127.0.0.1", 0))
         server.listen()
-        assert not launcher.port_free("127.0.0.1", server.getsockname()[1])
-    assert launcher.port_free("127.0.0.1", launcher.free_port())
+        assert not REAL_PORT_FREE("127.0.0.1", server.getsockname()[1])
+    assert REAL_PORT_FREE("127.0.0.1", launcher.free_port())
 
 
 # ---- self-test ---------------------------------------------------------------------------------------
@@ -388,6 +413,19 @@ def test_bundle_check_reports_every_missing_module(monkeypatch: pytest.MonkeyPat
         imports.run()
 
 
+def test_utf8_mode_is_required_in_a_frozen_build_only() -> None:
+    assert launcher.utf8_mode_detail(frozen=True, utf8_mode=1) == "on"
+    assert launcher.utf8_mode_detail(frozen=False, utf8_mode=0).startswith("off")
+    with pytest.raises(launcher.CheckFailed, match="X utf8"):
+        launcher.utf8_mode_detail(frozen=True, utf8_mode=0)
+
+
+def test_spec_turns_on_utf8_mode_with_the_option_the_bootloader_knows() -> None:
+    # The bootloader ignores unknown keys silently: "X utf8_mode=1" did nothing.
+    spec = (LAUNCHER_PATH.parent / "sar.spec").read_text(encoding="utf-8")
+    assert '("X utf8", None, "OPTION")' in spec and '("X utf8_mode' not in spec
+
+
 def test_torch_on_cpu_hides_mps_only_inside_the_block() -> None:
     torch = pytest.importorskip("torch")
     before = torch.backends.mps.is_available()
@@ -431,7 +469,7 @@ def test_main_port_flag_beats_sar_env(folders: dict[str, Path], monkeypatch: pyt
     monkeypatch.setattr(launcher, "run_app", lambda **kwargs: calls.append(kwargs) or 0)
     assert launcher.main(["--port", "6001", "--no-browser"]) == 0
     assert os.environ["SAR_PORT"] == "6001"
-    assert calls == [{"open_browser": False}]
+    assert calls == [{"open_browser": False, "env_files": [folders["data"] / "sar.env"]}]
 
 
 def test_run_app_warns_about_ollama_and_still_starts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -484,26 +522,214 @@ def test_run_app_passes_on_the_app_exit_code(monkeypatch: pytest.MonkeyPatch) ->
     assert launcher.run_app(open_browser=False, out=lambda line: None) == 1
 
 
-def test_run_app_turns_a_crash_into_exit_code_1(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_crash_in_the_app_is_reported_and_exits_1(monkeypatch: pytest.MonkeyPatch, alerts: list[str]) -> None:
     def crash() -> None:
         raise RuntimeError("camera exploded")
 
     monkeypatch.setenv("SAR_VLM_BACKEND", "mock")
     monkeypatch.setattr(app_module, "main", crash)
     lines: list[str] = []
-    assert launcher.run_app(open_browser=False, out=lines.append) == 1
-    assert "RuntimeError: camera exploded" in lines[-1]
+    assert launcher.run_guarded(lambda: launcher.run_app(open_browser=False, out=lines.append), out=lines.append) == 1
+    text = "\n".join(lines)
+    assert "stopped because of an unexpected error" in text
+    assert "Technical detail: RuntimeError: camera exploded" in text
+    log = launcher.log_file()
+    assert lines[-1] == f"Details are saved in {log}"
+    assert "Traceback" in log.read_text(encoding="utf-8") and "camera exploded" in log.read_text(encoding="utf-8")
+    assert alerts and str(log) in alerts[0]
 
 
-def test_run_app_doesnt_open_a_browser_on_a_busy_port(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_busy_port_stops_with_plain_advice(monkeypatch: pytest.MonkeyPatch, alerts: list[str]) -> None:
+    monkeypatch.setattr(launcher, "port_free", REAL_PORT_FREE)
     with socket.socket() as server:
         server.bind(("127.0.0.1", 0))
         server.listen()
-        monkeypatch.setenv("SAR_PORT", str(server.getsockname()[1]))
+        port = server.getsockname()[1]
+        monkeypatch.setenv("SAR_PORT", str(port))
         monkeypatch.setenv("SAR_VLM_BACKEND", "mock")
         monkeypatch.setattr(launcher, "open_browser_when_ready", lambda *a, **k: pytest.fail("someone else's port"))
-        monkeypatch.setattr(app_module, "main", lambda: None)
-        assert launcher.run_app(open_browser=True, out=lambda line: None) == 0
+        monkeypatch.setattr(app_module, "main", lambda: pytest.fail("the app must not start on a busy port"))
+        lines: list[str] = []
+        assert launcher.run_guarded(lambda: launcher.run_app(out=lines.append), out=lines.append) == 1
+    text = "\n".join(lines)
+    assert f"{launcher.APP_NAME} could not start." in text
+    assert f"Port {port} is already in use" in text and "SAR_PORT=5051" in text
+    assert alerts and f"Port {port} is already in use" in alerts[0]
+
+
+def test_a_host_that_isnt_an_address_is_not_called_a_busy_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unresolvable(host: str, port: int) -> bool:
+        raise socket.gaierror(8, "nodename nor servname provided, or not known")
+
+    monkeypatch.setenv("SAR_HOST", "my-laptop.local:5050")
+    monkeypatch.setenv("SAR_VLM_BACKEND", "mock")
+    monkeypatch.setattr(launcher, "port_free", unresolvable)
+    monkeypatch.setattr(app_module, "main", lambda: pytest.fail("must not start"))
+    lines: list[str] = []
+    assert launcher.run_guarded(lambda: launcher.run_app(open_browser=False, out=lines.append), out=lines.append) == 1
+    text = "\n".join(lines)
+    assert "my-laptop.local:5050:5050 is not an address" in text and "SAR_HOST" in text
+    assert "already in use" not in text
+
+
+def test_a_settings_typo_names_the_bad_line(monkeypatch: pytest.MonkeyPatch, alerts: list[str]) -> None:
+    def settings() -> object:  # reads its numbers like config.Settings does
+        return (float(os.environ.get("SAR_RECORD_SECONDS", "5")), int(os.environ.get("SAR_CAMERA_INDEX", "0")))
+
+    env_file = Path("/school/sar.env")
+    monkeypatch.setenv("SAR_RECORD_SECONDS", "5s")
+    monkeypatch.setenv("SAR_CAMERA_INDEX", "2")
+    monkeypatch.setattr(config, "Settings", settings)
+    monkeypatch.setattr(app_module, "main", lambda: pytest.fail("must not start"))
+    lines: list[str] = []
+    run = lambda: launcher.run_app(open_browser=False, out=lines.append, env_files=[env_file])  # noqa: E731
+    assert launcher.run_guarded(run, out=lines.append) == 1
+    advice = next(line for line in lines if line.startswith("This setting"))
+    assert "SAR_RECORD_SECONDS=5s" in advice and str(env_file) in advice
+    assert "SAR_CAMERA_INDEX" not in advice
+    assert "Technical detail: ValueError" in "\n".join(lines)
+    assert os.environ["SAR_RECORD_SECONDS"] == "5s" and os.environ["SAR_CAMERA_INDEX"] == "2", "env restored"
+    assert alerts
+
+
+def test_the_reported_sar_vlm_timeout_typo_is_caught(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SAR_VLM_TIMEOUT", "90s")
+    monkeypatch.setenv("SAR_VLM_BACKEND", "mock")
+    try:
+        config.Settings()
+    except ValueError:
+        pass
+    else:
+        pytest.skip("config.Settings now accepts SAR_VLM_TIMEOUT=90s")
+    lines: list[str] = []
+    assert launcher.run_guarded(lambda: launcher.run_app(open_browser=False, out=lines.append), out=lines.append) == 1
+    assert any("SAR_VLM_TIMEOUT=90s" in line for line in lines)
+
+
+def test_unreadable_settings_finds_every_bad_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    def settings() -> object:
+        return [int(os.environ.get(key, "0")) for key in ("SAR_A", "SAR_B", "SAR_C")]
+
+    monkeypatch.setenv("SAR_A", "x")
+    monkeypatch.setenv("SAR_B", "1")
+    monkeypatch.setenv("SAR_C", "y")
+    assert launcher.unreadable_settings(settings) == ["SAR_A", "SAR_C"]
+    assert (os.environ["SAR_A"], os.environ["SAR_B"], os.environ["SAR_C"]) == ("x", "1", "y")
+
+
+def test_unreadable_settings_blames_no_variable_when_settings_fail_anyway(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken() -> object:
+        raise RuntimeError("not about the settings")
+
+    monkeypatch.setenv("SAR_A", "1")
+    assert launcher.unreadable_settings(broken) == []
+    assert os.environ["SAR_A"] == "1"
+
+
+def test_an_unreadable_sar_env_is_reported(folders: dict[str, Path], alerts: list[str]) -> None:
+    env_file = folders["data"] / "sar.env"
+    env_file.write_text("SAR_CAMERA_INDEX=1\n", encoding="utf-16")  # Notepad's "Unicode"
+    lines: list[str] = []
+    assert launcher.run_guarded(lambda: launcher.main(["--no-browser"]), out=lines.append) == 1
+    text = "\n".join(lines)
+    assert f"The settings file {env_file} could not be read" in text and "UTF-8" in text
+    assert "UnicodeDecodeError" in text
+    assert (folders["data"] / "logs" / "sar.log").is_file()
+
+
+def test_an_app_that_cannot_be_imported_says_to_reinstall(monkeypatch: pytest.MonkeyPatch) -> None:
+    import biobench_sar
+
+    monkeypatch.setenv("SAR_VLM_BACKEND", "mock")
+    monkeypatch.delattr(biobench_sar, "app")
+    monkeypatch.setitem(sys.modules, "biobench_sar.app", None)
+    lines: list[str] = []
+    assert launcher.run_guarded(lambda: launcher.run_app(open_browser=False, out=lines.append), out=lines.append) == 1
+    assert any("pip install -r requirements.txt" in line for line in lines)
+    assert any(line.startswith("Technical detail: ModuleNotFoundError") for line in lines)
+
+
+@pytest.mark.parametrize(("exit", "code"), [(SystemExit(3), 3), (SystemExit(None), 0), (KeyboardInterrupt(), 0)])
+def test_run_guarded_passes_exit_codes_through(exit: BaseException, code: int) -> None:
+    def entry() -> int:
+        raise exit
+
+    assert launcher.run_guarded(entry, out=lambda line: pytest.fail("nothing to report")) == code
+
+
+def test_run_guarded_prints_a_text_exit() -> None:
+    def entry() -> int:
+        raise SystemExit("bad flag")
+
+    lines: list[str] = []
+    assert launcher.run_guarded(entry, out=lines.append) == 1
+    assert lines == ["bad flag"]
+
+
+def test_failure_log_is_the_redirected_log_when_output_already_goes_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = tmp_path / "sar.log"
+    monkeypatch.setattr(launcher, "_log_redirect", log)
+    assert launcher.save_failure_log("report") == log
+    assert not log.exists(), "the report was already printed into it"
+
+
+def test_failure_without_a_writable_log_still_explains(monkeypatch: pytest.MonkeyPatch, alerts: list[str]) -> None:
+    def no_log() -> Path:
+        raise PermissionError("read-only home")
+
+    monkeypatch.setattr(launcher, "log_file", no_log)
+    lines: list[str] = []
+    assert launcher.report_failure(launcher.StartupFailed("Do this."), out=lines.append) == 1
+    assert lines[-2:] == [
+        "Technical detail: StartupFailed: Do this.",
+        "The details above could not be saved to a log file.",
+    ]
+    assert alerts == [f"{launcher.APP_NAME} could not start.\n\nDo this."]
+
+
+def test_startup_failure_keeps_the_console_open_and_shows_a_dialog(
+    monkeypatch: pytest.MonkeyPatch, alerts: list[str]
+) -> None:
+    def main() -> int:
+        with launcher.startup_step("Check sar.env."):
+            raise ValueError("could not convert string to float: '90s'")
+
+    pauses: list[int] = []
+    exits: list[int] = []
+    monkeypatch.setattr(launcher, "main", main)
+    monkeypatch.setattr(launcher, "_utf8_output", lambda: None)
+    monkeypatch.setattr(launcher, "_pause_if_console_closes", pauses.append)
+    monkeypatch.setattr(launcher.os, "_exit", exits.append)
+    launcher._run()
+    assert exits == [1] and pauses == [1]
+    assert alerts and "Check sar.env." in alerts[0] and str(launcher.log_file()) in alerts[0]
+    assert "could not convert string to float" in launcher.log_file().read_text(encoding="utf-8")
+
+
+class _Stdin:
+    def __init__(self, tty: bool) -> None:
+        self.tty = tty
+
+    def isatty(self) -> bool:
+        return self.tty
+
+
+@pytest.mark.parametrize(
+    ("code", "platform", "tty", "paused"),
+    [(1, "win32", True, True), (0, "win32", True, False), (1, "win32", False, False), (1, "darwin", True, False)],
+)
+def test_pause_only_keeps_a_failed_windows_console_open(
+    code: int, platform: str, tty: bool, paused: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prompts: list[str] = []
+    monkeypatch.setattr(launcher, "is_frozen", lambda: True)
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(sys, "stdin", _Stdin(tty))
+    monkeypatch.setattr(builtins, "input", lambda prompt="": prompts.append(prompt) or "")
+    launcher._pause_if_console_closes(code)
+    assert prompts == (["\nPress Enter to close this window..."] if paused else [])
 
 
 def test_alert_is_silent_outside_a_finder_launch(monkeypatch: pytest.MonkeyPatch) -> None:
