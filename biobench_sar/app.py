@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -18,7 +19,8 @@ from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
 
 from biobench_sar.assistant import Assistant
-from biobench_sar.config import PACKAGE_DIR, Settings
+from biobench_sar.config import Settings
+from biobench_sar.tutor import MODES
 
 log = logging.getLogger("biobench_sar.app")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -26,6 +28,7 @@ CALIBRATION_SETTLE_SECONDS = 1.5
 MAX_SEARCH_RESULTS = 10
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 DEFAULT_PORTS = {"http": 80, "https": 443}
+NO_TEXT_ERROR = "no readable text found (scanned PDF or blank image?)"
 
 
 @dataclass
@@ -62,6 +65,7 @@ def build_services(settings: Settings, on_query: Any, on_state: Any, should_list
         settings.vlm_base_url,
         settings.vlm_api_key,
         settings.vlm_timeout,
+        profile=settings.profile,
     )
     audio = AudioTrigger(
         on_query=on_query,
@@ -98,6 +102,7 @@ def create_app(
     assistant.services = svc
     if services is None:
         assistant.calibrated = _load_initial_calibration(settings)
+    _prune_quiz_bank(assistant, svc.store)
 
     def documents_body() -> dict[str, Any]:
         documents = svc.store.list_sources()
@@ -151,6 +156,7 @@ def create_app(
     @app.post("/api/upload")
     def upload() -> Any:
         from biobench_sar.rag.ingestor import SUPPORTED_EXTENSIONS, ingest_file
+        from biobench_sar.rag.quiz_bank import parse_quiz_file
 
         results: list[dict[str, Any]] = []
         total = 0
@@ -169,12 +175,18 @@ def create_app(
             try:
                 storage.save(path)
                 chunks = [replace(c, source=name, metadata={**c.metadata, "source": name}) for c in ingest_file(path)]
+                if not any(c.text.strip() for c in chunks):
+                    # Keep whatever an earlier upload of this name stored: a blank rescan must not wipe it.
+                    results.append({"name": name, "chunks": 0, "error": NO_TEXT_ERROR})
+                    continue
                 # Replace, not add: ids are content hashes, so an edited file would keep its old chunks.
                 added, removed = svc.store.replace_source(name, chunks)
                 total += added
                 count = svc.store.source_count(name)
                 (stored if count else emptied).append(name)
                 results.append({"name": name, "chunks": count, "replaced": removed})
+                # Parsed from the saved copy, which the finally below deletes.
+                assistant.quiz_bank.replace_source(name, parse_quiz_file(path, name) if count else [])
             except Exception as exc:  # UnsupportedFileType, parse errors, embed errors
                 log.warning("upload %s failed: %s", name, exc)
                 results.append({"name": name, "chunks": 0, "error": str(exc) or type(exc).__name__})
@@ -208,6 +220,8 @@ def create_app(
                 "total_documents": total_documents,
                 "vlm_backend": settings.vlm_backend,
                 "vlm_model": settings.vlm_model,
+                "profile": settings.profile,
+                "mode": assistant.tutor.mode,
                 "audio_available": bool(getattr(svc.audio, "available", False)),
                 "tts_backend": settings.tts_backend,
                 "listen_mode": settings.listen_mode,
@@ -222,6 +236,7 @@ def create_app(
     def api_config() -> Any:
         return jsonify(
             {
+                "profile": settings.profile,
                 "camera_index": settings.camera_index,
                 "camera_size": [settings.camera_width, settings.camera_height],
                 "projector_size": list(settings.projector_size),
@@ -270,10 +285,36 @@ def create_app(
     def api_delete_document(source: str) -> Any:
         deleted = svc.store.delete_source(source)
         assistant.selection.discard(source)
+        assistant.quiz_bank.remove_source(source)
         if not deleted:
             return jsonify({"deleted": 0, "error": "no such document"}), 404
         notify_documents_changed()
         return jsonify({"deleted": deleted})
+
+    @app.get("/api/tutor")
+    def api_tutor() -> Any:
+        return jsonify(assistant.tutor.to_dict())
+
+    @app.put("/api/tutor/mode")
+    def api_tutor_mode() -> Any:
+        body = request.get_json(silent=True)
+        mode = body.get("mode") if isinstance(body, dict) else None
+        if mode not in MODES:
+            return jsonify({"error": f"mode must be one of: {', '.join(MODES)}"}), 400
+        assistant.tutor.set_mode(mode)
+        assistant.push_tutor()
+        return jsonify(assistant.tutor.to_dict())
+
+    @app.post("/api/tutor/quiz/start")
+    def api_quiz_start() -> Any:
+        assistant.start_quiz()
+        return jsonify(assistant.tutor.to_dict())
+
+    @app.post("/api/tutor/quiz/stop")
+    def api_quiz_stop() -> Any:
+        assistant.tutor.stop_quiz()
+        assistant.push_tutor()
+        return jsonify(assistant.tutor.to_dict())
 
     @app.get("/api/search")
     def api_search() -> Any:
@@ -398,6 +439,7 @@ def create_app(
     def on_connect(_auth: Any = None) -> None:
         # A client that (re)connects mid-query must not show a stale state.
         socketio.emit("status", {"state": assistant.state}, to=request.sid)
+        socketio.emit("tutor", assistant.tutor.to_dict(), to=request.sid)
 
     @socketio.on("text_query")
     def on_text_query(data: Any) -> None:
@@ -414,6 +456,7 @@ def create_app(
     app.config["SAR_HANDLE_QUERY"] = assistant.handle_query
     app.config["SAR_ON_STATE"] = assistant.on_state
     app.config["SAR_SHOULD_LISTEN"] = assistant.should_listen
+    app.config["SAR_NOTIFY_DOCUMENTS"] = notify_documents_changed
     return app, socketio
 
 
@@ -439,22 +482,91 @@ def _load_initial_calibration(settings: Settings) -> bool:
         return False
 
 
-def seed_knowledge(store: Any, directory: Path) -> int:
-    """Ingest the bundled scenario documents into an empty store so a fresh install can answer right away."""
-    from biobench_sar.rag.ingestor import SUPPORTED_EXTENSIONS, ingest_file
+def _prune_quiz_bank(assistant: Assistant, store: Any) -> None:
+    """Drop quiz problems of files the store no longer has (e.g. its folder was deleted to reset it)."""
+    try:
+        known = {d["source"] for d in store.list_sources()}
+        for source in assistant.quiz_bank.sources():
+            if source not in known:
+                assistant.quiz_bank.remove_source(source)
+    except Exception:
+        log.exception("could not prune the quiz bank")
 
-    if store.count() > 0 or not directory.is_dir():
+
+def _seeded_profiles(marker: Path) -> set[str]:
+    try:
+        return set(marker.read_text(encoding="utf-8").split())
+    except OSError:
+        return set()
+
+
+def seed_knowledge(
+    store: Any,
+    directory: Path,
+    *,
+    marker: Path | None = None,
+    quiz_bank: Any = None,
+    on_done: Callable[[list[str]], None] | None = None,
+) -> int:
+    """Ingest a profile's bundled documents (directory = knowledge/<profile>) so a fresh install can answer.
+
+    With a marker file each profile is seeded once: a student who removed every file must not get the demo
+    documents back on the next start. Without one, only an empty store is seeded. `on_done` gets the seeded
+    file names.
+    """
+    from biobench_sar.rag.ingestor import SUPPORTED_EXTENSIONS, ingest_file
+    from biobench_sar.rag.quiz_bank import parse_quiz_file
+
+    if not directory.is_dir():
+        return 0
+    if marker is not None:
+        if directory.name in _seeded_profiles(marker):
+            return 0
+    elif store.count() > 0:
         return 0
     added = 0
+    seeded: list[str] = []
     for path in sorted(directory.iterdir()):
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
         try:
-            added += store.add_chunks(ingest_file(path))
+            count = store.add_chunks(ingest_file(path))
         except Exception:
             log.exception("could not seed %s", path.name)
+            continue
+        added += count
+        if count:
+            seeded.append(path.name)
+            if quiz_bank is not None:
+                quiz_bank.replace_source(path.name, parse_quiz_file(path, path.name))
     log.info("seeded knowledge base with %d chunks from %s", added, directory)
+    if added and marker is not None:
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("\n".join(sorted({*_seeded_profiles(marker), directory.name})) + "\n", encoding="utf-8")
+        except OSError as exc:
+            log.warning("could not write seed marker %s: %s", marker, exc)
+    if seeded and on_done is not None:
+        on_done(seeded)
     return added
+
+
+def seed_app_knowledge(app: Flask, settings: Settings, directory: Path | None = None) -> int:
+    """First-run seeding for a running app: new files join an explicit selection and open dashboards refresh."""
+    assistant: Assistant = app.config["SAR_ASSISTANT"]
+    notify: Callable[[], None] = app.config["SAR_NOTIFY_DOCUMENTS"]
+
+    def done(names: list[str]) -> None:
+        assistant.selection.activate(names)
+        notify()
+
+    return seed_knowledge(
+        app.config["SAR_SERVICES"].store,
+        directory or settings.knowledge_dir,
+        marker=settings.seed_marker_file,
+        quiz_bank=assistant.quiz_bank,
+        on_done=done,
+    )
 
 
 def _port_free(host: str, port: int) -> bool:
@@ -516,9 +628,7 @@ def main() -> None:
     _request_camera_access(settings.camera_index)
     svc.vision.start()
     if settings.seed_knowledge:
-        threading.Thread(
-            target=seed_knowledge, args=(svc.store, PACKAGE_DIR / "knowledge"), daemon=True, name="seed"
-        ).start()
+        threading.Thread(target=seed_app_knowledge, args=(app, settings), daemon=True, name="seed").start()
     threading.Thread(target=_warm_up, args=(svc,), daemon=True, name="warm-up").start()
     try:
         svc.audio.start()
@@ -527,9 +637,10 @@ def main() -> None:
     base = f"http://{settings.host}:{settings.port}"
     log.info(
         "\n\n  SAR Whiteboard Assistant\n  Projector  %s/          (fullscreen on the projector, press F)\n"
-        "  Dashboard  %s/dashboard\n  Model      %s · %s\n",
+        "  Dashboard  %s/dashboard\n  Subject    %s\n  Model      %s · %s\n",
         base,
         base,
+        settings.profile,
         settings.vlm_backend,
         settings.vlm_model,
     )

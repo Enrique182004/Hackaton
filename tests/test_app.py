@@ -73,8 +73,11 @@ def test_status_shape(built: Any) -> None:
         "listen_mode",
         "last_latency_s",
         "uptime_s",
+        "profile",
+        "mode",
     } <= set(data)
     assert data["state"] == "idle" and data["audio_available"] is True
+    assert (data["profile"], data["mode"]) == ("math", "help")
     assert data["active_documents"] == 0 and data["total_documents"] == 0
 
 
@@ -99,9 +102,9 @@ def ingest_texts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return texts
 
 
-def _upload(client: Any, name: str = "notes.txt", **kwargs: Any) -> Any:
+def _upload(client: Any, name: str = "notes.txt", content: bytes = b"hello", **kwargs: Any) -> Any:
     return client.post(
-        "/api/upload", data={"files[]": [(io.BytesIO(b"hello"), name)]}, content_type="multipart/form-data", **kwargs
+        "/api/upload", data={"files[]": [(io.BytesIO(content), name)]}, content_type="multipart/form-data", **kwargs
     )
 
 
@@ -285,8 +288,10 @@ def test_config_keys_and_no_secret(built: Any, settings: Settings) -> None:
         "wake_word",
         "tts_backend",
         "tts_voice",
+        "profile",
     } <= set(data)
     assert data["projector_size"] == [640, 360]
+    assert data["profile"] == "math"
     assert "vlm_api_key" not in data and "api_key" not in r.get_data(as_text=True).lower()
 
 
@@ -519,8 +524,9 @@ def test_socket_connect_receives_current_status(built: Any, fakes: Any) -> None:
     app, socketio = built
     sio = socketio.test_client(app)
     got = sio.get_received()
-    assert [m["name"] for m in got] == ["status"]
+    assert [m["name"] for m in got] == ["status", "tutor"]
     assert got[0]["args"][0] == {"state": "idle"}
+    assert got[1]["args"][0] == {"mode": "help", "learn_topic": None, "quiz": None}, "a reloaded projector catches up"
 
 
 def _poll(base: str, sid: str | None = None, body: bytes | None = None) -> str:
@@ -544,15 +550,16 @@ def test_socket_connect_packet_precedes_status_push(built: Any) -> None:
         packets: list[str] = []
         deadline = time.time() + 5
         while time.time() < deadline and not (
-            any(p.startswith("40") for p in packets) and any(p.startswith('42["status"') for p in packets)
+            any(p.startswith("40") for p in packets) and any(p.startswith('42["tutor"') for p in packets)
         ):
             packets += _poll(base, sid).split("\x1e")
     finally:
         server.shutdown()
         server.server_close()
     messages = [p for p in packets if p[:2] in ("40", "42")]
-    assert [p[:2] for p in messages] == ["40", "42"], packets
+    assert [p[:2] for p in messages] == ["40", "42", "42"], packets
     assert json.loads(messages[1][2:]) == ["status", {"state": "idle"}]
+    assert json.loads(messages[2][2:])[0] == "tutor"
 
 
 def test_socket_connect_mid_query_gets_current_state(built: Any, fakes: Any) -> None:
@@ -724,7 +731,11 @@ def test_failed_or_empty_upload_is_not_activated(built: Any, ingest_texts: list[
     client = app.test_client()
     client.put(SELECTION, json={"sources": []})
     ingest_texts[:] = []
-    assert _upload(client, "empty.txt").get_json()["files"][0]["chunks"] == 0
+    assert _upload(client, "empty.txt").get_json()["files"][0] == {
+        "name": "empty.txt",
+        "chunks": 0,
+        "error": app_module.NO_TEXT_ERROR,
+    }
     assert _upload(client, "bad.exe").get_json()["files"][0]["error"]
     assert app.config["SAR_ASSISTANT"].active_sources == set()
 
@@ -831,3 +842,167 @@ def test_search_with_every_file_off_returns_nothing(built: Any, fakes: Any) -> N
     client.put(SELECTION, json={"sources": []})
     assert client.get("/api/search?q=runoff").get_json() == {"results": []}
     assert fakes.store.query_sources == []
+
+
+# ---- tutor ----------------------------------------------------------------------
+
+WORKSHEET = b"Fractions quiz\n1. 2 + 2 = ?\nAnswer: 4\n2. 1/2 + 1/4 = ?\n"
+TUTOR = "/api/tutor"
+
+
+def test_upload_without_text_keeps_the_existing_file(built: Any, fakes: Any, ingest_texts: list[str]) -> None:
+    client = built[0].test_client()
+    _upload(client, "w.txt", WORKSHEET)
+    ingest_texts[:] = ["  ", ""]  # a blank rescan of the same file
+    body = _upload(client, "w.txt", b"").get_json()
+    assert body == {"files": [{"name": "w.txt", "chunks": 0, "error": app_module.NO_TEXT_ERROR}], "total_chunks": 0}
+    assert sorted(c.text for c in fakes.store.chunks) == ["a", "b"], "the earlier upload is not wiped"
+    assert len(built[0].config["SAR_ASSISTANT"].quiz_bank.problems()) == 2, "its quiz problems too"
+
+
+def _tutor_pushes(sio: Any, wait: bool = True) -> list[dict[str, Any]]:
+    got = collect(sio, ["tutor"], timeout=1.0) if wait else sio.get_received()
+    return [m["args"][0] for m in got if m["name"] == "tutor"]
+
+
+def test_tutor_state_starts_in_help(built: Any) -> None:
+    assert built[0].test_client().get(TUTOR).get_json() == {"mode": "help", "learn_topic": None, "quiz": None}
+
+
+@pytest.mark.parametrize("mode", ["help", "practice", "quiz"])
+def test_put_mode(built: Any, mode: str) -> None:
+    app, socketio = built
+    sio = socketio.test_client(app)
+    sio.get_received()
+    client = app.test_client()
+    r = client.put(f"{TUTOR}/mode", json={"mode": mode})
+    assert r.status_code == 200 and r.get_json() == {"mode": mode, "learn_topic": None, "quiz": None}
+    assert client.get(TUTOR).get_json()["mode"] == mode
+    assert client.get("/api/status").get_json()["mode"] == mode
+    assert _tutor_pushes(sio, wait=mode != "help") == ([] if mode == "help" else [r.get_json()])
+
+
+@pytest.mark.parametrize("payload", ['{"mode": "chat"}', "{}", '{"mode": 3}', "[1]", "null", "not json"])
+def test_put_bad_mode_is_400(built: Any, payload: str) -> None:
+    client = built[0].test_client()
+    r = client.put(f"{TUTOR}/mode", data=payload, content_type="application/json")
+    assert r.status_code == 400 and "error" in r.get_json()
+    assert client.get(TUTOR).get_json()["mode"] == "help"
+
+
+def test_cross_origin_tutor_changes_blocked(built: Any) -> None:
+    client = built[0].test_client()
+    assert client.put(f"{TUTOR}/mode", json={"mode": "quiz"}, headers=EVIL).status_code == 403
+    assert client.post(f"{TUTOR}/quiz/start", headers=EVIL).status_code == 403
+    assert client.get(TUTOR).get_json()["mode"] == "help"
+
+
+def test_quiz_start_without_problems_lets_the_model_invent_them(built: Any) -> None:
+    body = built[0].test_client().post(f"{TUTOR}/quiz/start").get_json()
+    assert body == {
+        "mode": "quiz",
+        "learn_topic": None,
+        "quiz": {"active": True, "number": 1, "total": 10, "score": 0, "problem": None},
+    }
+
+
+def test_quiz_start_uses_ticked_uploads_and_stop_ends_it(built: Any, ingest_texts: list[str]) -> None:
+    app, socketio = built
+    client = app.test_client()
+    _upload(client, "w.txt", WORKSHEET)
+    _upload(client, "other.txt", b"Practice\n1. 9 - 4 = ?\n")
+    client.put(SELECTION, json={"sources": ["w.txt"]})
+    sio = socketio.test_client(app)
+    sio.get_received()
+    started = client.post(f"{TUTOR}/quiz/start").get_json()
+    assert started["quiz"] == {"active": True, "number": 1, "total": 2, "score": 0, "problem": "2 + 2 = ?"}
+    assert _tutor_pushes(sio) == [started]
+    stopped = client.post(f"{TUTOR}/quiz/stop").get_json()
+    assert stopped == {"mode": "help", "learn_topic": None, "quiz": None}
+    assert _tutor_pushes(sio) == [stopped]
+
+
+def test_quiz_question_reaches_the_model_and_history(built: Any, fakes: Any, ingest_texts: list[str]) -> None:
+    app, socketio = built
+    client = app.test_client()
+    _upload(client, "w.txt", WORKSHEET)
+    sio = socketio.test_client(app)
+    sio.get_received()
+    item = _ask(app, socketio, "quiz me")
+    assert fakes.vlm.kwargs[-1]["task"] == {
+        "kind": "quiz",
+        "stage": "dictate",
+        "number": 1,
+        "total": 2,
+        "problem": "2 + 2 = ?",
+        "answer": "4",
+        "next_problem": None,
+    }
+    assert fakes.vlm.kwargs[-1]["mode"] == "quiz" and fakes.vlm.kwargs[-1]["recent_turns"] == []
+    assert (item["mode"], item["task_kind"]) == ("quiz", "quiz")
+    assert client.get("/api/history").get_json()["interactions"][0]["task_kind"] == "quiz"
+    assert _tutor_pushes(sio)[-1]["quiz"]["problem"] == "2 + 2 = ?"
+
+
+def test_learn_request_through_the_api(built: Any, fakes: Any) -> None:
+    app, socketio = built
+    item = _ask(app, socketio, "I want to learn how to solve fractions")
+    assert fakes.vlm.kwargs[-1]["task"] == {"kind": "learn", "topic": "solving fractions", "stage": "offer"}
+    assert item["task_kind"] == "learn"
+    assert app.test_client().get(TUTOR).get_json()["learn_topic"] == "solving fractions"
+    _ask(app, socketio, "make one up")
+    assert fakes.vlm.kwargs[-1]["task"]["stage"] == "example"
+    assert fakes.vlm.kwargs[-1]["recent_turns"][0]["q"] == "I want to learn how to solve fractions"
+
+
+def test_upload_and_delete_keep_the_quiz_bank_in_sync(built: Any, settings: Settings, ingest_texts: list[str]) -> None:
+    app, socketio = built
+    client = app.test_client()
+    bank = app.config["SAR_ASSISTANT"].quiz_bank
+    sio = socketio.test_client(app)
+    sio.get_received()
+    _upload(client, "w.txt", WORKSHEET)
+    assert [(p.problem, p.answer, p.source) for p in bank.problems()] == [
+        ("2 + 2 = ?", "4", "w.txt"),
+        ("1/2 + 1/4 = ?", None, "w.txt"),
+    ]
+    assert not any((settings.upload_dir).iterdir()), "parsed before the saved copy is deleted"
+    assert json.loads(settings.quiz_bank_file.read_text())["sources"]["w.txt"][0]["problem"] == "2 + 2 = ?"
+    _upload(client, "w.txt", b"just notes now")
+    assert bank.problems() == [], "an edited file without problems drops its old ones"
+    _upload(client, "w.txt", WORKSHEET)
+    assert client.delete("/api/documents/w.txt").status_code == 200
+    assert bank.problems() == []
+
+
+def test_startup_drops_quiz_problems_of_missing_files(
+    settings: Settings, fakes: app_module.Services, templates_dir: Path
+) -> None:
+    from biobench_sar.rag.quiz_bank import QuizBank, QuizProblem
+
+    _with_docs(fakes)
+    stale = QuizBank(settings.quiz_bank_file)
+    stale.replace_source("a.pdf", [QuizProblem("1 + 1", "2", "", 1, "a.pdf")])
+    stale.replace_source("gone.md", [QuizProblem("2 + 2", "4", "", 1, "gone.md")])
+    flask_app, _ = app_module.create_app(settings, fakes, template_folder=str(templates_dir))
+    assert flask_app.config["SAR_ASSISTANT"].quiz_bank.sources() == ["a.pdf"]
+
+
+def test_notify_documents_is_exposed_for_startup_seeding(built: Any) -> None:
+    app, socketio = built
+    sio = socketio.test_client(app)
+    sio.get_received()
+    app.config["SAR_NOTIFY_DOCUMENTS"]()
+    assert _pushed(sio) == [app.test_client().get("/api/documents").get_json()]
+
+
+def test_biology_profile_reports_itself(settings: Settings, fakes: app_module.Services, templates_dir: Path) -> None:
+    flask_app, socketio = app_module.create_app(
+        dataclasses.replace(settings, profile="biology"), fakes, template_folder=str(templates_dir)
+    )
+    fakes.audio.on_query = flask_app.config["SAR_HANDLE_QUERY"]
+    client = flask_app.test_client()
+    assert client.get("/api/config").get_json()["profile"] == "biology"
+    assert client.get("/api/status").get_json()["profile"] == "biology"
+    item = _ask(flask_app, socketio, "quiz me")
+    assert fakes.vlm.kwargs[-1]["task"] is None and item["task_kind"] is None and item["mode"] == "help"
