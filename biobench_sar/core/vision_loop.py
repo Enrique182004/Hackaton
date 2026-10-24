@@ -175,6 +175,7 @@ _MIN_BOX_AREA = 600
 _BOX_PAD = 3
 _ERASE_PAD = 6
 _RING = 15
+_MARK_CHUNK = 1024
 
 
 def _box_rects(mask: np.ndarray, min_area: int) -> list[tuple[int, int, int, int]]:
@@ -212,11 +213,17 @@ def _absorb_marks(
     if not symbols or not marks or reach <= 0:
         return symbols, marks
     big, small = np.array(symbols), np.array(marks)
-    dx = np.maximum(np.maximum(big[None, :, 0] - small[:, None, 2], small[:, None, 0] - big[None, :, 2]), 0)
-    dy = np.maximum(np.maximum(big[None, :, 1] - small[:, None, 3], small[:, None, 1] - big[None, :, 3]), 0)
-    gap = np.hypot(dx, dy)
-    nearest = gap.argmin(axis=1)
-    near = gap[np.arange(len(small)), nearest] <= reach
+    nearest = np.empty(len(small), np.intp)
+    near = np.empty(len(small), bool)
+    # Chunked so a noisy frame with thousands of specks never builds one huge marks x symbols matrix.
+    for i in range(0, len(small), _MARK_CHUNK):
+        part = small[i : i + _MARK_CHUNK]
+        dx = np.maximum(np.maximum(big[None, :, 0] - part[:, None, 2], part[:, None, 0] - big[None, :, 2]), 0)
+        dy = np.maximum(np.maximum(big[None, :, 1] - part[:, None, 3], part[:, None, 1] - big[None, :, 3]), 0)
+        gap2 = dx * dx + dy * dy
+        best = gap2.argmin(axis=1)
+        nearest[i : i + len(part)] = best
+        near[i : i + len(part)] = gap2[np.arange(len(part)), best] <= reach * reach
     for col, grow in ((0, np.minimum), (1, np.minimum), (2, np.maximum), (3, np.maximum)):
         grow.at(big[:, col], nearest[near], small[near, col])
     return [tuple(int(v) for v in b) for b in big], [tuple(int(v) for v in m) for m in small[~near]]
