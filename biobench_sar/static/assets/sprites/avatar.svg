@@ -63,10 +63,10 @@
     <path class="c" d="M66 76 L44 52 L38 30"/><path class="c" d="M94 76 L116 52 L122 30"/>
     <path class="c" d="M72 110 L62 140"/><path class="c" d="M88 110 L98 140"/>
     <path class="w" d="M54 142 L66 142"/><path class="w" d="M94 142 L106 142"/>
-    <path class="s" d="M20 20 L23 28 L31 31 L23 34 L20 42 L17 34 L9 31 L17 28 Z"/>
-    <path class="s" d="M140 16 L143 24 L151 27 L143 30 L140 38 L137 30 L129 27 L137 24 Z"/>
-    <path class="f" d="M24 80 L26 85 L31 87 L26 89 L24 94 L22 89 L17 87 L22 85 Z"/>
-    <path class="f" d="M138 76 L140 81 L145 83 L140 85 L138 90 L136 85 L131 83 L136 81 Z"/>
+    <path class="s" d="M30 20 L33 28 L41 31 L33 34 L30 42 L27 34 L19 31 L27 28 Z"/>
+    <path class="s" d="M130 16 L133 24 L141 27 L133 30 L130 38 L127 30 L119 27 L127 24 Z"/>
+    <path class="f" d="M30 80 L32 85 L37 87 L32 89 L30 94 L28 89 L23 87 L28 85 Z"/>
+    <path class="f" d="M130 76 L132 81 L137 83 L132 85 L130 90 L128 85 L123 83 L128 81 Z"/>
     <circle class="s" cx="80" cy="4" r="2"/>
   </g>
 

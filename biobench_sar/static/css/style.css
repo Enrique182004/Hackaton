@@ -39,7 +39,7 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0000
 }
 
 #bubble {
-  position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%);
+  position: absolute; left: 0; bottom: 100%; /* horizontal offset is set by fitBubble() */
   width: max-content; max-width: clamp(200px, 34vw, 680px); padding: 0.3em 0.55em; margin-bottom: 4px;
   font-size: clamp(16px, 1.9vw, 40px); line-height: 1.25; overflow-wrap: anywhere; font-weight: 600; text-align: center;
   color: var(--white); border: 3px solid var(--cyan); border-radius: 18px;
@@ -48,8 +48,6 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0000
   background: transparent;
 }
 #avatar.bubble-below #bubble { bottom: auto; top: 100%; margin: 4px 0 0; }
-#avatar.bubble-left #bubble { left: auto; right: 0; transform: none; }
-#avatar.bubble-right #bubble { left: 0; transform: none; }
 #avatar.state-error #bubble { border-color: var(--amber); text-shadow: 0 0 8px var(--amber);
   box-shadow: 0 0 12px var(--amber), inset 0 0 8px rgba(255, 179, 71, 0.5); }
 #avatar.state-celebrating #bubble { border-color: var(--white); animation: bubble-glow 1.2s ease-in-out infinite; }

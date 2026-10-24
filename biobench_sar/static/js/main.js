@@ -8,6 +8,7 @@
   // Pointing sprite: fingertip sits at (153,56) in the 160px frame; other states anchor at the centre.
   const POINT_TIP = { x: 153, y: 56 };
   const CENTER = { x: FRAME / 2, y: FRAME / 2 };
+  const EDGE = 24; // min gap to the window edge; leaves room for the celebrate hop rotating the bubble
   const STATES = ["idle", "walking", "pointing", "celebrating", "error"];
   const MOVE_MS = 1500;
 
@@ -61,10 +62,13 @@
     const top = parseFloat(avatar.style.top) || 0;
     const h = bubble.classList.contains("hidden") ? 120 : bubble.offsetHeight;
     avatar.classList.toggle("bubble-below", top - h - 8 < 0);
-    const mid = (parseFloat(avatar.style.left) || 0) + avatar.offsetWidth / 2;
-    const half = (bubble.classList.contains("hidden") ? 420 : bubble.offsetWidth) / 2;
-    avatar.classList.toggle("bubble-right", mid - half < 0);
-    avatar.classList.toggle("bubble-left", mid + half > window.innerWidth);
+    // Centre the bubble over the avatar, then clamp it inside the window: the avatar itself may hang off-screen
+    // when it points near an edge, so aligning to the avatar's edge is not enough.
+    const left = parseFloat(avatar.style.left) || 0;
+    const width = bubble.classList.contains("hidden") ? 420 : bubble.offsetWidth;
+    const ideal = left + avatar.offsetWidth / 2 - width / 2;
+    const clamped = Math.max(EDGE, Math.min(ideal, window.innerWidth - width - EDGE));
+    bubble.style.left = Math.round(clamped - left) + "px";
   }
 
   // Single owner of bubbleTimer: every (re)arm clears the previous one so stale timers can't hide a newer bubble.
