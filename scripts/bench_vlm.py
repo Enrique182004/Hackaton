@@ -263,8 +263,6 @@ def judge(scenario: Scenario, action: AvatarAction) -> list[str]:
 def run_scenarios(
     client: VLMClient, runs: int, profile: str, only: list[str] | None = None, *, raw: bool = False
 ) -> None:
-    # raw skips evaluate's math post-processing (offer-question guard, mathspeak) to grade the model alone.
-    ask = client._evaluate if raw else client.evaluate
     for key, scenario in SCENARIOS[profile].items():
         if only and key not in only:
             continue
@@ -273,16 +271,10 @@ def run_scenarios(
         passed, notation, times = 0, 0, []
         for i in range(runs):
             t = time.perf_counter()
-            a = ask(
-                scenario.query,
-                jpeg,
-                scenario.context,
-                regions,
-                SIZE,
-                mode=scenario.mode,
-                task=scenario.task,
-                recent_turns=scenario.turns,
-            )
+            args = (scenario.query, jpeg, scenario.context, regions, SIZE)
+            kwargs = {"mode": scenario.mode, "task": scenario.task, "recent_turns": scenario.turns}
+            # raw skips evaluate's math post-processing (quiz grading, offer question, mathspeak): the model alone.
+            a, read = client._evaluate(*args, **kwargs) if raw else (client.evaluate(*args, **kwargs), None)
             times.append(time.perf_counter() - t)
             counts[a.animation_state] += 1
             fails = judge(scenario, a)
@@ -291,7 +283,7 @@ def run_scenarios(
             verdict = "ok" if not fails else "FAIL: " + ", ".join(fails)
             print(
                 f"  [{key}] run {i + 1}: {times[-1]:.1f}s {a.animation_state} ({a.target_x},{a.target_y}) "
-                f"{verdict} {a.spoken_text!r}"
+                f"{verdict} {a.spoken_text!r}" + (f" board_answer={read!r}" if read is not None else "")
             )
         sym = f", symbols/digits in {notation}/{runs}" if profile == "math" else ""
         print(

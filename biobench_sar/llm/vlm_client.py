@@ -3,8 +3,10 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from fractions import Fraction
 from typing import Any
 
 import cv2
@@ -84,8 +86,12 @@ Say "two thirds" not 2/3, "x squared" not x^2, "three x plus five equals twelve"
 Use "Conversation so far" to understand short follow-ups like "I did it" or "what now?".
 
 Respond with ONLY a JSON object:
-{"spoken_text": str, "animation_state": "idle|walking|pointing|celebrating|error", "target_x": int, "target_y": int}
+{schema}
 target_x / target_y are projector pixels within the given width and height."""
+MATH_SCHEMA = '{"spoken_text": str, "animation_state": "idle|walking|pointing|celebrating|error", "target_x": int, \
+"target_y": int}'
+# Reading the answer into its own key first makes the model look at the board, and lets code check the value.
+QUIZ_SCHEMA = MATH_SCHEMA.replace('{"spoken_text"', '{"board_answer": str, "spoken_text"')
 
 MATH_HELP = """MODE: step-by-step help.
 - Read the equation on the board and the student's latest step.
@@ -121,20 +127,21 @@ Board: 3/4 - 1/2. Query: "Another one like this."
 
 MATH_QUIZ = """MODE: quiz. The message gives the quiz stage and the problem.
 - Stage dictate: say the problem number and read the problem in words, then ask the student to write the answer \
-on the board. Do not solve it. "idle", target = screen center.
-- Stage check: read the student's answer on the board and compare its value with the expected answer.
-  - Same value: "celebrating", target = center of the answer's ink region; praise briefly. If a next problem is \
-given, also read it in words in the same spoken_text.
-  - Different value or nothing written: "error", target = center of the answer's ink region; give ONE short hint. \
-NEVER say the correct answer and do not read the next problem.
+on the board. Do not solve it. board_answer "", "idle", target = screen center.
+- Stage check: FIRST copy the student's answer exactly as written on the board (usually the last line) into \
+board_answer, or "" if no answer is written. Then decide if it is correct.
+  - Correct: "celebrating"; praise briefly. If a next problem is given, also read it in words.
+  - Wrong or nothing written: "error"; say "Not quite" and give ONE short hint. NEVER say the correct answer \
+and do not read the next problem.
+  target = center of the answer's ink region.
 
 Examples (JSON only, 1920x1080 screen):
 Quiz stage: dictate. Problem 1 of 5: x + 4 = 10
-{"spoken_text": "Problem one of five. x plus four equals ten. Write your answer on the board.", "animation_state": "idle", "target_x": 960, "target_y": 540}
-Quiz stage: check. Problem 1 of 5: x + 4 = 10. Expected answer: x = 6. Next problem: 2x = 14. Board (ink center 800,600): x = 9
-{"spoken_text": "Not quite, nine is not right. What can you subtract from both sides to get x alone?", "animation_state": "error", "target_x": 800, "target_y": 600}
-Quiz stage: check. Problem 1 of 5: x + 4 = 10. Expected answer: x = 6. Next problem: 2x = 14. Board (ink center 800,600): x = 6
-{"spoken_text": "Correct, great job! Problem two. Two x equals fourteen.", "animation_state": "celebrating", "target_x": 800, "target_y": 600}"""
+{"board_answer": "", "spoken_text": "Problem one of five. x plus four equals ten. Write your answer on the board.", "animation_state": "idle", "target_x": 960, "target_y": 540}
+Quiz stage: check. Problem 1 of 5: x + 4 = 10. Next problem: 2x = 14. Board: x + 4 = 10, then x = 9
+{"board_answer": "x = 9", "spoken_text": "Not quite. What can you subtract from both sides to get x alone?", "animation_state": "error", "target_x": 800, "target_y": 600}
+Quiz stage: check. Problem 1 of 5: x + 4 = 10. Next problem: 2x = 14. Board: x + 4 = 10, then x = 6
+{"board_answer": "x = 6", "spoken_text": "Correct, great job! Problem two. Two x equals fourteen.", "animation_state": "celebrating", "target_x": 800, "target_y": 600}"""
 
 MATH_LEARN = f"""TASK: the student wants to learn a topic. The board may be empty. The message gives the topic \
 and the stage. Use plain words for a middle or high school student.
@@ -150,15 +157,21 @@ Learn stage: offer. Topic: equations. Query: "Teach me equations."
 {{"spoken_text": "An equation is like a balance: both sides are equal. We solve it by doing the same thing to both \
 sides until the letter is alone. {OFFER_QUESTION}", "animation_state": "idle", "target_x": 960, "target_y": 540}}
 Learn stage: example. Topic: adding fractions. Query: "Make one up."
-{{"spoken_text": "Let's start easy. One fourth plus two fourths. Write it on the board and try adding the top \
-numbers.", "animation_state": "idle", "target_x": 960, "target_y": 540}}
+{{"spoken_text": "Let's start easy. One fourth plus two fourths. Write it on the board and try the first step.", \
+"animation_state": "idle", "target_x": 960, "target_y": 540}}
 Learn stage: own. Topic: fractions. Query: "I have one."
 {{"spoken_text": "Great! Write your exercise on the board, then ask me for help.", "animation_state": "idle", \
 "target_x": 960, "target_y": 540}}"""
 
 MATH_PROMPTS = {
-    kind: f"{MATH_BASE}\n\n{rules}"
+    kind: MATH_BASE.replace("{schema}", QUIZ_SCHEMA if kind == "quiz" else MATH_SCHEMA) + "\n\n" + rules
     for kind, rules in (("help", MATH_HELP), ("practice", MATH_PRACTICE), ("quiz", MATH_QUIZ), ("learn", MATH_LEARN))
+}
+# Repeated in the message: a 3B model follows the user turn more closely than the system prompt.
+MODE_REMINDERS = {
+    "help": "Explain only the next step. Never say the final answer or the value of the variable.",
+    "practice": "Make ONE new problem like the one on the board (same type and difficulty, different numbers) and "
+    "dictate it in words. Do not solve or explain the board's problem.",
 }
 
 MODE_LABELS = {
@@ -195,13 +208,12 @@ def system_prompt(profile: str, mode: str) -> str:
     return MATH_PROMPTS[kind if kind in PROMPT_KINDS else "help"]
 
 
-def _ink_text(ink_regions: list[InkRegion]) -> str:
+def _ink_text(ink_regions: list[InkRegion], *, math: bool = False) -> str:
     if not ink_regions:
         return "Ink regions detected on the whiteboard: none."
-    lines = [
-        f"{i}. box x={r['x']} y={r['y']} w={r['w']} h={r['h']}, center=({r['cx']}, {r['cy']})"
-        for i, r in enumerate(ink_regions, 1)
-    ]
+    # In math, "x=300" reads as the student's answer: the model copied box coordinates as "x = 300".
+    box = "left={x} top={y} width={w} height={h}" if math else "box x={x} y={y} w={w} h={h}"
+    lines = [f"{i}. {box.format(**r)}, center=({r['cx']}, {r['cy']})" for i, r in enumerate(ink_regions, 1)]
     return "Ink regions detected on the whiteboard:\n" + "\n".join(lines)
 
 
@@ -224,6 +236,25 @@ def _clean(value: Any) -> str | None:
     return text or None
 
 
+_MIXED_RE = re.compile(r"(-?)(\d+)\s+(\d+)\s*/\s*(\d+)")
+
+
+def answer_value(text: Any) -> Fraction | None:
+    """The number in an answer like "x = 5", "-4", "2/3", "1 1/2" or "0.5"; None unless it is one plain number."""
+    sides = str(text or "").strip().lower().replace("\u2212", "-").rstrip(".").split("=")
+    if len(sides) > 2 or (len(sides) == 2 and not re.fullmatch(r"\s*[a-z]?\s*", sides[0])):
+        return None
+    value = sides[-1].strip()
+    mixed = _MIXED_RE.fullmatch(value)
+    try:
+        if mixed:
+            sign, whole, num, den = mixed.groups()
+            return (-1 if sign else 1) * (int(whole) + Fraction(int(num), int(den)))
+        return Fraction(value.replace(" ", "")) if value else None
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
 def quiz_task_text(task: Mapping[str, Any] | None) -> str:
     t = task or {}
     stage = "check" if t.get("stage") == "check" else "dictate"
@@ -239,9 +270,11 @@ def quiz_task_text(task: Mapping[str, Any] | None) -> str:
             "next problem a little harder). Read it out in words. Do not solve it."
         )
     lines = [head + (problem or "the problem you made up earlier (see the conversation and the board).")]
-    if answer:
+    # A numeric answer is checked in code (check_quiz_answer) and left out here: shown it, a small model copies it
+    # into board_answer instead of reading the board, and may say it aloud.
+    if answer and answer_value(answer) is None:
         lines.append(f"Expected answer: {answer}. The student's answer is correct ONLY if its value is the same.")
-    else:
+    elif not answer:
         lines.append("Expected answer: not given, solve the problem yourself.")
     if upcoming:
         lines.append(f"Next problem: {upcoming}\nOnly if the answer is correct, also read the next problem in words.")
@@ -249,7 +282,10 @@ def quiz_task_text(task: Mapping[str, Any] | None) -> str:
         lines.append("This is the last problem: if the answer is correct, congratulate the student on finishing.")
     elif not problem:
         lines.append(f"If the answer is correct, also make up problem {number + 1}, a little harder, and read it out.")
-    lines.append('If the answer is wrong: "error", one hint, never the answer.')
+    lines.append(
+        "First copy the student's answer from the board into board_answer. "
+        'If the answer is wrong: "error", one hint, never the answer.'
+    )
     return "\n".join(lines)
 
 
@@ -305,7 +341,7 @@ def build_prompt(
         parts = [f"User query: {query}", size, _ink_text(ink_regions), _context_text(context)]
         return "\n\n".join([*([history] if history else []), *parts, "Answer with the JSON object only."])
     mode = resolve_mode(mode, task)
-    parts = [f"Mode: {MODE_LABELS[mode]}."]
+    parts = [f"Mode: {MODE_LABELS[mode]}." + (f" {MODE_REMINDERS[mode]}" if mode in MODE_REMINDERS else "")]
     if mode == "quiz":
         parts.append(quiz_task_text(task))
     elif mode == "learn":
@@ -315,21 +351,63 @@ def build_prompt(
         *([history] if history else []),
         f"Student said: {query}",
         f"{size} Screen center: ({width // 2}, {height // 2}).",
-        _ink_text(ink_regions),
+        _ink_text(ink_regions, math=True),
         _context_text(context),
         "Answer with the JSON object only. Write all math in words.",
     ]
     return "\n\n".join(parts)
 
 
-def apply_task_rules(action: AvatarAction, task: Mapping[str, Any] | None) -> AvatarAction:
-    """A 3B model sometimes drops the offer question or picks a drawing state; learn turns always need both right."""
-    if _task_kind(task) != "learn" or action.animation_state == "error":
-        return action  # "error" here is a failed call, whose message must stay as it is
-    spoken = action.spoken_text
-    if learn_stage(task) == "offer" and "make one up" not in spoken.lower():
-        spoken = OFFER_QUESTION if spoken.strip() in ("", "...") else f"{spoken.rstrip()} {OFFER_QUESTION}"
-    return replace(action, spoken_text=spoken, animation_state="idle")
+_BOARD_ANSWER_RE = re.compile(r'"board_answer"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def board_answer(text: str | None) -> str | None:
+    match = _BOARD_ANSWER_RE.search(text or "")
+    if not match:
+        return None
+    try:
+        return _clean(json.loads(f'"{match.group(1)}"'))
+    except ValueError:
+        return None
+
+
+def check_quiz_answer(
+    action: AvatarAction, task: Mapping[str, Any] | None, answer_on_board: str | None
+) -> AvatarAction:
+    """Grade a numeric quiz answer in code: a 3B model reads "x = 7" fine but often calls it correct anyway."""
+    t = task or {}
+    expected, given = answer_value(t.get("answer")), answer_value(answer_on_board)
+    if expected is None or given is None:
+        return action  # nothing checkable: keep the model's own verdict
+    state = "celebrating" if given == expected else "error"
+    if action.animation_state == state:
+        return action
+    if state == "error":
+        spoken = "Not quite. Look at your steps again and try once more."
+    else:
+        number, total, upcoming = _as_int(t.get("number"), 1), _as_int(t.get("total"), 0), _clean(t.get("next_problem"))
+        spoken = "Correct, great job!"
+        if upcoming:
+            spoken += f" Problem {number + 1}. {upcoming}"
+        elif total and number >= total:
+            spoken += " That was the last problem. You finished the quiz!"
+    return replace(action, spoken_text=spoken, animation_state=state)
+
+
+def apply_task_rules(
+    action: AvatarAction, mode: str, task: Mapping[str, Any] | None, answer_on_board: str | None = None
+) -> AvatarAction:
+    """Make what the task fixes deterministic where a 3B model wavers: quiz grading, idle states, the offer question."""
+    if action.animation_state == "error" and answer_on_board is None:
+        return action  # a failed call (timeout, bad JSON): its message must stay as it is
+    kind = resolve_mode(mode, task)
+    if kind == "quiz" and (task or {}).get("stage") == "check":
+        return check_quiz_answer(action, task, answer_on_board)
+    if kind == "learn" and learn_stage(task) == "offer" and "make one up" not in action.spoken_text.lower():
+        spoken = action.spoken_text.strip()
+        action = replace(action, spoken_text=OFFER_QUESTION if spoken in ("", "...") else f"{spoken} {OFFER_QUESTION}")
+    # Dictating or offering is not about one drawing; at temperature 0.6 the model still picks "pointing"/"walking".
+    return replace(action, animation_state="idle") if kind in ("practice", "quiz", "learn") else action
 
 
 def _math_to_speech() -> Callable[[str], str] | None:
@@ -423,10 +501,12 @@ class VLMClient:
         task: Mapping[str, Any] | None = None,
         recent_turns: Sequence[Mapping[str, Any]] | None = None,
     ) -> AvatarAction:
-        action = self._evaluate(query, image_jpeg, context, ink_regions, projector_size, mode, task, recent_turns)
+        action, answer_on_board = self._evaluate(
+            query, image_jpeg, context, ink_regions, projector_size, mode, task, recent_turns
+        )
         if self.profile != "math":
             return action
-        return speakable(apply_task_rules(action, task))
+        return speakable(apply_task_rules(action, mode, task, answer_on_board))
 
     def _evaluate(
         self,
@@ -438,11 +518,11 @@ class VLMClient:
         mode: str = "help",
         task: Mapping[str, Any] | None = None,
         recent_turns: Sequence[Mapping[str, Any]] | None = None,
-    ) -> AvatarAction:
-        """The raw model answer, before the math post-processing in evaluate."""
+    ) -> tuple[AvatarAction, str | None]:
+        """The raw model answer and the board_answer it read, before evaluate's math post-processing."""
         try:
             if self.backend == "mock":
-                return self._mock(query, context, ink_regions, projector_size)
+                return self._mock(query, context, ink_regions, projector_size), None
             mode = resolve_mode(mode, task)
             prompt = build_prompt(
                 query,
@@ -462,20 +542,20 @@ class VLMClient:
             elif self.backend == "openai":
                 text = self._openai(prompt, image_jpeg, system, temperature)
             else:
-                return error_action(f"Unknown VLM backend '{self.backend}'.", projector_size)
-            return parse_vlm_response(text, projector_size)
+                return error_action(f"Unknown VLM backend '{self.backend}'.", projector_size), None
+            return parse_vlm_response(text, projector_size), board_answer(text)
         except requests.Timeout:
             logger.error("VLM request timed out (backend=%s)", self.backend)
-            return error_action("The AI model took too long to answer. Please try again.", projector_size)
+            return error_action("The AI model took too long to answer. Please try again.", projector_size), None
         except requests.RequestException as exc:
             logger.error("VLM request failed: %s", exc)
-            return error_action("I couldn't reach the AI model. Please check that it is running.", projector_size)
+            return error_action("I couldn't reach the AI model. Please check that it is running.", projector_size), None
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
             logger.error("Bad VLM payload: %s", exc)
-            return error_action("The AI model sent an unexpected reply. Please try again.", projector_size)
+            return error_action("The AI model sent an unexpected reply. Please try again.", projector_size), None
         except Exception as exc:  # evaluate must never raise
             logger.exception("Unexpected VLM failure: %s", exc)
-            return error_action("Something went wrong while thinking. Please try again.", projector_size)
+            return error_action("Something went wrong while thinking. Please try again.", projector_size), None
 
     def _ollama(
         self, prompt: str, image_jpeg: bytes | None, system: str = SYSTEM_PROMPT, temperature: float = TEMPERATURE

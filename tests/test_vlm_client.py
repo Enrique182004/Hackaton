@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import types
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -255,7 +256,7 @@ def _ask(c: VLMClient, reply: object, query: str = "help me", **kwargs: Any) -> 
 
 
 def _few_shot(prompt: str) -> list[dict[str, Any]]:
-    return [json.loads(line) for line in prompt.splitlines() if line.startswith('{"spoken_text": "')]
+    return [json.loads(line) for line in prompt.splitlines() if line.startswith('{"') and ": str" not in line]
 
 
 def test_biology_system_prompt_ignores_mode() -> None:
@@ -281,6 +282,7 @@ def test_math_prompts_have_phonetic_rules_schema_and_stay_compact(kind: str) -> 
     for key in ("spoken_text", "animation_state", "target_x", "target_y"):
         assert key in prompt
     assert "Conversation so far" in prompt
+    assert ("board_answer" in prompt) == (kind == "quiz")
     assert len(prompt) < 3000  # every token of system prompt is paid on each question
 
 
@@ -296,6 +298,7 @@ def test_math_few_shot_examples_are_json_in_words(kind: str, states: set[str]) -
         assert e["animation_state"] in ANIMATION_STATES
         assert isinstance(e["target_x"], int) and isinstance(e["target_y"], int)
         assert not NOTATION.search(e["spoken_text"]), e["spoken_text"]
+        assert set(e) - {"board_answer"} == {"spoken_text", "animation_state", "target_x", "target_y"}
 
 
 def test_math_mode_rules() -> None:
@@ -315,13 +318,15 @@ def test_build_prompt_math_help() -> None:
     assert prompt.startswith("Mode: help (step-by-step).")
     assert "Student said: I'm stuck" in prompt and "Screen center: (960, 540)" in prompt
     assert "center=(600, 450)" in prompt and "protocol.pdf" in prompt and "x" * 900 not in prompt
-    assert "Write all math in words" in prompt
+    assert "Write all math in words" in prompt and "Never say the final answer" in prompt
+    # "x=500" would read as the student's answer; math boxes avoid the letter.
+    assert "1. left=0 top=0 width=10 height=10, center=(5, 5)" in prompt and "x=500" not in prompt
     assert "Conversation so far" not in prompt and "Quiz stage" not in prompt
 
 
 def test_build_prompt_math_empty_board() -> None:
     prompt = build_prompt("What is a fraction?", [], [], SIZE, profile="math", mode="practice")
-    assert "Mode: practice (similar problem)." in prompt
+    assert "Mode: practice (similar problem). Make ONE new problem like the one on the board" in prompt
     assert "Ink regions detected on the whiteboard: none." in prompt and "Reference context: none." in prompt
 
 
@@ -352,9 +357,12 @@ def test_quiz_check_prompt() -> None:
         "next_problem": "2x - 4 = 10",
     }
     text = vc.quiz_task_text(task)
-    assert "Quiz stage: check. Problem 1 of 5: 3x + 5 = 20" in text
-    assert "Expected answer: x = 5" in text and "Next problem: 2x - 4 = 10" in text
-    assert "never the answer" in text
+    assert "Quiz stage: check. Problem 1 of 5: 3x + 5 = 20" in text and "Next problem: 2x - 4 = 10" in text
+    assert "board_answer" in text and "never the answer" in text
+    # A numeric answer is graded in code; shown to the model, it gets copied into board_answer.
+    assert "x = 5" not in text and "Expected answer" not in text
+    symbolic = vc.quiz_task_text({**task, "answer": "x = 2 or x = -2"})
+    assert "Expected answer: x = 2 or x = -2" in symbolic
     last = vc.quiz_task_text({**task, "number": 5, "next_problem": None})
     assert "last problem" in last and "Next problem" not in last
     invented = vc.quiz_task_text({**task, "problem": None, "answer": None, "next_problem": None, "number": 3})
@@ -438,7 +446,7 @@ def test_math_evaluate_sends_mode_prompt_and_turns() -> None:
     assert "Mode: practice" in user and "Student said: another one" in user and "Student: I want to learn" in user
     assert payload["options"] == {"temperature": 0.6, "num_predict": 200} and payload["keep_alive"] == "30m"
     assert payload["format"] == "json" and payload["messages"][1]["images"] == [B64]
-    assert action == AvatarAction("Subtract five from both sides.", "pointing", 7, 9)
+    assert action == AvatarAction("Subtract five from both sides.", "idle", 7, 9)  # dictating, not pointing
 
 
 @pytest.mark.usefixtures("no_mathspeak")
@@ -446,7 +454,7 @@ def test_math_evaluate_task_picks_the_prompt() -> None:
     quiz = {"kind": "quiz", "stage": "check", "number": 1, "total": 3, "problem": "x + 1 = 2", "answer": "x = 1"}
     _, payload = _ask(_math_client(), MATH_GOOD, mode="help", task=quiz)
     assert payload["messages"][0]["content"] == system_prompt("math", "quiz")
-    assert "Expected answer: x = 1" in payload["messages"][1]["content"]
+    assert "Quiz stage: check. Problem 1 of 3: x + 1 = 2" in payload["messages"][1]["content"]
     assert payload["options"]["temperature"] == 0.2
     _, payload = _ask(_math_client(), MATH_GOOD, mode="quiz", task=LEARN_OFFER)
     assert payload["messages"][0]["content"] == system_prompt("math", "learn")
@@ -519,20 +527,126 @@ def test_learn_offer_adds_missing_question_and_idles() -> None:
     assert action.animation_state == "idle"
 
 
-def test_apply_task_rules() -> None:
+def test_apply_task_rules_learn() -> None:
     asked = AvatarAction(f"Fractions are parts. {OFFER_QUESTION}", "idle", 1, 2)
-    assert vc.apply_task_rules(asked, LEARN_OFFER) == asked
+    assert vc.apply_task_rules(asked, "help", LEARN_OFFER) == asked
     lower = AvatarAction("Want me to make one up for you?", "celebrating", 1, 2)
-    assert vc.apply_task_rules(lower, LEARN_OFFER) == AvatarAction(lower.spoken_text, "idle", 1, 2)
-    assert vc.apply_task_rules(AvatarAction("...", "idle", 1, 2), LEARN_OFFER).spoken_text == OFFER_QUESTION
+    assert vc.apply_task_rules(lower, "quiz", LEARN_OFFER) == AvatarAction(lower.spoken_text, "idle", 1, 2)
+    assert vc.apply_task_rules(AvatarAction("...", "idle", 1, 2), "help", LEARN_OFFER).spoken_text == OFFER_QUESTION
     example = AvatarAction("Try one half plus one fourth.", "pointing", 1, 2)
     learn_example = {**LEARN_OFFER, "stage": "example"}
-    assert vc.apply_task_rules(example, learn_example) == AvatarAction(example.spoken_text, "idle", 1, 2)
+    assert vc.apply_task_rules(example, "help", learn_example) == AvatarAction(example.spoken_text, "idle", 1, 2)
     failed = AvatarAction("The AI model took too long to answer.", "error", 1, 2)
-    assert vc.apply_task_rules(failed, LEARN_OFFER) == failed
-    pointing = AvatarAction("Subtract five.", "pointing", 1, 2)
-    for task in (None, {"kind": "practice"}, {"kind": "quiz", "stage": "check"}):
-        assert vc.apply_task_rules(pointing, task) == pointing
+    assert vc.apply_task_rules(failed, "help", LEARN_OFFER) == failed
+
+
+def test_apply_task_rules_states() -> None:
+    pointing = AvatarAction("Try four x plus seven equals nineteen.", "pointing", 1, 2)
+    idle = AvatarAction(pointing.spoken_text, "idle", 1, 2)
+    assert vc.apply_task_rules(pointing, "help", None) == pointing  # help points at the equation
+    assert vc.apply_task_rules(pointing, "practice", None) == idle
+    assert vc.apply_task_rules(pointing, "help", {"kind": "practice"}) == idle
+    assert vc.apply_task_rules(pointing, "quiz", {"kind": "quiz", "stage": "dictate"}) == idle
+    unchecked = {"kind": "quiz", "stage": "check", "answer": None}
+    assert vc.apply_task_rules(pointing, "quiz", unchecked, "x = 4") == pointing
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("x = 5", Fraction(5)),
+        ("5", Fraction(5)),
+        (" y=-4. ", Fraction(-4)),
+        ("x = \u22124", Fraction(-4)),
+        ("x = 2/3", Fraction(2, 3)),
+        ("0.5", Fraction(1, 2)),
+        ("x = 1 1/2", Fraction(3, 2)),
+        ("-2 1/4", Fraction(-9, 4)),
+        ("3 / 4", Fraction(3, 4)),
+        ("3x + 5 = 20", None),
+        ("3x = 15", None),
+        ("x = 2 or x = -2", None),
+        ("x = 5 = 5", None),
+        ("x =", None),
+        ("five", None),
+        ("1/0", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_answer_value(text: str | None, value: Fraction | None) -> None:
+    assert vc.answer_value(text) == value
+
+
+def test_board_answer_extraction() -> None:
+    assert vc.board_answer('{"board_answer": "x = 7", "spoken_text": "Hi"}') == "x = 7"
+    assert vc.board_answer('```json\n{"board_answer" : " x = \\"7\\" ", "a": 1}\n```') == 'x = "7"'
+    assert vc.board_answer('{"board_answer": "", "spoken_text": "Hi"}') is None
+    assert vc.board_answer('{"spoken_text": "Hi"}') is None and vc.board_answer(None) is None
+    assert vc.board_answer('{"board_answer": "bad \\q escape"}') is None
+
+
+QUIZ_CHECK = {
+    "kind": "quiz",
+    "stage": "check",
+    "number": 1,
+    "total": 5,
+    "problem": "3x + 5 = 20",
+    "answer": "x = 5",
+    "next_problem": "2x - 4 = 10",
+}
+PRAISE = AvatarAction("Correct, great job! Problem two. Two x minus four equals ten.", "celebrating", 8, 9)
+HINT = AvatarAction("Not quite. What can you subtract from both sides?", "error", 8, 9)
+
+
+def test_quiz_check_keeps_model_text_when_it_agrees() -> None:
+    assert vc.check_quiz_answer(PRAISE, QUIZ_CHECK, "x = 5") == PRAISE
+    assert vc.check_quiz_answer(HINT, QUIZ_CHECK, "7") is HINT
+    assert vc.check_quiz_answer(PRAISE, QUIZ_CHECK, "3x = 15") is PRAISE  # not a plain value: model decides
+    assert vc.check_quiz_answer(PRAISE, {**QUIZ_CHECK, "answer": None}, "x = 7") is PRAISE
+
+
+def test_quiz_check_overrides_wrong_praise() -> None:
+    fixed = vc.check_quiz_answer(PRAISE, QUIZ_CHECK, "x = 7")
+    assert fixed.animation_state == "error" and (fixed.target_x, fixed.target_y) == (8, 9)
+    assert fixed.spoken_text.startswith("Not quite") and "5" not in fixed.spoken_text
+    assert "five" not in fixed.spoken_text.lower() and "2x" not in fixed.spoken_text
+
+
+def test_quiz_check_overrides_wrong_rejection() -> None:
+    fixed = vc.check_quiz_answer(HINT, QUIZ_CHECK, "x=5")
+    assert fixed == AvatarAction("Correct, great job! Problem 2. 2x - 4 = 10", "celebrating", 8, 9)
+    last = vc.check_quiz_answer(HINT, {**QUIZ_CHECK, "number": 5, "next_problem": None}, "5")
+    assert last.spoken_text == "Correct, great job! That was the last problem. You finished the quiz!"
+    fraction = vc.check_quiz_answer(HINT, {**QUIZ_CHECK, "answer": "x = 2/3", "next_problem": None}, "x = 4/6")
+    assert fraction.animation_state == "celebrating" and fraction.spoken_text == "Correct, great job!"
+
+
+@pytest.mark.usefixtures("no_mathspeak")
+def test_evaluate_grades_the_board_answer_in_code() -> None:
+    wrong = {"board_answer": "x = 7", **PRAISE.to_dict()}
+    action, _ = _ask(_math_client(), wrong, mode="quiz", task=QUIZ_CHECK)
+    assert action.animation_state == "error" and action.spoken_text.startswith("Not quite")
+    right = {"board_answer": "x = 5", **HINT.to_dict()}
+    action, _ = _ask(_math_client(), right, mode="quiz", task=QUIZ_CHECK)
+    assert action.animation_state == "celebrating" and "Problem 2. 2x - 4 = 10" in action.spoken_text
+    action, _ = _ask(_math_client(), PRAISE.to_dict(), mode="quiz", task=QUIZ_CHECK)
+    assert action == PRAISE  # no board_answer: the model's verdict stands
+
+
+def test_evaluate_quiz_override_is_spoken_in_words(fake_mathspeak: list[str]) -> None:
+    right = {"board_answer": "x = 5", **HINT.to_dict()}
+    _ask(_math_client(), right, mode="quiz", task=QUIZ_CHECK)
+    assert fake_mathspeak == ["Correct, great job! Problem 2. 2x - 4 = 10"]
+
+
+def test_raw_evaluate_returns_board_answer() -> None:
+    c = _math_client()
+    reply = {"board_answer": "x = 7", **PRAISE.to_dict()}
+    with patch.object(c.session, "post", return_value=_ollama_resp(json.dumps(reply))):
+        action, read = c._evaluate("q", None, [], [], SIZE, task=QUIZ_CHECK)
+    assert action == PRAISE and read == "x = 7"
+    assert _math_client("mock")._evaluate("q", None, [], [], SIZE)[1] is None
 
 
 @pytest.mark.usefixtures("no_mathspeak")
