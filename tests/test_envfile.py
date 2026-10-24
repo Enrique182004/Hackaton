@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from biobench_sar import envfile
 from biobench_sar.config import Settings
 from biobench_sar.envfile import decode_env_bytes, env_source, load_env_file, parse_env_lines
 
@@ -81,6 +82,7 @@ def unset(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
     keys = ["SAR_PORT", "SAR_CAMERA_INDEX", "SAR_PROFILE"]
     for key in keys:
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(envfile, "_SOURCES", {})
     yield keys
     for key in keys:
         os.environ.pop(key, None)

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
+import errno
 import html
 import json
 import logging
@@ -69,6 +70,7 @@ RUNTIME_MODULES = (
     "pytesseract",
     "PIL",
     "requests",
+    "sympy",
 )
 
 Out = Callable[[str], None]
@@ -133,19 +135,33 @@ def unreadable_settings(build: Callable[[], object]) -> list[str]:
         os.environ.update(saved)
 
 
+def setting_origin(key: str) -> str:
+    """Where a SAR_* value came from, for advice: the exact sar.env that set it, or the environment variables."""
+    from biobench_sar.envfile import env_source
+
+    source = env_source(key)
+    return f"the settings file {source}" if source is not None else "the environment variables (not in a sar.env)"
+
+
 def settings_advice(env_files: Sequence[Path]) -> str:
     from biobench_sar.config import Settings
 
-    where = "sar.env (" + ", ".join(str(p) for p in env_files) + ")" if env_files else "the environment variables"
     bad = unreadable_settings(Settings)
     if not bad:
+        where = "sar.env (" + ", ".join(str(p) for p in env_files) + ")" if env_files else "the environment variables"
         return f"The settings could not be read. Check the SAR_* lines in {where}."
-    values = ", ".join(f"{key}={os.environ.get(key, '')}" for key in bad)
+    origins = {key: setting_origin(key) for key in bad}
+    tail = "Numbers must be plain numbers, for example SAR_VLM_TIMEOUT=90."
     if len(bad) == 1:
-        lead, it = f"This setting has a value the app can't read: {values}.", "it"
-    else:
-        lead, it = f"These settings have values the app can't read: {values}.", "them"
-    return f"{lead} Fix or delete {it} in {where}. Numbers must be plain numbers, for example SAR_VLM_TIMEOUT=90."
+        key = bad[0]
+        lead = f"This setting has a value the app can't read: {key}={os.environ.get(key, '')}."
+        return f"{lead} Fix or delete it in {origins[key]}. {tail}"
+    values = ", ".join(f"{key}={os.environ.get(key, '')}" for key in bad)
+    lead = f"These settings have values the app can't read: {values}."
+    if len(set(origins.values())) == 1:
+        return f"{lead} Fix or delete them in {origins[bad[0]]}. {tail}"
+    each = "; ".join(f"{key} in {origins[key]}" for key in bad)
+    return f"{lead} Fix or delete each where it is set: {each}. {tail}"
 
 
 def damaged_install_advice() -> str:
@@ -294,7 +310,8 @@ def prepare_environment(frozen: bool | None = None) -> list[Path]:
     loaded: list[Path] = []
     for path in env_file_candidates():
         if path.is_file():
-            # Notepad's "Unicode" encoding (UTF-16) is the likely culprit; load_env_file only expects OSError.
+            # A file saved in an ANSI code page (Windows-1252) is the likely culprit: load_env_file reads UTF-8 and
+            # UTF-16 with a BOM, and only expects OSError.
             with startup_step(
                 f"The settings file {path} could not be read. Open it in Notepad or TextEdit and save it as "
                 "plain text (UTF-8), or delete it."
@@ -355,10 +372,16 @@ def check_ollama(
     # failed check must only produce advice, never stop the app.
     except Exception as exc:
         return OllamaStatus(reachable=False, has_model=False, error=f"{type(exc).__name__}: {exc}")
-    models = body.get("models", []) if isinstance(body, dict) else []
-    names = {str(m.get(key, "")) for m in models if isinstance(m, dict) for key in ("name", "model")}
     wanted = {model, model if ":" in model else f"{model}:latest"}
-    return OllamaStatus(reachable=True, has_model=bool(names & wanted))
+    return OllamaStatus(reachable=True, has_model=bool(ollama_model_names(body) & wanted))
+
+
+def ollama_model_names(body: object) -> set[str]:
+    """The model names in an /api/tags answer; empty for any shape Ollama doesn't send ({"models": null}, ...)."""
+    models = body.get("models") if isinstance(body, dict) else None
+    if not isinstance(models, list):
+        return set()
+    return {m[key] for m in models if isinstance(m, dict) for key in ("name", "model") if isinstance(m.get(key), str)}
 
 
 def ollama_advice(status: OllamaStatus, model: str) -> list[str]:
@@ -408,19 +431,39 @@ def lan_address() -> str | None:
     return None
 
 
-def port_free(host: str, port: int) -> bool:
-    """False when something already listens there; raises for a host or port that can never work."""
+def busy_errnos() -> frozenset[int]:
+    """Bind errors that mean "another program has this port", which another SAR_PORT fixes."""
+    if sys.platform == "win32":
+        # WSAEADDRINUSE, and WSAEACCES: a port inside a range Hyper-V or WSL reserved, or bound exclusively.
+        return frozenset({errno.EADDRINUSE, 10048, 10013})
+    return frozenset({errno.EADDRINUSE})
+
+
+def busy_port_error(host: str, port: int) -> OSError | None:
+    """Why host:port is taken (something listens there), or None when it is free.
+
+    Any other bind error is raised: a host or port that can never work, such as an address this computer doesn't
+    have (EADDRNOTAVAIL, often the laptop's old Wi-Fi address after it got a new one), is not a busy port.
+    """
+    reuse = sys.platform != "win32"
     with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM) as sock:
         # On Windows SO_REUSEADDR lets a bind succeed next to a live listener, which would hide a busy port.
-        if sys.platform != "win32":
+        if reuse:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
-        except socket.gaierror:  # SAR_HOST isn't an address (a typo), which "port busy" would misreport
-            raise
-        except OSError:
-            return False
-    return True
+        except OSError as exc:
+            code = getattr(exc, "winerror", None) or exc.errno
+            if isinstance(exc, socket.gaierror) or code not in busy_errnos():
+                raise
+            return exc
+    if reuse:
+        # SO_REUSEADDR lets macOS bind 127.0.0.1:port next to a listener on 0.0.0.0:port (and the other way round),
+        # so knock as well: a free port refuses at once, and so does one the last run left in TIME_WAIT.
+        target = _connect_host(host)
+        with contextlib.suppress(OSError), socket.create_connection((target, port), timeout=0.5):
+            return OSError(errno.EADDRINUSE, f"another program already answers on {target}:{port}")
+    return None
 
 
 def wait_for_port(
@@ -655,7 +698,30 @@ def bundle_checks(services: Any) -> list[Check]:
         Check("imports", imports),
         Check("embeddings", embeddings),
         Check("whisper assets", whisper_assets),
+        Check("grading", grading_check),
     ]
+
+
+def grading_check() -> str:
+    """Quiz answers are graded with sympy, whose parser and solver import parts of sympy as they run."""
+    import importlib
+    import importlib.util
+
+    import sympy
+    from sympy.parsing.sympy_parser import parse_expr
+
+    x = sympy.Symbol("x")
+    roots = sorted(sympy.solve(parse_expr("x**2 - 2*x - 15"), x))
+    if roots != [-3, 5]:
+        raise CheckFailed(f"sympy solved x**2 - 2*x - 15 = 0 as {roots}")
+    detail = f"sympy {sympy.__version__} solves"
+    if importlib.util.find_spec("biobench_sar.grading") is None:
+        return f"{detail}; this build has no biobench_sar.grading"
+    grading = importlib.import_module("biobench_sar.grading")
+    verdicts = (grading.grade("x = 5", "x = 5"), grading.grade("x = 4", "x = 5"))
+    if verdicts != (True, False):
+        raise CheckFailed(f"grade() said {verdicts} for a right and a wrong answer, expected (True, False)")
+    return f"{detail}, grade() marks a right and a wrong answer"
 
 
 def free_port(host: str = "127.0.0.1") -> int:
@@ -783,10 +849,10 @@ def run_app(open_browser: bool = True, out: Out = say, env_files: Sequence[Path]
         "127.0.0.1 (this computer only) or 0.0.0.0 (phones and tablets too), and SAR_PORT to a number "
         "from 1024 to 65535."
     ):
-        free = port_free(settings.host, settings.port)
+        busy = busy_port_error(settings.host, settings.port)
     # app.main() would stop on a busy port too, with a message meant for developers.
-    if not free:
-        raise StartupFailed(busy_port_advice(settings.port))
+    if busy is not None:
+        raise StartupFailed(busy_port_advice(settings.port)) from busy
     if serves_network(settings.host):
         address = lan_address()
         if address:
