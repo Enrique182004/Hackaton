@@ -249,7 +249,7 @@ _FEM_NOUNS = _with_plurals(
 _FEM_SUFFIXES = ("ción", "ciones", "sión", "siones", "dad", "dades", "tad", "tades", "tud", "tudes", "umbre", "umbres")
 # Nouns that are also verbs: "La figura 1 muestra que...", "1 suma 4" never agree.
 _VERB_NOUNS = _with_plurals("muestra forma suma resta duda potencia parte cuadra")
-_VERB_OBJECT = _word_set("que el la los las lo un una unos unas cómo como al")
+_VERB_OBJECT = _word_set("que el la los las lo un una unos unas cómo como al parte partes")
 # "solo" is also the adverb ("vale 1 solo cuando..."): it agrees only in front of a noun ("1 solo paso").
 _SOLO = frozenset(["solo", "solos"])
 # A plain noun after an unspaced "3–5" makes it a range ("3–5 muestras", "24–48 horas"), not a subtraction.
@@ -284,7 +284,7 @@ _MATH_HINT = re.compile(
     r"[\d" + _SYMBOLS + r"]|-(?=\d)|\|[^|\n]+\||(?<![^\W\d_])[a-zA-Z][ \t]*-[ \t]*[a-zA-Z(](?![^\W\d_])"
 )
 _MAYBE_MATH = re.compile(
-    r"[\d" + _SYMBOLS + r"(\-|–—‒]|(?<![^\W\d_])(?:[yY]|sen|cos|tg|cot|sec|csc|log|ln)(?![^\W\d_])"
+    r"[\d" + _SYMBOLS + r"(\-|–—‒$]|(?<![^\W\d_])(?:[yY]|sen|cos|tg|cot|sec|csc|log|ln)(?![^\W\d_])"
 )
 _FN_NAMES = "sen|sin|cos|tan|tg|cot|sec|csc|log|ln"
 _NORMALIZE = (
@@ -318,8 +318,13 @@ _NORMALIZE = (
     (re.compile(r"(?<=\d)[xX](?=10[ \t]*\^)"), "×"),
 )
 # SEP / NOM-008 group thousands with a space, a no-break space or a narrow no-break space: "25 000" is one number.
-_SPACE_THOUSANDS = re.compile("(?<![\\d.,^/])(\\d{1,3})((?:[   ]\\d{3})+)(?!\\d|[.,]\\d{3})")
+# A number right before or after the run makes it a list instead ("5 10 100", "10 100 1000").
+_GROUP_SPACE = " " + chr(0x00A0) + chr(0x202F)
+_SPACE_THOUSANDS = re.compile(
+    rf"(?<![\d.,^/])(?<!\d[{_GROUP_SPACE}])(\d{{1,3}})((?:[{_GROUP_SPACE}]\d{{3}})+)(?!\d|[.,]\d{{3}}|[{_GROUP_SPACE}]\d)"
+)
 _NUMBER_RANGE = re.compile(rf"(?<![\w.,^/])({_NUM})([-–—‒])({_NUM})(?![^\W\d_µμ]|\d|[.,]\d|[\^/(])")
+_BOUNDARY = re.compile(r"[!?;\n]|\.(?!\d)")
 _SENTENCE_SPLIT = re.compile(r"((?:[!?;\n]|\.(?!\d))+)")
 _SENTENCE_OPS = re.compile(r"[=<>≤≥≠≈+*/×·÷±^]|[-–—‒](?=[ \t]*(?:\d|\(|[a-zA-Z](?![^\W\d_])))")
 _RANGE_TAIL = re.compile(rf"[ \t]*(?:[°%]|(?P<word>[^\W\d_]+)(?:[ \t]+(?P<month>{_MONTHS})(?![^\W\d_]))?)")
@@ -365,7 +370,7 @@ _TIME = re.compile(
 # Without "a las" / "h", "10:30" is still a time unless a ratio word or an equation is around.
 _RATIO_CUE = re.compile(
     r"(?<![^\W\d_])(?:raz[óo]n|razones|escalas?|proporci[óo]n|proporciones|proporcional|relaci[óo]n|diluci[óo]n"
-    r"|diluye|diluir|diluido|diluida|mezcla)(?![^\W\d_])|=|::",
+    r"|diluye|diluir|diluido|diluida|mezcla|simplifica|simplificar|equivalentes?)(?![^\W\d_])|=|::",
     re.I,
 )
 _TIME_CUE = re.compile(
@@ -462,7 +467,19 @@ _OPERATOR = re.compile("->|=>|[-+=<>≤≥≠≈±×÷/*·→⇒]")
 _NUMBER = re.compile(r"(\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.(\d+))?")
 _NEXT_WORD = re.compile(r"[ \t]+([^\W\d_]{2,})")
 # "1 a 2 tazas" / "1 o 2 tazas": the noun after the range sets the gender of both numbers.
-_RANGE_NEXT = re.compile(r"[ \t]+(?:a|al|y|o)[ \t]+\d+(?:\.\d+)?[ \t]+([^\W\d_]{2,})")
+_RANGE_NEXT = re.compile(
+    r"[ \t]+(?:a|al|y|o)[ \t]+(?:\d+(?:\.\d+)?[ \t]+([^\W\d_]{2,})"
+    + "|"
+    + OS
+    + SOFT
+    + "[^"
+    + OS
+    + OE
+    + "]*?([^\\W\\d_]{2,})"
+    + SOFT
+    + OE
+    + ")"
+)
 # "Al 21 suma 4": a "noun" followed by an operand is a verb. The vowels are Spanish words ("suma a", "resta y").
 _NOUN_IS_VERB = re.compile(r"[ \t]+(?:-?[ \t]*\d|[b-df-hj-np-tv-xzB-DF-HJ-NP-TV-XZ](?![^\W\d_]))")
 _LETTER_RUN = re.compile(r"(?<![^\W\d_])[a-z]{2,3}(?![^\W\d_])")
@@ -562,7 +579,6 @@ def _speak(text: str, currency: tuple[str, str]) -> str:
     s = _ORDINAL_SUFFIX.sub(_ordinal, s)
     s = _ORDINAL_DEGREE.sub(_ordinal_degree, s)
     s = _UNIT.sub(_unit, s)
-    s = s.replace("∉", SOFT + "no pertenece a" + SOFT).replace("∈", SOFT + "pertenece a" + SOFT)
     s = _INTERVAL.sub(_interval, s)
     s = _BARE_INTERVAL.sub(_bare_interval, s)
     s = _SET.sub(_set, s)
@@ -575,6 +591,7 @@ def _speak(text: str, currency: tuple[str, str]) -> str:
     s = _BARE_FUNCTION.sub(lambda m: _FUNCTIONS[m[1].lower()] + " de ", s)
     s = _LETTER_RUN.sub(_split_letters, s)
     s = _VARIABLE_Y.sub(_variable_y, s)
+    s = s.replace("∉", SOFT + "no pertenece a" + SOFT).replace("∈", SOFT + "pertenece a" + SOFT)
     s = _MIXED.sub(_mixed, s)
     s = _FRACTION.sub(_fraction, s)
     s = _EXPONENT.sub(_exponent, s)
@@ -649,8 +666,8 @@ def _chunk(words: str) -> str:
     return OS + SOFT + words + SOFT + OE
 
 
-def _count(raw: str, singular: str, plural: str) -> str:
-    words = _spell(raw, apocope=True)
+def _count(raw: str, singular: str, plural: str, *, fem: bool = False) -> str:
+    words = _spell(raw, fem=fem, apocope=not fem)
     if words.endswith(("millón", "millones")):
         words += " de"
     return f"{words} {singular if raw == '1' else plural}"
@@ -673,7 +690,7 @@ def _space_thousands(m: re.Match[str]) -> str:
     head, groups = m[1], m[2]
     if " " in groups and len(head) == 3 and not groups.endswith("000"):
         return m[0]  # "100 200 300" written with plain spaces is a list
-    return head + re.sub("[   ]", "", groups)
+    return head + re.sub(f"[{_GROUP_SPACE}]", "", groups)
 
 
 def _number_ranges(text: str) -> str:
@@ -717,13 +734,15 @@ def _in_expression(s: str, i: int, j: int) -> bool:
         k -= 1
         while k >= 0 and s[k] in " \t":
             k -= 1
-    if k >= 0 and s[k] in _OPS + "–—‒":
-        return True
+    if k >= 0 and s[k] in _OPS + _PREFIX + "–—‒|":
+        return True  # "x = 8-3", "√(8-3)"
     k = j
     while k < len(s) and s[k] in " \t)]":
         k += 1
-    if k < len(s) and s[k] in _OPS + "–—‒(":
+    if k < len(s) and s[k] in _OPS + "–—‒(|":
         return True
+    if k < len(s) and _lone_letter_after(s, k) and s[k] not in "aeouyAEOUY" and s[k] not in _RANGE_UNITS:
+        return True  # "3-5 x" is algebra
     return bool(_EQUALS_WORD.match(s, j))
 
 
@@ -792,7 +811,7 @@ def _dash(m: re.Match[str]) -> str:
     if m[1] == m[2] and left_operand and right_operand:
         if left_letter and right_letter and left.lower() in "aeouy" and right.lower() in "aeouy":
             return m[0]  # "y — o" are words
-        if right_letter and (dash == "—" or right.lower() in "aeouy") and not _variable_ends(s, j + 1):
+        if right_letter and (dash == "—" or right.lower() in "aeouy") and not _variable_ends(s, j + 1, dash):
             return m[0]  # "7 — y lo hiciste", "Paso 2 — a la derecha": an aside, not a minus
         return m[1] + "-" + m[2]
     if not m[2] and (right.isdigit() or (right != "" and right in "(√") or right_letter):
@@ -806,10 +825,11 @@ def _dash(m: re.Match[str]) -> str:
     return m[0]
 
 
-def _variable_ends(s: str, k: int) -> bool:
-    # A lone letter after a dash is a variable only where an expression can go on or stop ("x = 5 — y").
+def _variable_ends(s: str, k: int, dash: str) -> bool:
+    # A lone letter after a dash is a variable only where an expression can go on or stop ("x = 5 — y",
+    # "(x – a)"); an em dash before "b) siguiente" is still prose.
     nxt = _next_char(s, k)
-    return not nxt or nxt in _OPS + ")].;:?!"
+    return not nxt or nxt in _OPS + ".;:?!" + ("" if dash == "—" else ")]")
 
 
 def _money(m: re.Match[str], currency: tuple[str, str]) -> str:
@@ -837,8 +857,8 @@ def _money(m: re.Match[str], currency: tuple[str, str]) -> str:
 
 def _rate(m: re.Match[str]) -> str:
     left, den, power = m["left"], m["den"], m["pow"]
-    if left != OE and (len(left) < 4 or left in _UNIT_WORDS):
-        return m[0]  # "km/h" and "x/a" belong to the unit and fraction passes
+    if left != OE and (len(left) < 4 or not left.endswith("s") or left[:4].lower() == den[:4].lower()):
+        return m[0]  # a rate has a plural or an amount on top: "semana/mes" and "alumnas/alumno" are alternatives
     word = _PER_UNIT.get(den) or (den.lower() if den.lower() in _PER_WORDS else None)
     if word is None:
         return m[0]  # "sí/no", "verdadero/falso" are alternatives
@@ -853,12 +873,11 @@ def _rate(m: re.Match[str]) -> str:
 
 
 def _sentence_span(s: str, i: int, j: int, limit: int = 200) -> tuple[int, int]:
-    a, b = i, j
-    while a > max(0, i - limit) and not (s[a - 1] in "!?;\n" or (s[a - 1] == "." and not s[a : a + 1].isdigit())):
-        a -= 1
-    while b < min(len(s), j + limit) and not (s[b] in "!?;\n" or (s[b] == "." and not s[b + 1 : b + 2].isdigit())):
-        b += 1
-    return a, b
+    start, end = max(0, i - limit), min(len(s), j + limit)
+    for boundary in _BOUNDARY.finditer(s, start, i):
+        start = boundary.end()
+    after = _BOUNDARY.search(s, j, end)
+    return start, after.start() if after else end
 
 
 def _time(m: re.Match[str]) -> str:
@@ -940,7 +959,7 @@ def _unit(m: re.Match[str]) -> str:
     if not num and not per:
         return m[0]
     singular, plural = _UNIT_WORDS[unit]
-    words = _count(num, singular, plural) if num else plural
+    words = _count(num, singular, plural, fem=unit == "h") if num else plural
     if power:
         adjective = "cuadrado" if power == "2" else "cúbico"
         words += " " + (adjective if num == "1" else adjective + "s")
@@ -1001,7 +1020,7 @@ def _variable_y(m: re.Match[str]) -> str:
         # A capital "Y" opens sentences; it is the variable only right before an operator ("Y = 2x").
         return YV if nxt and nxt in _OPS.replace("-", "") else y
     # "y - 3 = 0" is the variable, but "son 3 y -2" is the conjunction before a negative number.
-    if nxt and (nxt in _OPS.replace("-", "") + _CLOSERS or (nxt == "-" and not prev)):
+    if nxt and (nxt in _OPS.replace("-", "") + _CLOSERS + "∈∉" or (nxt == "-" and not prev)):
         return YV
     # A conjunction cannot end a clause: "¿cuánto vale y?", "los ejes x, y" (but "Bueno, y." is still one).
     clause_end = (not nxt or nxt in "?.!;:") and bool(prev) and prev not in "¿¡"
@@ -1245,11 +1264,15 @@ def _noun_gender(word: str) -> str | None:
     return "m" if lower in _MASC_NOUNS else None
 
 
-def _gender_after(s: str, j: int, *, ranged: bool = True) -> str | None:
+def _gender_after(s: str, j: int, *, ranged: bool = True, start: int = -1) -> str | None:
+    before = _PREV_WORD.search(s, max(0, start - 8), start) if start > 0 else None
+    if before and before[1].lower() in ("el", "al", "del"):
+        return None  # "El 1 solo se divide", "Al 21 suma 4": the number itself is the noun
     nxt = _NEXT_WORD.match(s, j)
     if nxt is None:
         span = _RANGE_NEXT.match(s, j) if ranged else None
-        return "f" if span and _noun_gender(span[1]) == "f" else None  # "1 a 2 tazas" -> "una a dos tazas"
+        noun = span and (span[1] or span[2])
+        return "f" if noun and _noun_gender(noun) == "f" else None  # "1 a 2 tazas" -> "una a dos tazas"
     word = nxt[1].lower()
     if word in _SOLO:
         noun = _NEXT_WORD.match(s, nxt.end())
@@ -1265,7 +1288,7 @@ def _gender_after(s: str, j: int, *, ranged: bool = True) -> str | None:
 
 
 def _number(m: re.Match[str]) -> str:
-    gender = _gender_after(m.string, m.end()) if m[2] is None else None
+    gender = _gender_after(m.string, m.end(), start=m.start()) if m[2] is None else None
     words = _spell(m[0], fem=gender == "f", apocope=gender == "m")
     if gender and words.endswith(("millón", "millones")):
         words += " de"  # "un millón de personas"

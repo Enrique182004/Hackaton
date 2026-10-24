@@ -11,8 +11,13 @@ from biobench_sar.llm import mathspeak_es
 from biobench_sar.llm.mathspeak_es import fraction_to_words_es, has_math_symbols, number_to_words_es, to_speech_es
 
 # No symbol may reach the voice, and no raw hyphen may sit between operands ("cinco - menos tres" sounds like 5-3).
-# Word-internal hyphens ("auto-evaluación") and a leading "- " list bullet are prose and allowed.
-FORBIDDEN = re.compile(r"[\d^/*=+<>×·÷√∛%≤≥≠≈±²³½¼¾π|$#\ue000-\uf8ff]|(?<![^\W\d_])-|-(?![^\W\d_])")
+# Word-internal hyphens ("auto-evaluación") and a leading "- " list bullet are prose and allowed. An en / em dash
+# glued to a lone variable ("–b") or opening a line ("–cinco más tres") is a sign the voice would skip.
+FORBIDDEN = re.compile(
+    r"[\d^/*=+<>×·÷√∛%≤≥≠≈±²³½¼¾π|$#∈∉µμ\ue000-\uf8ff]|(?<![^\W\d_])-|-(?![^\W\d_])"
+    r"|[–—‒](?=[a-zA-Z](?![^\W\d_]))|^[–—‒](?=\w)",
+    re.M,
+)
 _BULLET = re.compile(r"(?m)^[ \t]*- ")
 
 
@@ -309,6 +314,200 @@ MARKDOWN = [
     ("**mal**", "mal"),
     ("*Nota:* 3x = 6", "Nota: tres x es igual a seis"),
 ]
+# Review round 2 (fix/mathspeak-es-review). Each group fails on the code before the fix.
+NBSP, NNBSP = chr(0x00A0), chr(0x202F)
+RANGES = [
+    # An unspaced dash between two plain numbers is a range before a unit / noun, or with no other math around.
+    ("Los trofozoítos miden 15–45 µm", "Los trofozoítos miden quince a cuarenta y cinco micrómetros"),
+    ("range 25-37 °C", "range veinticinco a treinta y siete grados Celsius"),
+    ("60-65 °C", "sesenta a sesenta y cinco grados Celsius"),
+    ("100-500 mL", "cien a quinientos mililitros"),
+    ("Toma 3–5 muestras", "Toma tres a cinco muestras"),
+    ("cada 24–48 horas", "cada veinticuatro a cuarenta y ocho horas"),
+    ("Tarda 2–3 días", "Tarda dos a tres días"),
+    ("10–12 años", "diez a doce años"),
+    ("Repite 2–3 veces.", "Repite dos a tres veces."),
+    ("Dedica 5–10 minutos a practicar.", "Dedica cinco a diez minutos a practicar."),
+    ("Para niños de 8–12 años.", "Para niños de ocho a doce años."),
+    ("Del 3–7 de marzo.", "Del tres al siete de marzo."),
+    ("del 5–10 %", "del cinco al diez por ciento"),
+    ("entre 20–30 °C", "entre veinte y treinta grados Celsius"),
+    ("pH 7–8", "pH siete a ocho"),
+    ("Lee 2-3 libros", "Lee dos a tres libros"),
+    ("1990-2000", "mil novecientos noventa a dos mil"),
+    (
+        "Incuba a 25-37 °C durante 24-48 h.",
+        "Incuba a veinticinco a treinta y siete grados Celsius durante veinticuatro a cuarenta y ocho horas.",
+    ),
+    ("Toma 1–2 tazas", "Toma una a dos tazas"),
+    ("21–25 alumnas", "veintiuna a veinticinco alumnas"),
+    ("1.5-2.5 mL", "uno punto cinco a dos punto cinco mililitros"),
+    ("1-2 h", "una a dos horas"),
+    # ...and a subtraction next to a relation, another operator, a math cue or a group.
+    ("8–3 = 5", "ocho menos tres es igual a cinco"),
+    ("x = 8-3", "x es igual a ocho menos tres"),
+    ("2x-3=7", "dos x menos tres es igual a siete"),
+    ("2-3 + 1", "dos menos tres más uno"),
+    ("Calcula 8-3", "Calcula ocho menos tres"),
+    ("¿Cuánto es 8-3?", "¿Cuánto es ocho menos tres?"),
+    ("8-3 es 5", "ocho menos tres es cinco"),
+    ("8-3", "ocho menos tres"),
+    ("2(8-3)", "dos por la cantidad ocho menos tres"),
+    ("(8-3)^2", "la cantidad ocho menos tres, al cuadrado"),
+    ("√(1-2)", "la raíz cuadrada de la cantidad uno menos dos"),
+    ("3-5x", "tres menos cinco x"),
+    ("3-5 x", "tres menos cinco x"),
+    ("Si x = 2, entonces 3-5", "Si x es igual a dos, entonces tres menos cinco"),
+    ("Toma 3-5 muestras y calcula 8-3 = 5", "Toma tres a cinco muestras y calcula ocho menos tres es igual a cinco"),
+]
+ASIDES = [
+    # A spaced em / en dash before a Spanish one-letter word is an aside, not a minus (and "y" stays "i").
+    (
+        "¡Correcto! 3 + 4 = 7 — y lo hiciste rapidísimo.",
+        "¡Correcto! tres más cuatro es igual a siete — y lo hiciste rapidísimo.",
+    ),
+    ("x = 5 — y ahora comprueba.", "x es igual a cinco — y ahora comprueba."),
+    ("Obtuviste 10 — a ver el siguiente.", "Obtuviste diez — a ver el siguiente."),
+    ("Paso 2 — a la derecha.", "Paso dos — a la derecha."),
+    ("Son 3 – y no 4.", "Son tres – y no cuatro."),
+    ("En 1990 — y hasta 2000 — fue así.", "En mil novecientos noventa — y hasta dos mil — fue así."),
+    ("Paso 3 — b) el siguiente", "Paso tres — b) el siguiente"),
+    # A lone variable that ends the expression is still subtracted.
+    ("x = 5 — y", "x es igual a cinco menos ye"),
+    ("(x – a)^2", "la cantidad x menos a, al cuadrado"),
+]
+SIGNED_DASHES = [
+    ("x = –b", "x es igual a menos b"),
+    ("–5 + 3 = –2", "menos cinco más tres es igual a menos dos"),
+    (
+        "x = –b ± √(b² – 4ac) / 2a",
+        "x es igual a menos b más o menos la raíz cuadrada de la cantidad b al cuadrado menos cuatro a c sobre dos a",
+    ),
+]
+MONEY_MAGNITUDES = [
+    ("$10 mil", "diez mil dólares"),
+    ("Ganó $1 millón", "Ganó un millón de dólares"),
+    ("$3 millones", "tres millones de dólares"),
+    ("Un terreno de $1.5 millones", "Un terreno de uno punto cinco millones de dólares"),
+    ("Cuesta $5.5 mil", "Cuesta cinco punto cinco mil dólares"),
+    ("Cuesta $2 mil pesos", "Cuesta dos mil pesos"),
+    ("$3 millones de pesos", "tres millones de pesos"),
+    ("$21 mil", "veintiún mil dólares"),
+    ("$3 mil millones", "tres mil millones de dólares"),
+    ("$1 mil", "mil dólares"),
+    ("$-5", "menos cinco dólares"),
+    ("La respuesta es $2x$", "La respuesta es dos x"),
+    ("La respuesta es $x$.", "La respuesta es x."),
+    ("Cuesta $5 y $10", "Cuesta cinco dólares y diez dólares"),
+]
+THOUSANDS = [
+    ("Hay 25 000 habitantes", "Hay veinticinco mil habitantes"),
+    (f"Hay 25{NBSP}000 habitantes", "Hay veinticinco mil habitantes"),
+    (f"Hay 25{NNBSP}000 habitantes", "Hay veinticinco mil habitantes"),
+    ("25 000", "veinticinco mil"),
+    ("1 250 000", "un millón doscientos cincuenta mil"),
+    ("Cuesta $10 000", "Cuesta diez mil dólares"),
+    ("El auto cuesta $250 000 pesos", "El auto cuesta doscientos cincuenta mil pesos"),
+    ("Escala 1 : 100 000", "Escala uno es a cien mil"),
+    # Groups that are not exactly three digits, or a list of numbers, stay separate.
+    ("3 4", "tres cuatro"),
+    ("Los números 3 4 5", "Los números tres cuatro cinco"),
+    ("Los números 10 100 1000", "Los números diez cien mil"),
+    ("Los números 100 200 300", "Los números cien doscientos trescientos"),
+    ("Los números 5 10 100", "Los números cinco diez cien"),
+]
+Y_IN_MATH = [
+    ("Calcula y luego suma 3.", "Calcula y luego suma tres."),
+    ("Calcula y después divide entre 2.", "Calcula y después divide entre dos."),
+    ("Vale y ahora suma 2.", "Vale y ahora suma dos."),
+    ("Resta 3 y divide", "Resta tres y divide"),
+    ("el valor de y", "el valor de ye"),
+    ("despeja y", "despeja ye"),
+    ("Resuelve para y: 2y = 4", "Resuelve para ye: dos ye es igual a cuatro"),
+    ("Halla y cuando x = 3", "Halla ye cuando x es igual a tres"),
+    ("Calcula y si x = 2", "Calcula ye si x es igual a dos"),
+    ("Encuentra y de la ecuación 2y = 6", "Encuentra ye de la ecuación dos ye es igual a seis"),
+    ("y ∈ [0, 1]", "ye pertenece al intervalo de cero a uno"),
+    ("Encuentra y sabiendo que x = 2", "Encuentra ye sabiendo que x es igual a dos"),
+]
+GENDER = [
+    ("Tienes 1 error en el paso 2", "Tienes un error en el paso dos"),
+    ("Hay 1 error y 21 aciertos", "Hay un error y veintiún aciertos"),
+    ("Te doy 1 pista", "Te doy una pista"),
+    ("Usa 1 calculadora", "Usa una calculadora"),
+    ("Hay 101 dálmatas", "Hay ciento un dálmatas"),
+    ("Hay 1 tortuga y 1 hexágono", "Hay una tortuga y un hexágono"),
+    ("Dibuja 1 cuadro", "Dibuja un cuadro"),
+    ("Toma 1 muestra de agua", "Toma una muestra de agua"),
+    # A "noun" that is really a verb or the adverb "solo" never agrees.
+    ("Al 21 suma 4.", "Al veintiuno suma cuatro."),
+    ("A 200 resta 50.", "A doscientos resta cincuenta."),
+    ("De 500 resta 200.", "De quinientos resta doscientos."),
+    ("x vale 1 solo cuando x es positivo", "x vale uno solo cuando x es positivo"),
+    ("El 1 solo se divide entre sí mismo", "El uno solo se divide entre sí mismo"),
+    ("La figura 1 muestra que x = 2", "La figura uno muestra que x es igual a dos"),
+    ("1 solo paso", "un solo paso"),
+]
+TIMES_AND_RATIOS = [
+    ("Escala 1:50,000", "Escala uno es a cincuenta mil"),
+    ("La película dura 2:30.", "La película dura dos y treinta."),
+    ("El examen es 10:30", "El examen es diez y treinta"),
+    ("La clase empieza 8:00", "La clase empieza ocho en punto"),
+    ("Nos vemos a la 1", "Nos vemos a la una"),
+    ("Es la 1.", "Es la una."),
+    ("Llega a la 1 de la tarde", "Llega a la una de la tarde"),
+    ("Diluye 1:10", "Diluye uno es a diez"),
+    ("La razón es 3:45", "La razón es tres es a cuarenta y cinco"),
+    ("Simplifica 2:30", "Simplifica dos es a treinta"),
+    ("La clase termina 9:50", "La clase termina nueve y cincuenta"),
+    ("x elevado a la 1", "x elevado a la uno"),
+]
+MEASUREMENTS = [
+    (
+        "Laguna de Bustillos tiene 1.5 m de profundidad",
+        "Laguna de Bustillos tiene uno punto cinco metros de profundidad",
+    ),
+    ("Un rectángulo de 3 m por 5 m", "Un rectángulo de tres metros por cinco metros"),
+    ("Un rectángulo de 3 m x 5 m", "Un rectángulo de tres metros por cinco metros"),
+    ("Compra 1 L de leche", "Compra un litro de leche"),
+    ("15 µm", "quince micrómetros"),
+    ("3 μm", "tres micrómetros"),
+    ("5 µL", "cinco microlitros"),
+    ("Incuba 1 h", "Incuba una hora"),
+    ("30 min", "treinta minutos"),
+    ("2.3 × 10^4 células/mL", "dos punto tres por diez a la cuarta células por mililitro"),
+    ("10 metros/segundo", "diez metros por segundo"),
+    ("3 pesos/kilo", "tres pesos por kilo"),
+    ("50 litros/minuto", "cincuenta litros por minuto"),
+    ("Cuesta $15/kg", "Cuesta quince dólares por kilo"),
+    ("2 g/cm³", "dos gramos por centímetro cúbico"),
+    ("5 mg/L", "cinco miligramos por litro"),
+    ("x = m/g", "x es igual a m sobre g"),
+    ("alumnas/alumno", "alumnas o alumno"),
+]
+SETS_AND_INTERVALS = [
+    ("[2, 5]", "el intervalo de dos a cinco"),
+    ("(2, 5]", "el intervalo de dos a cinco"),
+    ("x ∈ [0, 1]", "x pertenece al intervalo de cero a uno"),
+    ("El conjunto {1, 2, 3}", "El conjunto uno, dos, tres"),
+    ("A = {1, 2, 3}", "A es igual al conjunto uno, dos, tres"),
+    ("{[2 + 3] × 4}", "la cantidad, la cantidad dos más tres por cuatro"),
+    ("Los puntos (1, 2) y (3, 4)", "Los puntos uno, dos y tres, cuatro"),
+    ("{1, 2, 3, ...}", "el conjunto uno, dos, tres, etcétera"),
+]
+OLDER = [
+    ("Es el 1° de mayo.", "Es el primero de mayo."),
+    ("El 1° de septiembre", "El primero de septiembre"),
+    ("El 2° de mayo", "El dos de mayo"),
+    ("El COVID-19", "El COVID diecinueve"),
+    ("xy = 6", "x ye es igual a seis"),
+    ("3 x 4 = 12", "tres por cuatro es igual a doce"),
+    ("Hay 3x10^5 amibas", "Hay tres por diez a la quinta amibas"),
+    ("Tu calificación es 10/10", "Tu calificación es diez de diez"),
+    ("Contestaste 7/10 bien", "Contestaste siete de diez bien"),
+    ("Tienes 8/10 correctas", "Tienes ocho de diez correctas"),
+    ("ab-1", "ab menos uno"),
+]
 REVIEW_CASES = (
     POWERED_GROUPS
     + NEGATIVE_OPERANDS
@@ -323,6 +522,17 @@ REVIEW_CASES = (
     + HALVES
     + NOTATION
     + MARKDOWN
+    + RANGES
+    + ASIDES
+    + SIGNED_DASHES
+    + MONEY_MAGNITUDES
+    + THOUSANDS
+    + Y_IN_MATH
+    + GENDER
+    + TIMES_AND_RATIOS
+    + MEASUREMENTS
+    + SETS_AND_INTERVALS
+    + OLDER
 )
 
 PROSE = [
@@ -339,6 +549,24 @@ PROSE = [
     "Y luego, ¿qué sigue?",
     "Lo hiciste sin(querer)",
     "| Paso | Resultado |",
+    # The conjunction "y" after a tutor's verb stays "i": only a math cue makes it the variable.
+    "Encuentra y dime tu resultado.",
+    "Calcula y responde la pregunta.",
+    "Calcula y factoriza la expresión.",
+    "Encuentra y reduce términos semejantes.",
+    "Para y piensa antes de contestar.",
+    "Bueno, y.",
+    "Primero calcula y luego suma.",
+    "Lee con atención, calcula y responde.",
+    "Calcula y contesta.",
+    "Encuentra y encierra la respuesta.",
+    "Encuentra y después escribe el resultado.",
+    "¿Cuánto vale y cuánto cuesta?",
+    "Vale y ahora piensa.",
+    "Encuentra x y comprueba",
+    "Calcula el valor y anótalo.",
+    "Calcula y de ahí despeja x.",
+    "Encuentra y para comprobar.",
 ]
 
 NUMBERS = [
@@ -583,6 +811,24 @@ def test_deep_nesting_stays_fast() -> None:
     start = time.perf_counter()
     to_speech_es(text)
     assert time.perf_counter() - start < 0.5
+
+
+def test_many_ranges_stay_linear() -> None:
+    # Each range used to rescan its whole line for a relation: 33 KB of "1990–2000, " took about 2 s.
+    text = "1990–2000, " * 3000
+    start = time.perf_counter()
+    spoken = to_speech_es(text)
+    assert time.perf_counter() - start < 0.5
+    assert spoken.startswith("mil novecientos noventa a dos mil, ")
+
+
+def test_membership_is_math() -> None:
+    assert has_math_symbols("x ∈ A")
+    assert to_speech_es("x ∉ A") == "x no pertenece a A"
+
+
+def test_amount_glued_to_a_variable_is_not_money() -> None:
+    assert "dólares" not in to_speech_es("$2x")
 
 
 def test_has_math_symbols_defers_to_the_shared_detector(monkeypatch: pytest.MonkeyPatch) -> None:
