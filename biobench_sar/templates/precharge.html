@@ -101,8 +101,6 @@
           <button type="button" class="btn btn-small" id="quiz-start-btn">Start quiz</button>
           <button type="button" class="btn btn-quiet btn-small" id="quiz-stop-btn" hidden>Stop quiz</button>
         </div>
-        <p class="learn-line" id="learn-line" hidden></p>
-        <p class="note" id="mode-msg" role="status"></p>
         <form class="ask" id="ask-form">
           <label class="sr-only" for="ask-input">Your question</label>
           <input id="ask-input" type="text" autocomplete="off" placeholder="Ask about the math on your board, or what you want to learn…">
@@ -112,8 +110,11 @@
           </button>
         </form>
         <p class="note" id="ask-msg" role="status"></p>
-        {# Filled by ask.js with the examples for the current subject. #}
-        <p class="examples" id="examples"></p>
+        <div class="ask-extras">
+          {# Filled by ask.js with the examples for the current subject. #}
+          <p class="examples" id="examples"></p>
+          <p class="learn-line" id="learn-line" hidden></p>
+        </div>
         <ol class="entries" id="timeline" aria-live="polite"></ol>
         <p class="empty" id="timeline-empty">Answers will appear here and on the projector. On the projector page, click once so it can play sound, then press <kbd>F</kbd> for full screen, <kbd>Space</kbd> to talk, or <kbd>T</kbd> to type a question.</p>
       </section>

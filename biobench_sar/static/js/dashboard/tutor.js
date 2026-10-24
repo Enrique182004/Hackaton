@@ -1,15 +1,15 @@
-import { $, request, setNote } from "./api.js";
+import { $, request } from "./api.js";
+import { note } from "./ask.js";
 import { logEvent } from "./log.js";
-import { currentProfile, onProfileChange } from "./profile.js";
+import { MODE_LABELS, currentProfile, onProfileChange } from "./profile.js";
 import { setIdleBadge } from "./status.js";
 
 export const MODES = ["help", "practice", "quiz"];
-export const MODE_LABELS = { help: "step-by-step help", practice: "similar problem", quiz: "quiz" };
 
 const CHOSEN_NOTES = {
   help: "Now write your problem on the board and ask for the next step.",
   practice: "Now write a problem on the board and ask for one like it.",
-  quiz: "Press Start quiz when you're ready.",
+  quiz: "Press Start quiz, or just say or type “I'm ready”.",
 };
 const QUIZ_SOURCE = "Problems come from the worksheets you tick in step 1, or the assistant makes some up.";
 const OFFLINE_HINT = "Check the assistant's Terminal window is still open, then try again.";
@@ -57,7 +57,7 @@ export async function refreshTutor() {
 
 function failed(what, err) {
   logEvent("tutor", `${what}: ${err.message}`);
-  setNote($("mode-msg"), `Couldn't ${what}. ${OFFLINE_HINT}`, "warn");
+  note(`Couldn't ${what}. ${OFFLINE_HINT}`, "warn");
 }
 
 async function chooseMode(mode) {
@@ -67,7 +67,7 @@ async function chooseMode(mode) {
     const data = await request("/api/tutor/mode", { method: "PUT", json: { mode } });
     renderTutor(data);
     const running = data.quiz && data.quiz.active;
-    setNote($("mode-msg"), running ? "A quiz is already running. Write your answer on the board." : CHOSEN_NOTES[mode], "ok");
+    note(running ? "A quiz is already running. Write your answer on the board." : CHOSEN_NOTES[mode], "ok");
   } catch (err) {
     failed("change how the assistant helps", err);
   } finally {
@@ -84,7 +84,7 @@ async function quizAction(kind) {
   try {
     const data = await request(`/api/tutor/quiz/${kind}`, { method: "POST" });
     renderTutor(data);
-    setNote($("mode-msg"), kind === "start" ? STARTED_NOTE : "Quiz stopped.", "ok");
+    note(kind === "start" ? STARTED_NOTE : "Quiz stopped.", "ok");
   } catch (err) {
     failed(kind === "start" ? "start the quiz" : "stop the quiz", err);
   } finally {

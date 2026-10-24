@@ -1,8 +1,7 @@
 import { $, el, request, setNote } from "./api.js";
 import { logEvent } from "./log.js";
-import { currentProfile, onProfileChange, words } from "./profile.js";
+import { MODE_LABELS, currentProfile, onProfileChange, words } from "./profile.js";
 import { LISTENING_NOTE } from "./status.js";
-import { MODE_LABELS } from "./tutor.js";
 
 let pending = null;
 let serverState = "idle";
@@ -91,7 +90,8 @@ export async function loadHistory() {
 const MIC_START_TIMEOUT_MS = 10000;
 let micTimer = null;
 
-function note(text, tone) {
+// The Ask step's one note line, shared with the mode picker so the step stays one screen tall.
+export function note(text, tone) {
   micNote = null;
   clearTimeout(micTimer);
   setNote($("ask-msg"), text, tone);

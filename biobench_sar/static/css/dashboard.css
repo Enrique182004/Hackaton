@@ -226,10 +226,11 @@ input::placeholder { color: var(--ink-faint); }
 .quiz-progress { font-weight: 700; font-size: 0.92rem; color: var(--ink-soft); }
 .quiz-problem { font: 700 1.3rem/1.2 var(--font-head); letter-spacing: 0.02em; overflow-wrap: anywhere; }
 .quiz-bar .btn { margin: var(--s1) 0 var(--s1) auto; }
-.learn-line { margin: 0 0 var(--s1); font: 700 1.2rem/1.1 var(--font-hand); color: var(--pencil); }
+.ask-extras { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 var(--s4); margin: var(--s2) 0 0; }
+.learn-line { margin: 0 0 0 auto; font: 700 1.25rem/1.1 var(--font-hand); color: var(--pencil); }
 .ask { display: grid; grid-template-columns: 1fr auto auto; gap: var(--s3); }
 @media (max-width: 600px) { .ask { grid-template-columns: 1fr 1fr; } .ask input { grid-column: span 2; } }
-.examples { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s3); margin: var(--s2) 0 0; }
+.examples { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s3); margin: 0; }
 .scribble { font: 700 1.3rem/1 var(--font-hand); color: var(--pencil); }
 .example {
   min-height: 44px; padding: 0; border: 0; background: none; cursor: pointer;
@@ -241,8 +242,9 @@ input::placeholder { color: var(--ink-faint); }
 .entries {
   list-style: none; margin: var(--s3) 0 0; padding: 0 var(--s2) 0 0; display: grid; gap: var(--s3);
   /* What's left of the screen under the mode picker and question box, so the Ask step fits without page scroll. */
-  max-height: clamp(180px, calc(100vh - 470px), 560px); overflow-y: auto; overscroll-behavior: contain;
+  max-height: clamp(180px, calc(100vh - 445px), 560px); overflow-y: auto; overscroll-behavior: contain;
 }
+#panel-ask:has(.quiz-bar:not([hidden])) .entries { max-height: clamp(160px, calc(100vh - 513px), 560px); }
 .entry { position: relative; padding: var(--s2) var(--s3) var(--s2) var(--s4); background: var(--card); border-left: 4px solid var(--accent); animation: write-in 280ms ease both; }
 .entry[data-state="error"] { border-left-color: var(--bad); }
 .entry[data-state="celebrating"] { border-left-color: var(--ok); }

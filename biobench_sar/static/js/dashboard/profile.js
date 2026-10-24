@@ -33,6 +33,9 @@ const WORDS = {
   },
 };
 
+// The math tutor modes as the student sees them (Ask badge, margin notes).
+export const MODE_LABELS = { help: "step-by-step help", practice: "similar problem", quiz: "quiz" };
+
 let profile = "math";
 const listeners = [];
 

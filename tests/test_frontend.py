@@ -439,7 +439,7 @@ const put = http.calls.find((c) => c.method === "PUT" && c.path === "/api/tutor/
 assert.deepEqual(JSON.parse(put.body), { mode: "practice" });
 assert.deepEqual(pressed(), ["practice"]);
 assert.equal($("badge-ask").textContent, "similar problem");
-assert.equal($("mode-msg").textContent, "Now write a problem on the board and ask for one like it.");
+assert.equal($("ask-msg").textContent, "Now write a problem on the board and ask for one like it.");
 assert.equal($("mode-practice").disabled, false);
 // The student says "quiz me": the server pushes the new mode and the picker follows.
 sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: null });
@@ -470,9 +470,9 @@ await import("./dashboard/main.js");
 sock.fire("connect");
 await settle();
 await $("mode-quiz").fire("click");
-assert.equal($("mode-msg").textContent,
+assert.equal($("ask-msg").textContent,
   "Couldn't change how the assistant helps. Check the assistant's Terminal window is still open, then try again.");
-assert.equal($("mode-msg").dataset.tone, "warn");
+assert.equal($("ask-msg").dataset.tone, "warn");
 assert.match(logText(), /KeyError: mode/);
 assert.equal($("mode-help").getAttribute("aria-pressed"), "true");
 """,
@@ -502,7 +502,7 @@ assert.equal($("quiz-problem").textContent, "3x + 5 = 20");
 assert.equal($("quiz-problem").hidden, false);
 assert.equal($("quiz-start-btn").hidden, true);
 assert.equal($("quiz-stop-btn").hidden, false);
-assert.match($("mode-msg").textContent, /^Quiz started! Say or type “I'm ready”/);
+assert.match($("ask-msg").textContent, /^Quiz started! Say or type “I'm ready”/);
 sock.fire("tutor", { mode: "quiz", learn_topic: "equations", quiz: QUIZ });
 assert.equal($("quiz-progress").textContent, "Problem 2 of 8 · 1 right so far");
 assert.equal($("badge-ask").textContent, "quiz · 2 of 8");
@@ -514,7 +514,7 @@ assert.equal($("learn-line").hidden, true);
 await $("quiz-stop-btn").fire("click");
 assert.ok(http.calls.some((c) => c.method === "POST" && c.path === "/api/tutor/quiz/stop"));
 assert.equal($("quiz-bar").hidden, true);
-assert.equal($("mode-msg").textContent, "Quiz stopped.");
+assert.equal($("ask-msg").textContent, "Quiz stopped.");
 assert.equal($("badge-ask").textContent, "step-by-step help");
 // Back in quiz mode after a quiz that got somewhere: the bar reports how it went.
 sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: { ...QUIZ, active: false, score: 5 } });
