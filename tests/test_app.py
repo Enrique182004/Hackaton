@@ -1211,3 +1211,41 @@ def test_status_survives_a_glare_failure(built: Any, fakes: Any, monkeypatch: py
     fakes.vision.frame = np.full((40, 40, 3), 120, np.uint8)
     r = built[0].test_client().get("/api/status")
     assert r.status_code == 200 and r.get_json()["glare"] is None
+
+
+# ---- LAN mode off (the default): nothing about phones changes the laptop's server ----------------------
+def test_lan_mode_off_needs_no_pin_and_marks_nothing(built: Any) -> None:
+    from biobench_sar import lan
+
+    app, socketio = built
+    client = app.test_client()
+    for path in ("/", "/dashboard", "/api/status"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert lan.LAN_MODE_HEADER not in response.headers, path
+    assert b"lan=False" in client.get("/dashboard").data
+    assert client.get("/sw.js").status_code == 404, "nothing can register a service worker outside LAN mode"
+    assert client.get("/socket.io/?EIO=4&transport=polling").get_data().startswith(b"0{")
+    assert socketio.test_client(app, flask_test_client=client).is_connected()
+    assert app.config["SAR_JOIN_PIN"] is None
+
+
+def test_api_responses_are_never_cached(built: Any) -> None:
+    app, _ = built
+    client = app.test_client()
+    for response in (
+        client.get("/api/status"),
+        client.get("/api/documents"),
+        client.get("/api/lan"),
+        client.post("/api/query", json={}),
+        client.get("/api/missing"),
+    ):
+        assert response.headers["Cache-Control"] == "no-store", response.request.path
+
+
+def test_ui_rects_socket_event_is_forwarded(built: Any) -> None:
+    app, socketio = built
+    seen: list[Any] = []
+    app.config["SAR_ASSISTANT"].set_ui_rects = seen.append
+    socketio.test_client(app).emit("ui_rects", {"rects": [[0, 0, 200, 300]]})
+    assert seen == [[[0.0, 0.0, 200.0, 300.0]]]

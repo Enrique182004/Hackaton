@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from biobench_sar.lan import is_lan_mode, parse_hostnames
 from biobench_sar.lang import normalize_language
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -14,6 +15,7 @@ PROFILES = ("math", "biology")
 INK_MAX_REGIONS = {"math": 20, "biology": 10}
 # The classroom kit's Epson WXGA projector (16:10); SAR_PROJECTOR_WIDTH / SAR_PROJECTOR_HEIGHT override it.
 PROJECTOR_SIZE = (1280, 800)
+TRUE_WORDS = frozenset({"1", "true", "yes", "on"})
 
 
 def _env_int(name: str, default: int) -> int:
@@ -59,6 +61,29 @@ def _env_ink_c(name: str, default: int) -> int:
 
 def _env_block_size(name: str, default: int) -> int:
     return normalize_block_size(_env_int(name, default), default)
+
+
+def lan_requested() -> bool:
+    """SAR_LAN=1 (or true/yes/on): phones and tablets on the classroom Wi-Fi may join with the PIN."""
+    return os.environ.get("SAR_LAN", "").strip().lower() in TRUE_WORDS
+
+
+def _env_host() -> str:
+    # An explicit SAR_HOST wins, "" (every interface) included; LAN mode alone listens on every interface.
+    host = os.environ.get("SAR_HOST")
+    if host is not None:
+        return host.strip()
+    return "0.0.0.0" if lan_requested() else "127.0.0.1"
+
+
+def _hostnames(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return parse_hostnames(value)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        # Each item must be one valid name: "bad name" is not two names.
+        names = (parse_hostnames(str(v)) for v in value)
+        return tuple(dict.fromkeys(parsed[0] for parsed in names if len(parsed) == 1))
+    return ()
 
 
 def _env_profile() -> str:
@@ -127,12 +152,19 @@ class Settings:
     ink_max_regions: int = field(default_factory=lambda: _env_optional_pos_int("SAR_INK_MAX_REGIONS"))
     # Specks this close to a symbol (decimal points, minus signs, exponents) join its region; 0 turns it off.
     ink_small_merge_px: int = field(default_factory=lambda: _env_nonneg_int("SAR_INK_SMALL_MERGE_PX", 24))
-    host: str = field(default_factory=lambda: os.environ.get("SAR_HOST", "127.0.0.1"))
+    host: str = field(default_factory=_env_host)
     # 5050, not Flask's 5000: macOS AirPlay Receiver listens on 5000.
     port: int = field(default_factory=lambda: _env_int("SAR_PORT", 5050))
     seed_knowledge: bool = field(default_factory=lambda: os.environ.get("SAR_SEED_KNOWLEDGE", "1") != "0")
+    # The PIN gate for phones (docs/MOBILE.md). Never off for a bind other devices can reach: __post_init__ turns
+    # it on for any host but 127.0.0.0/8, ::1 and localhost, so the server can't listen on the network ungated.
+    lan: bool = field(default_factory=lan_requested)
+    # Host names besides IP literals and localhost that the gate accepts (e.g. "my-laptop.local").
+    lan_hostnames: tuple[str, ...] = field(default_factory=lambda: parse_hostnames(os.environ.get("SAR_LAN_HOSTNAMES")))
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "lan", is_lan_mode(sar_lan=bool(self.lan), bind_host=self.host))
+        object.__setattr__(self, "lan_hostnames", _hostnames(self.lan_hostnames))
         if self.ink_max_regions <= 0:
             object.__setattr__(self, "ink_max_regions", INK_MAX_REGIONS.get(self.profile, INK_MAX_REGIONS["math"]))
         if self.language not in ("auto", "en", "es"):
