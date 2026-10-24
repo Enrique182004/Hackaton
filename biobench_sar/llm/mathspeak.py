@@ -38,6 +38,8 @@ _ORD_IRREGULAR = {
 }
 _MAX_DEPTH = 24
 _MAX_PASSES = 4
+# Past this many tokens a region is read flat, left to right: rendering its tree would recurse once per term.
+_MAX_REGION_TOKENS = 300
 
 _GREEK = {
     "π": "pi",
@@ -100,13 +102,15 @@ _OPWORDS = {
     "≥": "is greater than or equal to",
     ">=": "is greater than or equal to",
     "≈": "is approximately equal to",
+    "∈": "is in",
+    "∉": "is not in",
     "→": "gives",
     "->": "gives",
     "=>": "gives",
     "⇒": "gives",
 }
 _UNARY = {"-": "negative", "+": "positive", "±": "plus or minus", "∓": "minus or plus"}
-_REL = frozenset({"=", "==", "≠", "!=", "<", ">", "≤", "<=", "≥", ">=", "≈", "→", "->", "=>", "⇒"})
+_REL = frozenset({"=", "==", "≠", "!=", "<", ">", "≤", "<=", "≥", ">=", "≈", "∈", "∉", "→", "->", "=>", "⇒"})
 _ADD = frozenset({"+", "-", "±", "∓"})
 _MUL = frozenset({"*", "×", "·", "∙", "÷", "/"})
 _OPEN = {"(": ")", "[": "]", "{": "}"}
@@ -139,6 +143,8 @@ _FUNCS = {
     "log": "log",
     "ln": "natural log",
 }
+_ROOT_WORDS = {"sqrt": "square root", "cbrt": "cube root"}
+_ONE_SCALES = frozenset({"one hundred", "one thousand", "one million"})  # "count by 100s" -> "by hundreds"
 _FUNC_LETTERS = frozenset("fgh")
 _SCALES_TEMP = {"C": "Celsius", "F": "Fahrenheit"}
 # Kept whole after a number ("5cm", "3pm"); any other short letter run after a number is a product of variables.
@@ -164,6 +170,22 @@ _POINT_WORDS = frozenset({"point", "points", "coordinate", "coordinates", "pair"
 # "Problem 3/10" is a position and "You got 7/10" a score, not fractions; "problems 1-5" is a range.
 _OF_WORDS = {"problem": "of", "question": "of", "exercise": "of", "step": "of", "got": "out of", "scored": "out of"}
 _RANGE_WORDS = frozenset({"problems", "questions", "exercises", "pages", "steps", "items", "numbers", "ages"})
+# "grades 7-8", "Score: 3-2" are ranges or scores whatever the order; "from 1-10" only when it counts up.
+_RANGE_BEFORE = _RANGE_WORDS | frozenset(
+    _split("grade grades chapter chapters section sections lesson lessons level levels line lines page score scores")
+)
+_RANGE_UP_BEFORE = frozenset({"from", "between"})
+# "2-3 more problems", "15-35 meters": a tight count-up followed by a plural noun is a range.
+_RANGE_AFTER = _RANGE_WORDS | frozenset(
+    _split(
+        "more times minutes hours seconds days weeks months years meters miles feet inches centimeters "
+        "kilometers grams kilograms liters cups dollars cents people students kids points degrees percent units"
+    )
+)
+_LABEL_AFTER = frozenset({"triangle", "triangles"})  # "a 3-4-5 triangle"
+_ARTICLES = frozenset({"a", "A", "I"})
+_QUESTION_AUX = frozenset({"is", "are", "was", "were"})
+_DO_AUX = frozenset({"does", "did"})  # not "do": "Do 2x + 3 = 11 next" is an instruction
 
 _WS_RE = re.compile(r"\s+")
 _WORD_RE = re.compile(r"[^\W\d_]+(?:['’][^\W\d_]+)*")
@@ -181,15 +203,72 @@ _EMPHASIS_RE = re.compile(r"(?<![\w*])\*{1,2}(?=\S)([^*\n]*?\S)\*{1,2}(?![\w*])"
 _SUPER_RUN_RE = re.compile(f"[{_SUPERSCRIPTS}]+")
 _VULGAR_RE = re.compile(f"(\\d?)([{''.join(_VULGAR)}])(?=(\\d)?)")
 _EN_DASH_RE = re.compile(r"(?<=[\d)])(\s*)[–—](\s*)(?=[\d(√])|(?<=\b[A-Za-z])(\s*)[–—](\s*)(?=[\d(])")
+_DASH_NUM = r"\d+(?:\.\d+)?"
+_RANGE_DASH_RE = re.compile(rf"(?<![\w.,–—-])({_DASH_NUM})[–—]({_DASH_NUM})(?![\w(–—-]|[.,]\d)")
+_DASH_OPS = frozenset("+-*/^=<>×÷·±≤≥≠≈")
+_ROOT_WORD_RE = re.compile(r"\b(?:sqrt|cbrt)\b", re.IGNORECASE)
+_SECTION_RE = re.compile(r"\d+(?:\.\d+){2,}")
+# LaTeX the model sometimes writes even when told to use words: \( \frac{2}{3} \times \frac{3}{5} \)
+_LATEX_OPEN_RE = re.compile(r"\\[(\[]\s*|\$\$\s*")
+_LATEX_CLOSE_RE = re.compile(r"\s*\\[)\]]|\s*\$\$")
+_LATEX_INLINE_RE = re.compile(r"(?<![\w$])\$(?![\s\d$])([A-Za-z]|[^$\n]*?[\\^_={}+<>][^$\n]*?)(?<!\s)\$(?![\w$])")
+_LATEX_TEXT_RE = re.compile(r"\\(?:text|mathrm|mathbf|operatorname)\s*\{([^{}]*)\}")
+_LATEX_FRAC_RE = re.compile(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
+_LATEX_SQRT_RE = re.compile(r"\\sqrt\s*(?:\[\s*(\d)\s*\])?\s*\{([^{}]*)\}")
+_LATEX_SCRIPT_RE = re.compile(r"([\^_])\{([^{}]*)\}")
+_LATEX_CMD_RE = re.compile(r"\\([A-Za-z]+|[,;:! %{}])")
+_LATEX_SYMBOLS = {
+    "times": "×",
+    "div": "÷",
+    "cdot": "·",
+    "pm": "±",
+    "mp": "∓",
+    "le": "≤",
+    "leq": "≤",
+    "ge": "≥",
+    "geq": "≥",
+    "ne": "≠",
+    "neq": "≠",
+    "approx": "≈",
+    "in": "∈",
+    "notin": "∉",
+    "to": "→",
+    "rightarrow": "→",
+    "Rightarrow": "⇒",
+    "infty": "∞",
+    "pi": "π",
+    "theta": "θ",
+    "alpha": "α",
+    "beta": "β",
+    "circ": "°",
+    "cdots": "...",
+    "ldots": "...",
+    "dots": "...",
+    "sqrt": "√",
+    "left": "",
+    "right": "",
+    "quad": " ",
+    "qquad": " ",
+    ",": " ",
+    ";": " ",
+    ":": " ",
+    " ": " ",
+    "!": "",
+    "%": "%",
+    "{": "{",
+    "}": "}",
+}
+_AUX_RE = re.compile(r"(?:^\s*|([.!?;:,(\n\"“])\s*)(is|are|was|were|does|did)\s+$", re.IGNORECASE)
 _XY_PLANE_RE = re.compile(r"\b([xyz])-([xyz])(?=[- ]plane\b)")
 _POW_STARS_RE = re.compile(r"(?<=[\w)])\s*\*\*\s*(?=[\w(-])")
 _UNIT_PER_RE = re.compile(r"(\d\s?)([A-Za-z]+)/([A-Za-z]+)\b")
 _NUM_PER_RE = re.compile(r"(\d)\s?/\s?([A-Za-z]{2,})\b")
 _WORD_SLASH_RE = re.compile(r"\b([A-Za-z]{2,})/([A-Za-z]+)\b")
 
-_CANDIDATE_RE = re.compile(r"[(\d\-−–—/^*=+<>×÷·∙⋅√∛≤≥≠≈±∓%°|$#→⇒²³¹⁰⁴-⁹⁺⁻⁽⁾ⁿ½⅓-⅞πθαβγΔδλμσφω∞_₀-₉]")
+_CANDIDATE_RE = re.compile(r"[\\(\d\-−–—/^*=+<>×÷·∙⋅√∛≤≥≠≈∈∉±∓%°|$#→⇒²³¹⁰⁴-⁹⁺⁻⁽⁾ⁿ½⅓-⅞πθαβγΔδλμσφω∞_₀-₉]")
 _SYMBOL_RE = re.compile(
-    r"[\^*=+<>×÷·∙⋅√∛≤≥≠≈±∓%°/−²³¹⁰⁴-⁹ⁿ½⅓-⅞→⇒]"
+    r"[\^*=+<>×÷·∙⋅√∛≤≥≠≈∈∉±∓%°/−²³¹⁰⁴-⁹ⁿ½⅓-⅞→⇒]"
+    r"|\\(?:[dt]?frac|sqrt|times|div|cdot|pm|leq?|geq?|neq?|approx|left|right|text|pi)(?![A-Za-z])|\\[()\[\]]"
     r"|\|[^|\n]+\|"
     r"|(?<![\w-])-\s?(?=[\d.(√])"
     r"|\d\s?-"
@@ -215,7 +294,7 @@ def to_speech(text: str) -> str:
     "3x + 5 = 12" -> "three x plus five equals twelve", "2/3" -> "two thirds", "x^2" -> "x squared".
     Idempotent: words in, the same words out. Never raises.
     """
-    if not text or not _CANDIDATE_RE.search(text):
+    if not text or not (_CANDIDATE_RE.search(text) or _ROOT_WORD_RE.search(text)):
         return text
     try:
         # Normal sentences settle in one pass; the extra passes only make malformed leftovers idempotent.
@@ -226,8 +305,8 @@ def to_speech(text: str) -> str:
                 break
             out = nxt
         return out
-    except Exception:
-        logger.exception("mathspeak failed; falling back to symbol replacement")
+    except Exception as exc:
+        logger.warning("mathspeak failed (%s: %s); falling back to symbol replacement", type(exc).__name__, exc)
         return _crude(text)
 
 
@@ -288,6 +367,19 @@ def _plural(words: str) -> str:
     return words + "s"
 
 
+def _decade_words(s: str) -> str | None:
+    """ "1990" -> "nineteen ninety", "1900" -> "nineteen hundred": the year reading used for "the 1990s"."""
+    if len(s) != 4 or s[0] == "0" or s[-1] != "0":
+        return None
+    n = int(s)
+    head, rest = divmod(n, 100)
+    if n % 1000 == 0:
+        return _int_words(n)
+    if rest == 0:
+        return f"{_int_words(head)} hundred"
+    return f"{_int_words(head)} {_int_words(rest)}"
+
+
 def _denominator(d: int, plural: bool) -> str:
     if d == 2:
         return "halves" if plural else "half"
@@ -322,14 +414,41 @@ def _money_words(dollars: str, cents: str) -> str:
 
 @dataclass(frozen=True)
 class _Tok:
-    kind: str  # ws num mixed ratio money time ord plural hash var letter word op other
+    kind: str  # ws num mixed ratio money time section ord plural hash var letter word op other
     text: str
     parts: tuple[str, ...] = ()  # var: (spoken name,); mixed: (whole, num, den); ratio: terms; money: (dollars, cents)
 
 
+def _latex(text: str) -> str:
+    """Turn the common LaTeX math commands into the plain notation the parser reads."""
+    text = _LATEX_INLINE_RE.sub(r"\1", text)
+    text = _LATEX_CLOSE_RE.sub("", _LATEX_OPEN_RE.sub("", text))
+    for _ in range(_MAX_DEPTH):  # innermost braces first, so nested fractions unfold one level per pass
+        nxt = _LATEX_TEXT_RE.sub(_latex_text, text)
+        nxt = _LATEX_FRAC_RE.sub(r"(\1)/(\2)", nxt)
+        nxt = _LATEX_SQRT_RE.sub(lambda m: f"{'∛' if m.group(1) == '3' else '√'}({m.group(2)})", nxt)
+        nxt = _LATEX_SCRIPT_RE.sub(lambda m: f"_{m.group(2)}" if m.group(1) == "_" else f"^({m.group(2)})", nxt)
+        if nxt == text:
+            break
+        text = nxt
+    text = _LATEX_CMD_RE.sub(lambda m: _LATEX_SYMBOLS.get(m.group(1), m[0]), text)
+    return re.sub(r"(?<=\S) {2,}(?=\S)", " ", text)
+
+
+def _latex_text(m: re.Match[str]) -> str:
+    """ "3\\text{ and }y" -> "3 and y": keep the words apart from the math around them."""
+    s, start, end = m.string, m.start(), m.end()
+    before = " " if start and not s[start - 1].isspace() else ""
+    after = " " if end < len(s) and not s[end].isspace() else ""
+    return f"{before}{m.group(1).strip()}{after}"
+
+
 def _prepass(text: str) -> str:
+    if any(mark in text for mark in ("\\", "$", "^{", "_{")):
+        text = _latex(text)
     text = text.replace("−", "-").replace("⋅", "·").replace("∗", "*")
-    text = _EN_DASH_RE.sub(lambda m: f"{m.group(1) or m.group(3)}-{m.group(2) or m.group(4)}", text)
+    text = _RANGE_DASH_RE.sub(_range_dash, text)
+    text = _EN_DASH_RE.sub(_en_dash, text)
     text = _EMPHASIS_RE.sub(r"\1", text)
     text = _SUPER_RUN_RE.sub(_superscript, text)
     text = _SUB_RUN_RE.sub(lambda m: "_" + m.group().translate(_SUB_MAP), text)
@@ -341,6 +460,23 @@ def _prepass(text: str) -> str:
         lambda m: f"{m.group(1)} per {m.group(2)}" if m.group(2).lower() in _RATE_UNITS else m[0], text
     )
     return _WORD_SLASH_RE.sub(_word_slash, text)
+
+
+def _range_dash(m: re.Match[str]) -> str:
+    """ "pages 3–5": an unspaced en/em dash between two numbers is a range unless an operator touches it."""
+    before = m.string[: m.start()].rstrip()
+    after = m.string[m.end() :].lstrip()
+    if before[-1:] in _DASH_OPS or after[:1] in _DASH_OPS:
+        return m[0]
+    joiner = "and" if re.search(r"\bbetween$", before, re.IGNORECASE) else "to"
+    return f"{m.group(1)} {joiner} {m.group(2)}"
+
+
+def _en_dash(m: re.Match[str]) -> str:
+    # Only one alternative takes part in a match; its groups may be "" while the other's are None.
+    if m.group(1) is not None:
+        return f"{m.group(1)}-{m.group(2)}"
+    return f"{m.group(3)}-{m.group(4)}"
 
 
 def _superscript(m: re.Match[str]) -> str:
@@ -423,6 +559,8 @@ def _number_token(text: str, i: int, prev: str) -> tuple[_Tok, int]:
         _, num, den = m.groups()
         if 0 < int(num) < int(den):
             return _Tok("mixed", m.group(), m.groups()), m.end()
+    if m := _SECTION_RE.match(text, i):
+        return _Tok("section", m.group()), m.end()
     if m := _ORD_RE.match(text, i):
         return _Tok("ord", m.group()), m.end()
     if m := _PLURAL_RE.match(text, i):
@@ -473,6 +611,7 @@ _PREFIX_OPS = frozenset({"(", "[", "{", "|", "√", "∛"})
 class _Parser:
     def __init__(self, toks: list[_Tok], start: int) -> None:
         self.toks = toks
+        self.start = start
         self.i = start
         self.abs_depth = 0
         self.depth = 0
@@ -528,12 +667,13 @@ class _Parser:
                 return left
             if tok.text == "-" and not self._binary_minus(left, j, ws_before):
                 return left
+            tight = not ws_before and not self._ws_at(j + 1)
             save, self.i = self.i, j + 1
             right = self._try(self.product)
             if right is None:
                 self.i = save
                 return left
-            left = _Node("bin", tok.text, (left, right))
+            left = _Node("bin", tok.text, (left, right), parts=("tight",) if tight else ())
 
     def _binary_minus(self, left: _Node, j: int, ws_before: bool) -> bool:
         k = self._skip(j + 1)
@@ -544,8 +684,23 @@ class _Parser:
             return False  # prose dash or hyphenated compound: "x-axis", "3-digit", "work - now"
         if not self._starts_operand(nxt):
             return False
+        if left.kind == "var" and nxt.kind == "num" and self.i == self.start + 1 and self._ends_phrase(k):
+            if ws_before and not ws_after and left.text in _ARTICLES:
+                return False  # "You get a -3": the article and a negative number
+            if not (ws_before or ws_after) and left.text.isupper() and nxt.text.isdigit():
+                return False  # "Vitamin B-12"
         # After a word only "length - 2" subtracts: "COVID-19" is a label and "is -4" a negative number.
         return left.kind != "word" or (ws_before and ws_after)
+
+    def _ws_at(self, j: int) -> bool:
+        return j < len(self.toks) and self.toks[j].kind == "ws"
+
+    def _ends_phrase(self, k: int) -> bool:
+        """The number at ``k`` is not followed by more math: "a -3 on the right", not "a -3 = -1"."""
+        if k + 1 < len(self.toks) and self.toks[k + 1].kind in ("letter", "var"):
+            return False
+        nxt = self._skip(k + 1)
+        return nxt >= len(self.toks) or self.toks[nxt].kind != "op"
 
     def product(self) -> _Node:
         left = self._term()
@@ -556,17 +711,33 @@ class _Parser:
                 # "3/4x" is three fourths of x, but "2y / 8y" and "4y ÷ 8x" divide by the whole term.
                 tight = tok.text == "/" and not spaced
                 save, self.i = self.i, j + 1
-                right = self._try(self.unary if tight else self._term)
+                right = self._try(self.unary if tight else self._fraction_term)
                 if right is None:
                     self.i = save
                     return left
-                left = self._implicit_chain(_Node("frac" if tok.text == "/" else "bin", tok.text, (left, right)))
+                if tok.text == "/":
+                    node = _Node("frac", "/", (left, right), parts=("spaced",) if spaced else ())
+                else:
+                    node = _Node("bin", tok.text, (left, right))
+                left = self._implicit_chain(node)
                 continue
             if ws and tok is not None and tok.text == "x" and tok.kind == "letter" and self._spaced_times(left, j):
                 self.i = j + 1
-                left = _Node("bin", "×", (left, self._term()))
+                left = _Node("bin", "×", (left, self._fraction_term()))
                 continue
             return left
+
+    def _fraction_term(self) -> _Node:
+        """A term plus any tight fraction bars after it: the right side of "2/3 × 3/5" is "3/5", not "3"."""
+        left = self._term()
+        while self._is_op(self._adjacent(), {"/"}) and not self._ws_at(self.i + 1):
+            save, self.i = self.i, self.i + 1
+            right = self._try(self.unary)
+            if right is None:
+                self.i = save
+                return left
+            left = self._implicit_chain(_Node("frac", "/", (left, right)))
+        return left
 
     def _term(self) -> _Node:
         return self._implicit_chain(self.unary())
@@ -676,6 +847,11 @@ class _Parser:
                 if low == "abs":
                     return _Node("abs", "", (arg,))
                 return _Node("func", _FUNCS[low], (arg,))
+            if low in _ROOT_WORDS and self._bare_root_arg():
+                self._enter()
+                child = self.power()
+                self.depth -= 1
+                return _Node("root", "2" if low == "sqrt" else "3", (child,))
             return _Node("word", tok.text)
         if tok.kind == "op":
             if tok.text in _OPEN:
@@ -689,6 +865,13 @@ class _Parser:
                 self.depth -= 1
                 return _Node("root", "2" if tok.text == "√" else "3", (child,))
         raise _Fail
+
+    def _bare_root_arg(self) -> bool:
+        """ "sqrt 9", "sqrt x": a root written without parentheses."""
+        nxt = self._peek()[0]
+        if nxt is None:
+            return False
+        return nxt.kind in ("num", "mixed") or (nxt.kind in ("letter", "var") and nxt.text not in _ARTICLES)
 
     def _enter(self) -> None:
         self.depth += 1
@@ -714,7 +897,7 @@ class _Parser:
         self.abs_depth = saved_abs
         self.depth -= 1
         inner = items[0] if len(items) == 1 else _Node("list", "", tuple(items))
-        return _Node("group", "", (inner,))
+        return _Node("group", tok.text, (inner,))
 
     def _abs(self) -> _Node:
         self._enter()
@@ -748,6 +931,10 @@ def _is_compound(n: _Node) -> bool:
     return n.kind in ("bin", "list")
 
 
+def _is_relation(n: _Node) -> bool:
+    return n.kind == "bin" and n.text in _REL
+
+
 def _is_point(n: _Node) -> bool:
     return n.kind == "list" and len(n.kids) == 2 and all(_is_simple(k) for k in n.kids)
 
@@ -766,6 +953,8 @@ def _join(left: tuple[str, bool], word: str, right: tuple[str, bool]) -> tuple[s
 def _operand(n: _Node) -> tuple[str, bool]:
     """Render a child of a root/abs/function/exponent; compound content becomes "the quantity ..."."""
     inner = _unwrap(n)
+    if inner.kind == "group" and inner.text == "(":
+        inner = inner.kids[0]  # f(x, y): arguments, not a point
     if inner.kind == "list":
         return _list(inner, point=False)
     if _is_compound(inner):
@@ -786,6 +975,8 @@ def _render(n: _Node) -> tuple[str, bool]:
     if k == "var":
         return n.text, False
     if k == "word":
+        if n.text.lower() in _ROOT_WORDS:
+            return _ROOT_WORDS[n.text.lower()], False
         return (" ".join(n.text) if _is_letter_product(n.text) else n.text), False
     if k == "mixed":
         whole, num, den = n.parts
@@ -803,7 +994,7 @@ def _render(n: _Node) -> tuple[str, bool]:
     if k == "imp":
         return _implicit(n.kids[0], n.kids[1])
     if k == "frac":
-        return _fraction(n.kids[0], n.kids[1])
+        return _fraction(n.kids[0], n.kids[1], spaced=bool(n.parts))
     if k == "pow":
         return _power(n.kids[0], n.kids[1])
     if k == "root":
@@ -825,7 +1016,11 @@ def _render(n: _Node) -> tuple[str, bool]:
     if k == "group":
         inner = n.kids[0]
         if inner.kind == "list":
-            return _list(inner, point=True)
+            if n.text == "{":
+                return f"the set {_list(inner, point=False)[0]}", False
+            return _list(inner, point=n.text == "(")
+        if _is_relation(inner):
+            return _render(inner)  # "(3x + 5 = 20)" is an equation in parentheses, not a quantity
         if _is_compound(inner):
             return f"the quantity {_render(inner)[0]}", True
         return _render(inner)
@@ -868,8 +1063,14 @@ def _implicit(left: _Node, right: _Node) -> tuple[str, bool]:
     return _join(_render(left), "times", _render(right))
 
 
-def _fraction(num: _Node, den: _Node) -> tuple[str, bool]:
+def _is_whole(n: _Node) -> bool:
+    return n.kind == "num" and n.text.replace(",", "").isdigit()
+
+
+def _fraction(num: _Node, den: _Node, spaced: bool = False) -> tuple[str, bool]:
     n0, d0 = _unwrap(num), _unwrap(den)
+    if spaced and _is_whole(_strip_neg(n0)) and _is_whole(d0):
+        return _join(_render(num), "divided by", _render(den))  # "10 / 2" is a division, not ten halves
     signs: list[str] = []
     while n0.kind == "neg":
         signs.append(_UNARY[n0.text])
@@ -891,16 +1092,77 @@ def _power(base: _Node, exp: _Node) -> tuple[str, bool]:
     return _join(rendered, "to the power of", _operand(exp))
 
 
-def _render_root(node: _Node, prev_word: str, next_word: str) -> str:
-    if node.kind == "group" and _is_point(node.kids[0]) and prev_word in _POINT_WORDS:
-        return _list(node.kids[0], point=False)[0]
-    a, b = (_unwrap(k) for k in node.kids) if len(node.kids) == 2 else (node, node)
-    whole_numbers = a.kind == b.kind == "num" and a.text.isdigit() and b.text.isdigit()
-    if whole_numbers and node.kind == "frac" and prev_word in _OF_WORDS and next_word != "of":
-        return f"{_number_words(a.text)} {_OF_WORDS[prev_word]} {_number_words(b.text)}"
-    if whole_numbers and node.kind == "bin" and node.text == "-" and prev_word in _RANGE_WORDS:
-        return f"{_number_words(a.text)} to {_number_words(b.text)}"
+def _render_root(node: _Node, prev_word: str, next_word: str, aux: str = "") -> str:
+    if node.kind == "group" and node.text == "(":
+        if _is_point(node.kids[0]) and prev_word in _POINT_WORDS:
+            return _list(node.kids[0], point=False)[0]
+        if _is_relation(node.kids[0]):
+            return f"({_render(node.kids[0])[0]})"
+    if node.kind == "frac" and len(node.kids) == 2:
+        a, b = (_unwrap(k) for k in node.kids)
+        whole_numbers = a.kind == b.kind == "num" and a.text.isdigit() and b.text.isdigit()
+        if whole_numbers and prev_word in _OF_WORDS and next_word != "of":
+            return f"{_number_words(a.text)} {_OF_WORDS[prev_word]} {_number_words(b.text)}"
+    if (spoken := _range(node, prev_word, next_word)) is not None:
+        return spoken
+    if aux and _is_relation(node):
+        return _question(node, aux)
     return _render(node)[0]
+
+
+def _minus_chain(node: _Node) -> tuple[list[str], bool] | None:
+    """ "3-4-5" -> (["3", "4", "5"], tight): a chain of whole numbers joined only by minus signs."""
+    nums: list[str] = []
+    tight = True
+    while node.kind == "bin" and node.text == "-":
+        right = node.kids[1]
+        if right.kind != "num" or not right.text.isdigit():
+            return None
+        nums.append(right.text)
+        tight = tight and bool(node.parts)
+        node = node.kids[0]
+    if node.kind != "num" or not node.text.isdigit() or not nums:
+        return None
+    nums.append(node.text)
+    return nums[::-1], tight
+
+
+def _range(node: _Node, prev_word: str, next_word: str) -> str | None:
+    """Prose ranges, scores and labels: "problems 1-5", "from 1-10", "2-3 more", "50-50", "a 3-4-5 triangle"."""
+    chain = _minus_chain(node)
+    if chain is None:
+        return None
+    nums, tight = chain
+    words = [_number_words(x) for x in nums]
+    if len(nums) > 2:
+        return "-".join(words) if tight and next_word in _LABEL_AFTER else None
+    a, b = int(nums[0]), int(nums[1])
+    if prev_word in _RANGE_BEFORE:
+        return " to ".join(words)
+    if prev_word in _RANGE_UP_BEFORE and a < b:
+        return f" {'and' if prev_word == 'between' else 'to'} ".join(words)
+    if tight and a == b == 50:
+        return "fifty-fifty"
+    if tight and a < b and next_word in _RANGE_AFTER:
+        return " to ".join(words)
+    return None
+
+
+def _question(node: _Node, aux: str) -> str:
+    """ "Is 7 > 3?" -> "Is seven greater than three?": the question already says "is"."""
+    ops: list[tuple[str, _Node]] = []
+    while _is_relation(node):
+        ops.append((node.text, node.kids[1]))
+        node = node.kids[0]
+    acc = _render(node)
+    for op, right in reversed(ops):
+        word = _OPWORDS[op]
+        if op in ("=", "=="):
+            word = "equal" if aux in _DO_AUX else "equal to"
+        elif aux in _QUESTION_AUX:
+            word = word.removeprefix("is ")
+        acc = _join(acc, word, _render(right))
+    return acc[0]
 
 
 def _trivial(node: _Node) -> bool:
@@ -916,6 +1178,7 @@ class _Out:
     def __init__(self) -> None:
         self.parts: list[str] = []
         self.last_generated = False
+        self.question: tuple[str, int] | None = None  # (aux, len(parts)) after a relation read as a question
 
     def _last_char(self) -> str:
         for part in reversed(self.parts):
@@ -938,8 +1201,20 @@ class _Out:
         self.last_generated = True
 
     def last_word(self) -> str:
-        m = re.search(r"([A-Za-z]+)\s*$", "".join(self.parts[-3:]))
+        m = re.search(r"([A-Za-z]+)[:\s]*$", "".join(self.parts[-4:]))
         return m.group(1).lower() if m else ""
+
+    def clause_aux(self) -> str:
+        """The auxiliary that opens a question right before the cursor: "Is ", "So, is ", "Does "."""
+        if self.question is not None:
+            aux, end = self.question
+            if re.fullmatch(r"\s+(?:or|and)\s+", "".join(self.parts[end:])):
+                return aux  # "Is x = 3 or x = 4?": the second relation is part of the same question
+        window = 12
+        m = _AUX_RE.search("".join(self.parts[-window:]))
+        if m is None or (m.group(1) is None and len(self.parts) > window):
+            return ""
+        return m.group(2).lower()
 
     def text(self) -> str:
         return "".join(self.parts)
@@ -963,7 +1238,13 @@ def _emit_token(out: _Out, tok: _Tok) -> None:
     if tok.kind == "ord":
         out.generated(_ordinal(int(tok.text[:-2])))
     elif tok.kind == "plural":
-        out.generated(_plural(_number_words(tok.text[:-1])))
+        digits = tok.text[:-1]
+        words = _decade_words(digits) or _number_words(digits)
+        out.generated(_plural(words.removeprefix("one ") if words in _ONE_SCALES else words))
+    elif tok.kind == "section":
+        out.generated(" point ".join(_number_words(part) for part in tok.text.split(".")))
+    elif tok.kind == "word" and tok.text.lower() in _ROOT_WORDS:
+        out.generated(_ROOT_WORDS[tok.text.lower()])
     elif tok.kind == "hash":
         out.generated("number")
     elif tok.kind == "var":
@@ -998,7 +1279,12 @@ def _convert(text: str) -> str:
             except _Fail:
                 node = None
             if node is not None and not _trivial(node):
-                out.generated(_render_root(node, out.last_word(), _next_word(toks, parser.i)))
+                if parser.i - i > _MAX_REGION_TOKENS:
+                    out.generated(_flat(toks[i : parser.i]))
+                else:
+                    aux = out.clause_aux()
+                    out.generated(_render_root(node, out.last_word(), _next_word(toks, parser.i), aux))
+                    out.question = (aux, len(out.parts)) if aux and _is_relation(node) else None
                 i = parser.i
                 continue
         _emit_token(out, toks[i])
@@ -1006,8 +1292,30 @@ def _convert(text: str) -> str:
     return out.text()
 
 
+_FLAT_WORDS = {**_FALLBACK, **_OPWORDS, "^": "to the power of", "**": "to the power of"}
+
+
+def _flat(toks: list[_Tok]) -> str:
+    """Read a region token by token. Used for regions too long to render as a tree; never recurses."""
+    words: list[str] = []
+    for tok in toks:
+        if tok.kind == "ws":
+            continue
+        if tok.kind in ("num", "mixed", "ratio", "money"):
+            words.append(_render(_Node(tok.kind, tok.text, parts=tok.parts))[0])
+        elif tok.kind == "var":
+            words.append(tok.parts[0])
+        elif tok.kind == "op":
+            if word := _FLAT_WORDS.get(tok.text, ""):
+                words.append(word)
+        else:
+            words.append(tok.text)
+    return " ".join(words)
+
+
 def _crude(text: str) -> str:
     for sym, word in sorted(_FALLBACK.items(), key=lambda kv: -len(kv[0])):
         if sym not in "-()[]{},":
             text = text.replace(sym, f" {word} " if word else " ")
+    text = _NUM_RE.sub(lambda m: f" {_number_words(m.group())} ", text)
     return re.sub(r"[ \t]{2,}", " ", text).strip()

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import csv
+import logging
 import random
 import re
+from pathlib import Path
 
 import pytest
 
@@ -179,6 +182,194 @@ CASES: list[tuple[str, str]] = [
     ("−5°C", "negative five degrees Celsius"),
 ]
 
+# Review findings: each case failed before the fix it guards.
+REVIEW_CASES: list[tuple[str, str]] = [
+    # en/em dashes between numbers: no literal "None", unspaced number-dash-number is a range
+    ("pages 3–5", "pages three to five"),
+    ("Try 2–3 more problems.", "Try two to three more problems."),
+    ("5—6", "five to six"),
+    ("3 –5", "three minus five"),
+    ("(x+1)–2", "the quantity x plus one, minus two"),
+    ("x–3", "x minus three"),
+    ("between 5–10 minutes", "between five and ten minutes"),
+    ("Sections 2.1–2.4", "Sections two point one to two point four"),
+    ("x = 3–5", "x equals three minus five"),
+    # a tight fraction binds tighter than a spaced × ÷ * ·
+    ("2/3 × 3/5", "two thirds times three fifths"),
+    ("5/6 ÷ 1/3", "five sixths divided by one third"),
+    ("3 × 1/2", "three times one half"),
+    ("6 ÷ 1/2", "six divided by one half"),
+    ("4 × 3/4", "four times three fourths"),
+    ("2/3 * 3/5 = 2/5", "two thirds times three fifths equals two fifths"),
+    ("1/2 · 4 = 2", "one half times four equals two"),
+    ("3 x 1/2", "three times one half"),
+    ("√(2/3 × 3/5)", "the square root of the quantity two thirds times three fifths"),
+    # a question's "is" is not doubled
+    ("Is 7 > 3?", "Is seven greater than three?"),
+    ("Is 3 < 7 true?", "Is three less than seven true?"),
+    ("Is x = 3?", "Is x equal to three?"),
+    ("So, is x ≥ 4?", "So, is x greater than or equal to four?"),
+    ("Does 3 + 4 = 7?", "Does three plus four equal seven?"),
+    ("Is x = 3 or x = 4?", "Is x equal to three or x equal to four?"),
+    ("Is x = 3? Or x = 4.", "Is x equal to three? Or x equals four."),
+    ("The answer is x > 3.", "The answer is x is greater than three."),
+    ("Is it true that 7 > 3?", "Is it true that seven is greater than three?"),
+    ("What is 8-3?", "What is eight minus three?"),
+    # function arguments and sets are not points; a relation in parentheses is not a quantity
+    ("f(x, y)", "f of x, y"),
+    ("g(1, 2)", "g of one, two"),
+    ("x ∈ {1, 2}", "x is in the set one, two"),
+    ("[2, 3]", "two, three"),
+    ("Solve (3x + 5 = 20) now.", "Solve (three x plus five equals twenty) now."),
+    ("(x = 3)", "(x equals three)"),
+    # bare sqrt, decades, labels, spaced division
+    ("sqrt 9", "the square root of nine"),
+    ("sqrt x + 1", "the square root of x plus one"),
+    ("Press the sqrt key.", "Press the square root key."),
+    ("In the 1990s", "In the nineteen nineties"),
+    ("the 1900s", "the nineteen hundreds"),
+    ("the 2010s", "the twenty tens"),
+    ("the 2000s", "the two thousands"),
+    ("count by 100s", "count by hundreds"),
+    ("count by 1000s", "count by thousands"),
+    ("a 50-50 chance", "a fifty-fifty chance"),
+    ("15-35 meters", "fifteen to thirty five meters"),
+    ("Score: 3-2", "Score: three to two"),
+    ("Vitamin B-12 helps.", "Vitamin B-twelve helps."),
+    ("4 / 2 = 2", "four divided by two equals two"),
+    ("10 / 2 = 5", "ten divided by two equals five"),
+    ("x / 2", "x over two"),
+    ("You got 7 / 10", "You got seven out of ten"),
+    # an article before a negative number
+    ("You get a -3 on the right.", "You get a negative three on the right."),
+    ("Multiply by a -1.", "Multiply by a negative one."),
+    ("A -5 is negative.", "A negative five is negative."),
+    ("a - 3", "a minus three"),
+    ("a-3", "a minus three"),
+    ("x = a -3", "x equals a minus three"),
+    ("Then a -3 = -1.", "Then a minus three equals negative one."),
+    ("Let B-2 = 5", "Let B minus two equals five"),
+    ("Do 2x + 3 = 11 next.", "Do two x plus three equals eleven next."),
+    # ranges, labels and section numbers in prose
+    ("Pick a number from 1-10.", "Pick a number from one to ten."),
+    ("Grades 7-8", "Grades seven to eight"),
+    ("It's 50-50.", "It's fifty-fifty."),
+    ("Draw a 3-4-5 triangle.", "Draw a three-four-five triangle."),
+    ("Section 2.3.1", "Section two point three point one"),
+    ("Subtract 3 from 10-2.", "Subtract three from ten minus two."),
+    ("10-3-2 = 5", "ten minus three minus two equals five"),
+    ("Do 8-3 first.", "Do eight minus three first."),
+]
+
+# LaTeX that qwen2.5vl:3b wrote in a live run when not given the math system prompt.
+LATEX_CASES: list[tuple[str, str]] = [
+    (r"\( \frac{2}{3} \times \frac{3}{5} \)", "two thirds times three fifths"),
+    (
+        r"So, \( \frac{2 \times 3}{3 \times 5} = \frac{6}{15} \), which simplifies to \( \frac{2}{5} \).",
+        "So, the quantity two times three, over the quantity three times five, equals six fifteenths, "
+        "which simplifies to two fifths.",
+    ),
+    (r"\( \frac{5}{6} \div \frac{1}{3} \)", "five sixths divided by one third"),
+    (r"$x^{2} + 1$", "x squared plus one"),
+    (r"$$x = \frac{1}{2}$$", "x equals one half"),
+    (r"\sqrt{16} = 4", "the square root of sixteen equals four"),
+    (r"\sqrt[3]{8}", "the cube root of eight"),
+    (r"\[ x \leq 5 \]", "x is less than or equal to five"),
+    (r"\left( x + 1 \right)^2", "the quantity x plus one, squared"),
+    (r"x_{1} + x_{2}", "x sub one plus x sub two"),
+    (r"\frac{\frac{1}{2}}{3}", "one half over three"),
+    (r"\dfrac{3}{4} of \text{the pizza}", "three fourths of the pizza"),
+    (r"x \neq 3 \text{ and } y \geq -2", "x is not equal to three and y is greater than or equal to negative two"),
+    ("It costs $5 and $10.", "It costs five dollars and ten dollars."),
+    ("Pay $3 for $x$.", "Pay three dollars for x."),
+    (r"$x$ and $y + 1$", "x and y plus one"),
+    (r"3\text{ and }y", "three and y"),
+]
+
+# Every problem and answer in knowledge/math/quiz_bank.csv and worksheet_linear_equations.md, read by hand.
+BANK_CASES: list[tuple[str, str]] = [
+    ("1/4 + 2/4", "one fourth plus two fourths"),
+    ("3/4", "three fourths"),
+    ("1/2 + 1/3", "one half plus one third"),
+    ("5/6", "five sixths"),
+    ("3/4 - 1/2", "three fourths minus one half"),
+    ("1/4", "one fourth"),
+    ("2/5 + 3/10", "two fifths plus three tenths"),
+    ("7/10", "seven tenths"),
+    ("2/3 × 3/5", "two thirds times three fifths"),
+    ("2/5", "two fifths"),
+    ("5/6 ÷ 1/3", "five sixths divided by one third"),
+    ("5/2", "five halves"),
+    ("x + 7 = 12", "x plus seven equals twelve"),
+    ("x = 5", "x equals five"),
+    ("x - 4 = 9", "x minus four equals nine"),
+    ("x = 13", "x equals thirteen"),
+    ("5x = 35", "five x equals thirty five"),
+    ("x = 7", "x equals seven"),
+    ("x/3 = 6", "x over three equals six"),
+    ("x = 18", "x equals eighteen"),
+    ("y + 2.5 = 8", "y plus two point five equals eight"),
+    ("y = 5.5", "y equals five point five"),
+    ("-4x = 24", "negative four x equals twenty four"),
+    ("x = -6", "x equals negative six"),
+    ("3x + 5 = 20", "three x plus five equals twenty"),
+    ("2x - 7 = 9", "two x minus seven equals nine"),
+    ("x = 8", "x equals eight"),
+    ("4x - 9 = 15", "four x minus nine equals fifteen"),
+    ("x = 6", "x equals six"),
+    ("x/4 + 3 = 8", "x over four plus three equals eight"),
+    ("x = 20", "x equals twenty"),
+    ("5x + 4 = -11", "five x plus four equals negative eleven"),
+    ("x = -3", "x equals negative three"),
+    ("7 - 2x = 1", "seven minus two x equals one"),
+    ("x = 3", "x equals three"),
+    ("2(x + 3) = 14", "two times the quantity x plus three, equals fourteen"),
+    ("x = 4", "x equals four"),
+    ("3(x - 2) = 15", "three times the quantity x minus two, equals fifteen"),
+    ("4x + 2x - 5 = 13", "four x plus two x minus five equals thirteen"),
+    ("5(x + 1) - 2x = 20", "five times the quantity x plus one, minus two x equals twenty"),
+    ("2(3x - 4) = 4x + 6", "two times the quantity three x minus four, equals four x plus six"),
+    ("3(x + 4) = 2(x + 9)", "three times the quantity x plus four, equals two times the quantity x plus nine"),
+    ("x + y = 10 and x - y = 4", "x plus y equals ten and x minus y equals four"),
+    ("x = 7 and y = 3", "x equals seven and y equals three"),
+    ("y = 2x and x + y = 9", "y equals two x and x plus y equals nine"),
+    ("x = 3 and y = 6", "x equals three and y equals six"),
+    ("2x + y = 11 and x - y = 1", "two x plus y equals eleven and x minus y equals one"),
+    ("x = 4 and y = 3", "x equals four and y equals three"),
+    ("x^2 + 5x + 6 = 0", "x squared plus five x plus six equals zero"),
+    ("x = -2 or x = -3", "x equals negative two or x equals negative three"),
+    ("x^2 - 7x + 12 = 0", "x squared minus seven x plus twelve equals zero"),
+    ("x = 3 or x = 4", "x equals three or x equals four"),
+    ("x^2 - 9 = 0", "x squared minus nine equals zero"),
+    ("x = 3 or x = -3", "x equals three or x equals negative three"),
+    ("x^2 - 2x - 15 = 0", "x squared minus two x minus fifteen equals zero"),
+    ("x = 5 or x = -3", "x equals five or x equals negative three"),
+    # worksheet_linear_equations.md
+    ("x + 9 = 15", "x plus nine equals fifteen"),
+    ("x - 6 = 2", "x minus six equals two"),
+    ("8x = 56", "eight x equals fifty six"),
+    ("x/5 = 4", "x over five equals four"),
+    ("2x + 3 = 11", "two x plus three equals eleven"),
+    ("6x - 5 = 25", "six x minus five equals twenty five"),
+    ("x/2 - 4 = 3", "x over two minus four equals three"),
+    ("x = 14", "x equals fourteen"),
+    ("10 - 3x = 4", "ten minus three x equals four"),
+    ("x = 2", "x equals two"),
+    ("4(x - 1) = 20", "four times the quantity x minus one, equals twenty"),
+    ("3x + 2x + 4 = 29", "three x plus two x plus four equals twenty nine"),
+    ("5x - 3 = 2x + 9", "five x minus three equals two x plus nine"),
+    ("2(x + 5) = 3x + 4", "two times the quantity x plus five, equals three x plus four"),
+    # how the worksheet lines read when the whole line is spoken
+    ("1. x + 9 = 15", "one. x plus nine equals fifteen"),
+    ("Answer: x = 6", "Answer: x equals six"),
+    ("Problem 5: 2/3 × 3/5", "Problem five: two thirds times three fifths"),
+]
+
+ALL_CASES = CASES + REVIEW_CASES + LATEX_CASES + BANK_CASES
+KNOWLEDGE = Path(__file__).resolve().parents[1] / "biobench_sar" / "knowledge" / "math"
+DASHES = ["pages 3–5", "Try 2–3 more problems.", "5—6", "3 –5", "(x+1)–2", "3– 5", "x —2", "a–(b)", "1–2–3", "2—"]
+DEEP_CHAINS = ["1+" * 3000 + "1", "1/" * 2000 + "2", "1-" * 2000 + "1", "2(x)" * 1500, "x" + " = x" * 1500]
+
 PROSE = [
     "Great job! You solved it.",
     "Laguna de Bustillos is in Chihuahua (Mexico).",
@@ -229,7 +420,7 @@ CORPUS = [
 ]
 
 
-@pytest.mark.parametrize(("text", "expected"), CASES)
+@pytest.mark.parametrize(("text", "expected"), ALL_CASES)
 def test_to_speech(text: str, expected: str) -> None:
     assert to_speech(text) == expected
 
@@ -244,13 +435,13 @@ def test_prose_unchanged(text: str) -> None:
     assert to_speech(text) == text
 
 
-@pytest.mark.parametrize("text", [t for t, _ in CASES] + CORPUS)
+@pytest.mark.parametrize("text", [t for t, _ in ALL_CASES] + CORPUS)
 def test_idempotent(text: str) -> None:
     once = to_speech(text)
     assert to_speech(once) == once
 
 
-@pytest.mark.parametrize("text", [t for t, _ in CASES] + CORPUS)
+@pytest.mark.parametrize("text", [t for t, _ in ALL_CASES] + CORPUS)
 def test_single_pass_is_stable(text: str) -> None:
     once = mathspeak._convert(text)
     assert mathspeak._convert(once) == once
@@ -263,7 +454,7 @@ def test_corpus_has_no_forbidden_symbols(text: str) -> None:
     assert not re.search(r"[\^/*=+<>%√×÷]|\d", spoken), spoken
 
 
-@pytest.mark.parametrize("text", [t for t, _ in CASES])
+@pytest.mark.parametrize("text", [t for t, _ in ALL_CASES])
 def test_cases_have_no_forbidden_symbols(text: str) -> None:
     assert not re.search(r"[\^/*=+<>%√×÷]", to_speech(text))
 
@@ -285,7 +476,7 @@ def test_has_math_symbols_false(text: str) -> None:
 
 
 def test_has_math_symbols_false_after_speech() -> None:
-    for text, _ in CASES:
+    for text, _ in ALL_CASES:
         assert not has_math_symbols(to_speech(text)), text
 
 
@@ -341,3 +532,73 @@ def test_random_input_never_raises() -> None:
         out = to_speech(text)
         assert isinstance(out, str)
         assert to_speech(out) == out, (text, out)
+
+
+def _bank_items() -> list[str]:
+    items: list[str] = []
+    with (KNOWLEDGE / "quiz_bank.csv").open(encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            items += [row["problem"], row["answer"]]
+    for line in (KNOWLEDGE / "worksheet_linear_equations.md").read_text(encoding="utf-8").splitlines():
+        if m := re.match(r"\s*(?:\d+\.|Answer:)\s+(.+)", line):
+            items.append(m.group(1))
+    return items
+
+
+def test_bank_cases_cover_the_knowledge_files() -> None:
+    items = _bank_items()
+    assert len(items) >= 80
+    reviewed = {t for t, _ in BANK_CASES}
+    assert [t for t in items if t not in reviewed] == []
+
+
+@pytest.mark.parametrize("text", _bank_items())
+def test_bank_items_read_without_digits_or_symbols(text: str) -> None:
+    spoken = to_speech(text)
+    assert not has_math_symbols(spoken), spoken
+    assert not re.search(r"[\^/*=+<>%√×÷()]|\d|None", spoken), spoken
+    assert to_speech(spoken) == spoken
+
+
+@pytest.mark.parametrize("text", DASHES)
+def test_dashes_never_say_none(text: str) -> None:
+    spoken = to_speech(text)
+    assert "None" not in spoken, spoken
+    assert to_speech(spoken) == spoken
+
+
+def test_tight_fraction_binds_tighter_than_spaced_division() -> None:
+    toks = mathspeak._tokenize("6 ÷ 1/2")
+    node = mathspeak._Parser(toks, 0).relation()
+    assert node.kind == "bin" and node.text == "÷"
+    assert node.kids[1].kind == "frac"
+
+
+@pytest.mark.parametrize("text", DEEP_CHAINS, ids=["plus", "over", "minus", "implicit", "equals"])
+def test_deep_chains_are_spoken_without_fallback(text: str, caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING)
+    spoken = to_speech(text)
+    assert caplog.records == []
+    assert not re.search(r"[\d/+=()^-]", spoken), spoken[:80]
+    assert to_speech(spoken) == spoken
+
+
+def test_fallback_logs_one_line_and_spells_numbers(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def boom(_: str) -> str:
+        raise RecursionError("too deep")
+
+    monkeypatch.setattr(mathspeak, "_convert", boom)
+    caplog.set_level(logging.WARNING)
+    out = to_speech("3x + 12 = 5")
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+    assert caplog.records[0].exc_info is None
+    assert not re.search(r"\d", out), out
+    assert "twelve" in out
+
+
+@pytest.mark.parametrize("text", ["x ∈ {1, 2}", "x ∉ A", r"\\frac{1}{2}", r"\\( x \\)", r"2 \\times 3"])
+def test_set_membership_is_a_math_symbol(text: str) -> None:
+    assert has_math_symbols(text)
+    assert not has_math_symbols(to_speech(text))
