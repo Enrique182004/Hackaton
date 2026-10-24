@@ -17,13 +17,16 @@ and decimals as written; CRW / CRHW the same on the whole board, as before the c
 Biology: A missing step, B complete, AB complete after an earlier "not yet".
 Graded in code (grading.py): QQC/QQW/QQP a quadratic x^2 - 2x - 15 = 0 checked right / wrong / half right, QSC/QSW a
 system right / wrong, EQQW the wrong quadratic in Spanish. A wrong answer must be "error" with one hint and no answer.
+QQ2/EQQ2: the right quadratic with one root per line (every answer line is read). QFN: only 1/2 + 1/3 on the board,
+never graded ("I can't see your final answer yet"); QFC: 1/2 + 1/3 = 5/6 worked out, graded right.
 
 --flow runs the whole pipeline (Assistant + this model, a synthetic board, a temporary quiz bank): a quiz with a wrong
-then right answer on 3x + 5 = 20, a wrong then right quadratic, then "stop the quiz" -> the confirmation -> "yes" ->
-stopped with the score. --flow es runs it in Spanish ("Termina el quiz" -> "Sí").
+then right answer on 3x + 5 = 20, a wrong then right quadratic (one root per line), then "stop the quiz" -> the
+confirmation -> "yes" -> stopped with the score. --flow es runs it in Spanish ("Termina el quiz" -> "Sí").
 
 Example (the final-wiring live check): --scenarios --profile math --runs 2 --only ELO,ELE,EH,EHA,EQD,EQC,EQW,CR
 Code grading: --scenarios --profile math --runs 2 --only QC,QW,QQC,QQW,QQP,QSC,QSW,H,HA,EQC,EQW,EQQW
+Answer lines and unfinished work: --scenarios --profile math --runs 2 --only QQ2,EQQ2,QFN,QFC,QN
 Pipeline: --flow en --runs 2 and --flow es --runs 2
 Answer-leak check: --scenarios --profile math --runs 3 --only EQCN,EQWN and --runs 2 --only H,EH,HS,EHS
 """
@@ -837,6 +840,18 @@ QUADRATIC_TASK = {
 }
 SYSTEM = "x + y = 10 and x - y = 4"
 SYSTEM_TASK = {**QUADRATIC_TASK, "number": 9, "problem": SYSTEM, "answer": "x = 7 and y = 3"}
+# Arithmetic is its own answer once code works it out: the problem alone on the board must never be graded.
+FRACTION_PROBLEM = "1/2 + 1/3"
+FRACTION_TASK = {**QUADRATIC_TASK, "number": 2, "problem": FRACTION_PROBLEM, "answer": None}
+
+
+def _not_graded(spoken: str) -> str | None:
+    """Only the problem on the board: "I can't see your final answer yet", never praise or the result (five sixths)."""
+    if re.search(r"five\s+sixths|5\s*/\s*6|cinco\s+sextos", spoken, re.IGNORECASE):
+        return "gave the result"
+    if praises(spoken):
+        return "praised a problem with no answer"
+    return None if re.search(r"can't see|no veo", spoken, re.IGNORECASE) else "did not ask for the final answer"
 
 
 def _never_states(problem: str, language: str = "en") -> Callable[[str], str | None]:
@@ -914,6 +929,47 @@ GRADED_SCENARIOS = {
         context=[],
         check=_all(_graded, _never_states(QUADRATIC, "es"), spanish),
         language="es",
+    ),
+    "QQ2": Scenario(
+        f"quiz check {QUADRATIC}, right, one root per line: x = 5 / x = -3",
+        "Check my answer.",
+        lambda: make_board([QUADRATIC, "x = 5", "x = -3"]),
+        "celebrating",
+        mode="quiz",
+        task=QUADRATIC_TASK,
+        context=[],
+        check=_graded,
+    ),
+    "EQQ2": Scenario(
+        f"ES quiz check {QUADRATIC}, right, one root per line: x = 5 / x = -3",
+        "Revisa mi respuesta.",
+        lambda: make_board([QUADRATIC, "x = 5", "x = -3"]),
+        "celebrating",
+        mode="quiz",
+        task=QUADRATIC_TASK,
+        context=[],
+        check=_all(_graded, spanish),
+        language="es",
+    ),
+    "QFN": Scenario(
+        f"quiz check {FRACTION_PROBLEM}, only the problem written",
+        "Check my answer.",
+        lambda: make_board([FRACTION_PROBLEM]),
+        "idle",
+        mode="quiz",
+        task=FRACTION_TASK,
+        context=[],
+        check=_not_graded,
+    ),
+    "QFC": Scenario(
+        f"quiz check {FRACTION_PROBLEM}, worked out: = 5/6",
+        "Check my answer.",
+        lambda: make_board([f"{FRACTION_PROBLEM} = 5/6"]),
+        "celebrating",
+        mode="quiz",
+        task=FRACTION_TASK,
+        context=[],
+        check=_graded,
     ),
 }
 MATH_SCENARIOS.update(SPANISH_SCENARIOS)
@@ -1028,7 +1084,8 @@ FLOWS: dict[str, list[FlowStep]] = {
         FlowStep("Check my answer.", [Q1, "x = 7"], "error", _graded_step("wrong", Q1)),
         FlowStep("Check my answer.", [Q1, "x = 5"], "celebrating", _graded_step("right", Q1)),
         FlowStep("Check my answer.", [Q2, "x = 7 or x = -3"], "error", _graded_step("wrong", Q2)),
-        FlowStep("Check my answer.", [Q2, "x = 5 or x = -3"], "celebrating", _graded_step("right", Q2)),
+        # One root per line: every answer line is read, not only the bottom one.
+        FlowStep("Check my answer.", [Q2, "x = 5", "x = -3"], "celebrating", _graded_step("right", Q2)),
         FlowStep("Stop the quiz.", [], "idle", _confirming),
         # Both problems were missed once first: none counts as solved on the first try.
         FlowStep("Yes.", [], "idle", _stopped("the quiz is over", "zero of three")),
@@ -1038,6 +1095,7 @@ FLOWS: dict[str, list[FlowStep]] = {
         FlowStep("Revisa mi respuesta.", [Q1, "x = 7"], "error", _graded_step("wrong", Q1, "es")),
         FlowStep("Revisa mi respuesta.", [Q1, "x = 5"], "celebrating", _graded_step("right", Q1, "es")),
         FlowStep("Revisa mi respuesta.", [Q2, "x = 7 o x = -3"], "error", _graded_step("wrong", Q2, "es")),
+        FlowStep("Revisa mi respuesta.", [Q2, "x = 5", "x = -3"], "celebrating", _graded_step("right", Q2, "es")),
         FlowStep("Termina el quiz.", [], "idle", _confirming),
         FlowStep("Sí.", [], "idle", _stopped("terminamos el quiz", "cero de tres")),
     ],

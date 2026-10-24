@@ -383,7 +383,15 @@ def test_quiz_check_prompt() -> None:
     assert "make up" not in unknown, "the next problem is the tutor's, not the model's"
     invented = vc.quiz_task_text({**task, "problem": "4x - 3 = 13", "answer": None})
     assert "Expected answer" not in invented and "x = 4" not in invented, "code solves it, so it is graded in code"
+    # The bottom line, and every line of an answer that takes more than one: the model read only "x = 5" of "x = 5"
+    # over "x = -3". Asked for "every answer line" instead, it wrote the solution of a problem with no answer yet.
     assert "bottom line of the student's writing" in text and "not a problem from this message" in text
+    assert "more than one line (both roots, or x and y), copy each of them" in text and 'joined with " ; "' in text
+    spanish = vc.quiz_task_text(task, "es")
+    assert "última línea" in spanish and "más de una línea" in spanish and 'unidas con " ; "' in spanish
+    for language in ("en", "es"):
+        prompt = system_prompt("math", "quiz", language)
+        assert '" ; "' in prompt and ("the problem itself if no answer" in prompt or "el mismo problema" in prompt)
     defaults = vc.quiz_task_text({"kind": "quiz", "stage": "check", "number": "x", "total": None})
     assert "Problem 1 of 10" in defaults
 
@@ -1228,6 +1236,7 @@ def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -
         *("CR", "CRW", "CRH", "CRHW"),
         *("EQCN", "EQWN", "QCN", "QWN", "HS", "EHS"),
         *("QQC", "QQW", "QQP", "QSC", "QSW", "EQQW"),
+        *("QQ2", "EQQ2", "QFN", "QFC"),
     }
     assert all(b.MATH_SCENARIOS[k].language == "es" for k in ("ELO", "ELE", "EH", "EHA", "EQD", "EQC", "EQW"))
     assert set(b.BIO_SCENARIOS) == {"A", "B", "AB", "BA"}
@@ -1977,6 +1986,24 @@ def test_bench_graded_scenarios(monkeypatch: pytest.MonkeyPatch) -> None:
     assert b.MATH_SCENARIOS["QSC"].expected == "celebrating" and b.MATH_SCENARIOS["EQQW"].language == "es"
     board, regions = b.draw_board(["x = 5"], (1280, 800))
     assert board.shape == (800, 1280, 3) and regions[0]["x"] == 200
+
+
+def test_bench_answer_line_and_unfinished_scenarios(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = _bench(monkeypatch)
+    for key in ("QQ2", "EQQ2"):
+        two_lines = b.MATH_SCENARIOS[key]
+        assert two_lines.expected == "celebrating" and two_lines.task["answer"] == "x = 5 or x = -3"
+        _, regions = two_lines.board()
+        assert len(regions) == 3, "the problem and one root per line"
+    assert b.MATH_SCENARIOS["EQQ2"].language == "es"
+    problem_only = b.MATH_SCENARIOS["QFN"]
+    assert problem_only.expected == "idle" and problem_only.task["answer"] is None
+    assert problem_only.check(vc.TEXTS["en"]["unfinished"]) is None
+    assert problem_only.check("Correct, great job!") == "praised a problem with no answer"
+    assert problem_only.check("Not quite. It is five sixths.") == "gave the result"
+    assert b.MATH_SCENARIOS["QFC"].expected == "celebrating"
+    steps = [s.board for s in b.FLOWS["en"]] + [s.board for s in b.FLOWS["es"]]
+    assert steps.count([b.Q2, "x = 5", "x = -3"]) == 2, "both flows check a root per line"
 
 
 @pytest.mark.parametrize("language", ["en", "es"])

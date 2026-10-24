@@ -230,7 +230,8 @@ Do not solve it. board_answer "", "idle", target = screen center.
 - Stage hint: the student is stuck. Explain ONLY the next step of the given problem and ask them to write it. \
 NEVER say the answer. board_answer "", "pointing" at the ink to work on.
 - Stage check: FIRST look at the photo and copy the bottom line of the student's writing into board_answer, \
-exactly as written (the problem itself if no answer is written yet). Never solve the problem yourself.
+exactly as written (the problem itself if no answer is written yet). If the answer takes more than one line (both \
+roots, or x and y), copy each of them, joined with " ; ". Never solve the problem yourself.
   - Correct: "celebrating"; praise briefly. Do not read out any problem: the next one is read after you.
   - Wrong: "error"; say "Not quite" and give ONE short hint. NEVER say the correct answer.
   target = center of the answer's ink region.
@@ -323,7 +324,8 @@ No lo resuelvas. board_answer "", "idle", target = centro de la pantalla.
 - Etapa pista: el estudiante está atorado. Explica SOLO el siguiente paso del problema dado y pídele que lo escriba. \
 NUNCA digas la respuesta. board_answer "", "pointing" a la tinta que hay que trabajar.
 - Etapa revisar: PRIMERO mira la foto y copia en board_answer la última línea de lo que escribió el estudiante, \
-tal como está escrita (el mismo problema si todavía no hay respuesta). Nunca resuelvas tú el problema.
+tal como está escrita (el mismo problema si todavía no hay respuesta). Si la respuesta ocupa más de una línea (las \
+dos raíces, o la x y la y), copia cada una, unidas con " ; ". Nunca resuelvas tú el problema.
   - Correcta: "celebrating"; felicítalo brevemente. No leas ningún problema: el siguiente se lee después de ti.
   - Incorrecta: "error"; di "Casi" y da UNA pista corta. NUNCA digas la respuesta correcta.
   target = centro de la región de tinta de la respuesta.
@@ -595,8 +597,9 @@ def quiz_task_text(task: Mapping[str, Any] | None, language: str = "en") -> str:
         lines.append("This is the last problem: if the answer is correct, congratulate the student on finishing.")
     lines.append(
         "First copy the bottom line of the student's writing in the photo into board_answer, exactly as written "
-        '(not a problem from this message); do not solve anything yourself. If the answer is wrong: "error", one '
-        "hint, never the answer. If it is correct, praise briefly and do not read out any problem."
+        "(not a problem from this message); if the answer takes more than one line (both roots, or x and y), copy "
+        'each of them, joined with " ; ". Do not solve anything yourself. If the answer is wrong: "error", one hint, '
+        "never the answer. If it is correct, praise briefly and do not read out any problem."
     )
     return "\n".join(lines)
 
@@ -620,7 +623,8 @@ def _quiz_task_text_es(t: Mapping[str, Any]) -> str:
         lines.append("Este es el último problema: si la respuesta es correcta, felicita al estudiante por terminar.")
     lines.append(
         "Primero copia en board_answer la última línea de lo que escribió el estudiante en la foto, tal como está "
-        '(no un problema de este mensaje); no resuelvas nada tú. Si la respuesta está mal: "error", una pista, '
+        "(no un problema de este mensaje); si la respuesta ocupa más de una línea (las dos raíces, o la x y la y), "
+        'copia cada una, unidas con " ; ". No resuelvas nada tú. Si la respuesta está mal: "error", una pista, '
         "nunca la respuesta. Si está bien, felicítalo brevemente y no leas ningún problema."
     )
     return "\n".join(lines)
