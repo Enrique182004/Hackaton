@@ -174,25 +174,25 @@ Seed docs in `biobench_sar/knowledge/`. The assistant must:
 | Phase 3 hardware | 🟡 partial | camera + mic blocked by macOS permissions; no projector connected yet |
 
 ## Open work — pick one up
-Each item is self-contained. Branch `feat/<item>`, keep to the listed files, add tests.
+Each item is a GitHub issue labelled [`open-work`](https://github.com/Enrique182004/Hackaton/issues?q=is%3Aopen+label%3Aopen-work); assign yourself before starting. Each item is self-contained. Branch `feat/<item>`, keep to the listed files, add tests.
 
-1. **Hardware: camera + mic on the demo machine** (any) — grant Camera/Microphone to the terminal, run
+1. [#2](https://github.com/Enrique182004/Hackaton/issues/2) **Hardware: camera + mic on the demo machine** (any) — grant Camera/Microphone to the terminal, run
    `python scripts/hardware_check.py`, confirm camera ≥ 30 FPS and mic RMS > 0. Record results here.
-2. **Hardware: projector calibration** (A) — connect projector as 2nd display, open `/` fullscreen on it,
+2. [#3](https://github.com/Enrique182004/Hackaton/issues/3) **Hardware: projector calibration** (A) — connect projector as 2nd display, open `/` fullscreen on it,
    click *Calibrate* on `/precharge`, verify `/api/frame.jpg?warped=1` matches the board. Tune `SAR_CHECKER_*` if detection fails.
-3. **Ink segmentation per flowchart step** (A, `core/vision_loop.py`) — connected arrows currently merge a whole
+3. [#4](https://github.com/Enrique182004/Hackaton/issues/4) **Ink segmentation per flowchart step** (A, `core/vision_loop.py`) — connected arrows currently merge a whole
    flowchart into one region, so the avatar can't point at a single box. Split boxes from connectors
    (e.g. erode before contouring, or detect rectangles with `approxPolyDP`).
-4. **Prompt tuning** (C, `llm/vlm_client.py`) — when a step is missing the model answers `pointing`, not `error`;
+4. [#5](https://github.com/Enrique182004/Hackaton/issues/5) **Prompt tuning** (C, `llm/vlm_client.py`) — when a step is missing the model answers `pointing`, not `error`;
    make the system prompt / few-shot examples push `error` + target the gap between steps.
-5. **Latency** (C/F) — ~26 s per answer on an M4 Air with the 3B model. Try smaller image (downscale to 1024 px),
+5. [#6](https://github.com/Enrique182004/Hackaton/issues/6) **Latency** (C/F) — ~26 s per answer on an M4 Air with the 3B model. Try smaller image (downscale to 1024 px),
    `keep_alive` on Ollama, or an API backend (`SAR_VLM_BACKEND=openai`).
-6. **Wake-word mode on hardware** (D) — test `SAR_LISTEN_MODE=wake` with the real mic; tune chunk length.
-7. **Windows demo machine** (F) — run `scripts/setup_windows.ps1` end-to-end on Windows and fix anything that breaks.
-8. **Scenario test cases 1–4** (all) — run each case from the list above on the real board and record pass/fail.
-9. **Warm-up at startup** (D/F) — preload Whisper and the Ollama model in a background thread so the first
+6. [#7](https://github.com/Enrique182004/Hackaton/issues/7) **Wake-word mode on hardware** (D) — test `SAR_LISTEN_MODE=wake` with the real mic; tune chunk length.
+7. [#8](https://github.com/Enrique182004/Hackaton/issues/8) **Windows demo machine** (F) — run `scripts/setup_windows.ps1` end-to-end on Windows and fix anything that breaks.
+8. [#9](https://github.com/Enrique182004/Hackaton/issues/9) **Scenario test cases 1–4** (all) — run each case from the list above on the real board and record pass/fail.
+9. [#10](https://github.com/Enrique182004/Hackaton/issues/10) **Warm-up at startup** (D/F) — preload Whisper and the Ollama model in a background thread so the first
    question isn't slow.
-10. **Wake-word self-trigger** (D) — pause the wake loop while the avatar is speaking, so its own voice can't
+10. [#11](https://github.com/Enrique182004/Hackaton/issues/11) **Wake-word self-trigger** (D) — pause the wake loop while the avatar is speaking, so its own voice can't
     re-trigger it.
-11. **Status poll during big uploads** (B/F) — `/api/status` waits on the store lock while embeddings run;
+11. [#12](https://github.com/Enrique182004/Hackaton/issues/12) **Status poll during big uploads** (B/F) — `/api/status` waits on the store lock while embeddings run;
     cache the chunk count.
