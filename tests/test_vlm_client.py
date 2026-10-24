@@ -1147,6 +1147,7 @@ def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -
         *("H", "HA", "P", "PF", "QD", "QH", "QC", "QW", "QN", "QDI", "QCI", "QWI", "LO", "LE", "HF"),
         *("ELO", "ELE", "EH", "EHA", "EQD", "EQC", "EQW"),
         *("CR", "CRW", "CRH", "CRHW"),
+        *("EQCN", "EQWN", "QCN", "QWN", "HS", "EHS"),
     }
     assert all(b.MATH_SCENARIOS[k].language == "es" for k in ("ELO", "ELE", "EH", "EHA", "EQD", "EQC", "EQW"))
     assert set(b.BIO_SCENARIOS) == {"A", "B", "AB", "BA"}
@@ -1161,6 +1162,21 @@ def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -
     assert b.judge(offer, AvatarAction(OFFER_QUESTION, "idle", 960, 540)) == []
     assert b.judge(offer, AvatarAction("Fractions.", "pointing", 1, 1)) == ["state pointing", offer.check("Fractions.")]
     assert b.MATH_SCENARIOS["LE"].turns and b.MATH_SCENARIOS["QC"].task["answer"] == "x = 5"
+
+
+def test_bench_no_files_and_stored_notes_scenarios(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = _bench(monkeypatch)
+    for key in ("EQCN", "EQWN", "QCN", "QWN"):
+        assert b.MATH_SCENARIOS[key].chunks() == [], "every file switched off: no notes at all"
+    assert all(b.MATH_SCENARIOS[k].language == "es" for k in ("EQCN", "EQWN", "EHS"))
+    right = b.MATH_SCENARIOS["EQCN"]
+    assert right.check("¡Correcto, muy bien! Problema dos. dos x menos cuatro es igual a diez") is None
+    assert right.check(vc.TEXTS["es"]["no_answer"]), "the copied next problem made a right answer ungraded"
+    assert right.check(vc.TEXTS["es"]["reread"])
+    assert b.MATH_SCENARIOS["QCN"].check(vc.TEXTS["en"]["reread"])
+    notes = b.MATH_SCENARIOS["HS"].chunks()
+    assert notes and all("answer is" not in c.text and "Answer:" not in c.text for c in notes), "stored without them"
+    assert any("problem is 3x + 5 = 20" in c.text for c in notes)
 
 
 def test_bench_spanish_heuristics(monkeypatch: pytest.MonkeyPatch) -> None:

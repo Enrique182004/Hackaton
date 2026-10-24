@@ -8,12 +8,16 @@ QC/QW/QN check (right / wrong / only the problem written), QDI/QCI/QWI quiz with
 LO/LE/HF lesson offer, starter and follow-up. Quiz cases get the real seeded chunks, answers included.
 Spanish (replies in Spanish): ELO/ELE lesson offer and "invéntame uno", EH/EHA help on 3x + 5 = 20,
 EQD/EQC/EQW quiz dictate and check (right / wrong).
+Every file switched off (no notes at all): EQCN/EQWN (Spanish) and QCN/QWN quiz check, right / wrong; a right answer
+fails if the model copied the next problem as the student's answer. HS/EHS: help on 3x + 5 = 20 with the seeded notes
+as the math profile stores them now (answers stripped at ingestion), no leak.
 Crop: a small "3.5 - x^2 = 0.25" on a big board sent as the high-res ink crop: CR what the model copies off the
 board (board_answer of a quiz check: "3.5", then the minus sign) and CRH a help reply whose first step fits the signs
 and decimals as written; CRW / CRHW the same on the whole board, as before the crop.
 Biology: A missing step, B complete, AB complete after an earlier "not yet".
 
 Example (the final-wiring live check): --scenarios --profile math --runs 2 --only ELO,ELE,EH,EHA,EQD,EQC,EQW,CR
+Answer-leak check: --scenarios --profile math --runs 3 --only EQCN,EQWN and --runs 2 --only H,EH,HS,EHS
 """
 
 from __future__ import annotations
@@ -119,15 +123,16 @@ QUIZ_PROBLEM = "2x + 3 = 11"
 INVENTED_PROBLEM = "4x - 3 = 13"  # an invented quiz problem: the task has no answer, code solves it (x = 4)
 
 
-def seed_context(*needles: str) -> list[RetrievedChunk]:
-    """The real seeded math chunks that mention a problem: with their "Answer:" lines and "answer is" columns."""
+def seed_context(*needles: str, stripped: bool = False) -> list[RetrievedChunk]:
+    """The real seeded math chunks that mention a problem: with their "Answer:" lines and "answer is" columns (as an
+    older store holds them), or `stripped` of them at ingestion, as the math profile stores them now."""
     from biobench_sar.rag.ingestor import SUPPORTED_EXTENSIONS, ingest_file
 
     chunks: list[RetrievedChunk] = []
     for path in sorted(MATH_SEED_DIR.glob("*")):
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             continue
-        for c in ingest_file(path):
+        for c in ingest_file(path, strip_answers=stripped):
             if any(n in c.text for n in needles):
                 chunks.append(RetrievedChunk(c.text, c.source, 0.7, {}))
     return chunks
@@ -728,7 +733,82 @@ CROP_SCENARIOS = {
         check=_step_fits_the_board,
     ),
 }
+
+
+def stored_seed_context() -> list[RetrievedChunk]:
+    """The seeded notes about 3x + 5 = 20 as the math profile stores them now: without their answers."""
+    return seed_context(EQUATION, stripped=True)
+
+
+def _graded(spoken: str) -> str | None:
+    """A right answer that came back as "I can't see your answer" / "ask me again": the read was not the board."""
+    unread = re.search(r"no veo|no pude leer|can't see|couldn't read", spoken, re.IGNORECASE)
+    return "not graded (board_answer was not the student's answer)" if unread else None
+
+
+NO_FILES_SCENARIOS = {
+    "EQCN": Scenario(
+        "ES quiz check, every file switched off, correct answer x = 5",
+        "¿Está bien mi respuesta?",
+        lambda: make_board([EQUATION, "x = 5"]),
+        "celebrating",
+        mode="quiz",
+        task=QUIZ_TASK,
+        context=[],
+        check=_all(_graded, _reads_es(str(QUIZ_TASK["next_problem"])), spanish),
+        language="es",
+    ),
+    "EQWN": Scenario(
+        "ES quiz check, every file switched off, wrong answer x = 7",
+        "¿Está bien mi respuesta?",
+        lambda: make_board([EQUATION, "x = 7"]),
+        "error",
+        mode="quiz",
+        task=QUIZ_TASK,
+        context=[],
+        check=_all(_graded, _no_leak_es, spanish),
+        language="es",
+    ),
+    "QCN": Scenario(
+        "quiz check, every file switched off, correct answer x = 5",
+        "Is my answer right?",
+        lambda: make_board([EQUATION, "x = 5"]),
+        "celebrating",
+        mode="quiz",
+        task=QUIZ_TASK,
+        context=[],
+        check=_all(_graded, _next_problem),
+    ),
+    "QWN": Scenario(
+        "quiz check, every file switched off, wrong answer x = 7",
+        "Is my answer right?",
+        lambda: make_board([EQUATION, "x = 7"]),
+        "error",
+        mode="quiz",
+        task=QUIZ_TASK,
+        context=[],
+        check=_all(_graded, _no_leak),
+    ),
+    "HS": Scenario(
+        f"help on {EQUATION} with the seeded notes as stored now",
+        "I'm stuck. What do I do next?",
+        lambda: make_board([EQUATION]),
+        "pointing",
+        context=stored_seed_context,
+        check=_no_leak,
+    ),
+    "EHS": Scenario(
+        f"ES help on {EQUATION} with the seeded notes as stored now",
+        "Estoy atorado, ¿qué hago ahora?",
+        lambda: make_board([EQUATION]),
+        "pointing",
+        context=stored_seed_context,
+        check=_all(_no_leak_es, spanish),
+        language="es",
+    ),
+}
 MATH_SCENARIOS.update(SPANISH_SCENARIOS)
+MATH_SCENARIOS.update(NO_FILES_SCENARIOS)
 MATH_SCENARIOS.update(CROP_SCENARIOS)
 SCENARIOS = {"biology": BIO_SCENARIOS, "math": MATH_SCENARIOS}
 
