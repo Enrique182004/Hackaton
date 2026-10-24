@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import numpy as np
 
@@ -138,3 +139,48 @@ def test_push_mode_start_is_noop() -> None:
     t.start()
     assert t._wake_thread is None
     t.stop()
+
+
+def test_wake_paused_while_not_listening() -> None:
+    calls: list[float] = []
+    queries: list[str] = []
+    allowed = threading.Event()
+    t = AudioTrigger(
+        queries.append,
+        mode="wake",
+        wake_chunk_seconds=3.0,
+        recorder=lambda s: (calls.append(s), AUDIO)[1],
+        transcriber=lambda a: "assistant what is this",
+        should_listen=allowed.is_set,
+    )
+    t.start()
+    threading.Event().wait(0.5)
+    assert calls == [] and queries == []
+    allowed.set()
+    deadline = time.monotonic() + 3
+    while not queries and time.monotonic() < deadline:
+        threading.Event().wait(0.05)
+    t.stop()
+    assert queries and queries[0] == "what is this"
+
+
+def test_wake_word_heard_while_avatar_speaks_is_ignored() -> None:
+    state = {"listening": True}
+    queries: list[str] = []
+
+    def rec(s: float) -> np.ndarray:
+        state["listening"] = False  # avatar starts talking mid-chunk
+        return AUDIO
+
+    t = AudioTrigger(
+        queries.append,
+        mode="wake",
+        wake_chunk_seconds=3.0,
+        recorder=rec,
+        transcriber=lambda a: "assistant explain",
+        should_listen=lambda: state["listening"],
+    )
+    t.start()
+    threading.Event().wait(0.6)
+    t.stop()
+    assert queries == []

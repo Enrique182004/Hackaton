@@ -20,6 +20,11 @@ from biobench_sar.schemas import error_action
 
 log = logging.getLogger("biobench_sar.app")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+WORDS_PER_SECOND = 2.5
+
+
+def estimate_speech_seconds(text: str) -> float:
+    return len(text.split()) / WORDS_PER_SECOND + 1.0
 
 CALIBRATION_SETTLE_SECONDS = 1.5
 
@@ -33,7 +38,7 @@ class Services:
     tts: Any  # TTSEngine
 
 
-def build_services(settings: Settings, on_query: Any, on_state: Any) -> Services:
+def build_services(settings: Settings, on_query: Any, on_state: Any, should_listen: Any = None) -> Services:
     """Construct real services. Imports are lazy so importing app.py stays light."""
     from biobench_sar.core.audio_trigger import AudioTrigger
     from biobench_sar.core.homography import Calibration
@@ -68,6 +73,7 @@ def build_services(settings: Settings, on_query: Any, on_state: Any) -> Services
         mode=settings.listen_mode,
         record_seconds=settings.record_seconds,
         on_state=on_state,
+        should_listen=should_listen,
     )
     tts = TTSEngine(settings.tts_backend, settings.tts_voice, settings.tts_dir)
     return Services(vision=vision, store=store, vlm=vlm, audio=audio, tts=tts)
@@ -97,6 +103,12 @@ def create_app(
             payload["detail"] = detail
         socketio.emit("status", payload)
 
+    speaking_until = {"t": 0.0}
+
+    def should_listen() -> bool:
+        # The browser keeps playing the answer after the pipeline finishes, so busy alone isn't enough.
+        return not busy.locked() and time.monotonic() >= speaking_until["t"]
+
     def run_pipeline(text: str) -> None:
         try:
             socketio.emit("transcript", {"text": text})
@@ -120,6 +132,7 @@ def create_app(
                 "speak",
                 {"url": f"/tts/{url_name}" if url_name else None, "text": action.spoken_text},
             )
+            speaking_until["t"] = time.monotonic() + estimate_speech_seconds(action.spoken_text)
             emit_status("idle")
         except Exception:
             log.exception("query pipeline failed")
@@ -150,7 +163,7 @@ def create_app(
             return
         emit_status(value)
 
-    svc = services if services is not None else build_services(settings, handle_query, on_state)
+    svc = services if services is not None else build_services(settings, handle_query, on_state, should_listen)
     if services is None:
         state["calibrated"] = _load_initial_calibration(settings, svc)
 
@@ -306,6 +319,7 @@ def create_app(
     app.config["SAR_SERVICES"] = svc
     app.config["SAR_HANDLE_QUERY"] = handle_query
     app.config["SAR_ON_STATE"] = on_state
+    app.config["SAR_SHOULD_LISTEN"] = should_listen
     return app, socketio
 
 

@@ -126,9 +126,12 @@ def test_busy_single_flight(built: Any, fakes: Any) -> None:
     handle("second")
     got = sio.get_received()
     assert any(m["name"] == "status" and m["args"][0].get("detail") == "busy" for m in got)
+    assert app.config["SAR_SHOULD_LISTEN"]() is False, "no wake listening while a query is in flight"
     gate.set()
     collect(sio, ["speak"])
     assert fakes.vlm.calls == ["first"]
+    time.sleep(0.1)
+    assert app.config["SAR_SHOULD_LISTEN"]() is False, "still False while the answer is being spoken"
 
 
 def test_pipeline_error_emits_error_avatar(built: Any, fakes: Any) -> None:
