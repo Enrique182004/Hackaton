@@ -24,7 +24,10 @@ EDGE_RETRY_AFTER_S = 60.0
 SAY_LIST_TIMEOUT_S = 5.0
 ORDER = ["edge", "say", "pyttsx3", "none"]
 LANGUAGES = ("en", "es")
-EDGE_VOICES = {"en": "en-US-AriaNeural", "es": "es-MX-DaliaNeural"}
+# The assistant talks like a kid: Ana is Edge's child voice. Edge has no Mexican child voice, so Dalia is pitched up
+# and sped up a little. Prosody belongs to the voice: any other voice a teacher picks plays as it is.
+EDGE_VOICES = {"en": "en-US-AnaNeural", "es": "es-MX-DaliaNeural"}
+EDGE_PROSODY = {"es-MX-DaliaNeural": ("+5%", "+30Hz")}  # voice -> (rate, pitch)
 # Students are in El Paso / Chihuahua: Mexican Spanish first, any other Spanish only as a last resort.
 SAY_ES_LOCALES = (("es_MX",), ("es_419", "es_US"), ("es_",))
 SAY_ES_PREFERRED = "Paulina"
@@ -170,7 +173,7 @@ class TTSEngine:
     def __init__(
         self,
         backend: str = "edge",
-        voice: str = "en-US-AriaNeural",
+        voice: str = EDGE_VOICES["en"],
         out_dir: Path | None = None,
         voices: dict[str, str] | None = None,
     ) -> None:
@@ -278,7 +281,9 @@ class TTSEngine:
         path = self.out_dir / name
         # Offline venues: fail fast so the say/pyttsx3 fallback speaks instead of hanging the pipeline.
         try:
-            asyncio.run(asyncio.wait_for(edge_tts.Communicate(text, voice).save(str(path)), EDGE_TIMEOUT_S))
+            rate, pitch = EDGE_PROSODY.get(voice, ("+0%", "+0Hz"))
+            speech = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+            asyncio.run(asyncio.wait_for(speech.save(str(path)), EDGE_TIMEOUT_S))
         except BaseException as exc:
             # A bad voice override must not silence edge for the other language.
             self._edge_failed_at[_ALL_VOICES if _is_network_error(exc) else voice] = time.monotonic()
