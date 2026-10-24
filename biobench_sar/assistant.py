@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
 import re
 import tempfile
@@ -27,6 +28,8 @@ from biobench_sar.tutor import (
     detect_offer_reply_any,
     is_quiz_stop_any,
     is_repeat_request_any,
+    is_stop_intent_any,
+    is_yes_any,
 )
 
 log = logging.getLogger(__name__)
@@ -39,6 +42,13 @@ LANGUAGE_SETTINGS = ("auto", *LANGUAGES)
 GLARE_INTERVAL_S = 2.0
 # A bulb reflection is a patch of the board; a "hotspot" over half of it or more is an overexposed camera.
 MAX_GLARE_SHARE = 0.5
+# Projected UI (avatar, bubble, quiz card, highlight) the projector page reports, in projector px: ink under it is
+# our own light, not the student's writing. A report older than UI_RECTS_TTL_S is stale (the page closed or froze).
+UI_RECTS_TTL_S = 3.0
+MAX_UI_RECTS = 32
+UI_OVERLAP = 0.5
+# "pointing": the fingertip stops this far left of the ink it points at, so the avatar does not cover it.
+POINT_GAP = 24
 NO_ANSWER_TEXT = "I can't see an answer on the board yet. Write it, then ask me to check it."
 TEXTS = {
     "en": {
@@ -46,12 +56,16 @@ TEXTS = {
         "error": "Sorry, something went wrong. Please try again.",
         "last": "That was the last problem! ",
         "summary": "{ending}You solved {score} of {total} on the first try.",
+        "confirm_stop": "Do you want to end the quiz? Say yes to stop, or keep going.",
+        "stopped": "Okay, the quiz is over. You solved {score} of {total} on the first try.",
     },
     "es": {
         "no_answer": "Todavía no veo una respuesta en el pizarrón. Escríbela y luego pídeme que la revise.",
         "error": "Perdón, algo salió mal. Inténtalo de nuevo.",
         "last": "¡Ese fue el último problema! ",
         "summary": "{ending}Resolviste {score} de {total} al primer intento.",
+        "confirm_stop": "¿Quieres terminar el quiz? Di «sí» para terminar o sigue con tu respuesta.",
+        "stopped": "Listo, terminamos el quiz. Resolviste {score} de {total} al primer intento.",
     },
 }
 # The model or the VLM client often announces the end itself; then the summary only adds the score.
@@ -60,6 +74,8 @@ _QUIZ_END_SAID = re.compile(
     re.I,
 )
 _UNSET: Any = object()
+# Quiz stages code answers itself, without the model.
+LOCAL_STAGES = frozenset({"confirm_stop", "stopped"})
 
 
 def _language(code: Any) -> str:
@@ -173,6 +189,103 @@ def drop_glare_ink(
     return [region for region in ink if not in_glare(region)]
 
 
+Box = tuple[float, float, float, float]
+POINTED_STATES = frozenset({"pointing", "error", "celebrating"})
+
+
+def _box(region: Any) -> Box | None:
+    """An ink region's or UI rect's (x, y, w, h): a {"x", "y", "w", "h"} dict or an [x, y, w, h] list; None when it
+    has no usable box (the region of a fake vision service, a malformed rect)."""
+    try:
+        values = [region[k] for k in ("x", "y", "w", "h")] if isinstance(region, dict) else list(region)
+        if len(values) != 4 or any(isinstance(v, bool) for v in values):
+            return None
+        x, y, w, h = (float(v) for v in values)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in (x, y, w, h)) or w <= 0 or h <= 0:
+        return None
+    return x, y, w, h
+
+
+def _overlap(a: Box, b: Box) -> float:
+    """The area two boxes share."""
+    w = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
+    h = min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
+    return max(0.0, w) * max(0.0, h)
+
+
+def _is_highlight(rect: Box, highlight: Box | None) -> bool:
+    """The page's own outline around the ink an answer is about: that ink is the student's, so it is never masked."""
+    if highlight is None:
+        return False
+    area = highlight[2] * highlight[3]
+    return _overlap(rect, highlight) >= 0.9 * area and rect[2] * rect[3] <= 4 * area
+
+
+def drop_ui_ink(ink: list[Any], rects: Iterable[Box], highlight: Box | None = None) -> list[Any]:
+    """Ink regions not mostly under projected UI: one that a UI rect covers by more than UI_OVERLAP of its area is
+    the projector's light (the bubble's text, the avatar), not the student's writing. The highlight drawn around the
+    student's own ink is skipped: masking it would hide that ink."""
+    boxes = [r for r in rects if not _is_highlight(r, highlight)]
+    if not boxes:
+        return ink
+
+    def covered(region: Any) -> bool:
+        box = _box(region)
+        if box is None:
+            return False
+        return any(_overlap(box, rect) > UI_OVERLAP * box[2] * box[3] for rect in boxes)
+
+    return [region for region in ink if not covered(region)]
+
+
+def _distance(x: float, y: float, box: Box) -> float:
+    dx = max(box[0] - x, 0.0, x - (box[0] + box[2]))
+    dy = max(box[1] - y, 0.0, y - (box[1] + box[3]))
+    return math.hypot(dx, dy)
+
+
+def place_target(
+    action: AvatarAction,
+    ink: list[Any],
+    projector_size: tuple[int, int],
+    *,
+    about_answer: bool = False,
+    stand_aside: bool = False,
+) -> tuple[AvatarAction, list[int] | None]:
+    """The target snapped in code, and the ink region the answer is about ([x, y, w, h], projector px) or None.
+
+    pointing / error (and celebrating, with ink): that region is the one nearest the model's target, or with
+    `about_answer` (a quiz check) the lowest one, the student's answer line. pointing stops just left of it (right of
+    it at the board's left edge), error and celebrating at its centre. idle / walking (and `stand_aside`, a failed
+    call) stand on the side of the board farthest from the ink, mid-height; without ink the model's target is kept.
+    """
+    width, height = projector_size
+    boxes = [b for b in map(_box, ink) if b is not None]
+    if not boxes:
+        return action, None
+
+    def at(x: float, y: float) -> AvatarAction:
+        tx, ty = max(0, min(width - 1, round(x))), max(0, min(height - 1, round(y)))
+        return replace(action, target_x=tx, target_y=ty)
+
+    state = action.animation_state
+    if not stand_aside and state in POINTED_STATES:
+        if about_answer:
+            box = max(boxes, key=lambda b: (b[1] + b[3], -b[0]))
+        else:
+            box = min(boxes, key=lambda b: _distance(action.target_x, action.target_y, b))
+        x, y, w, h = box
+        tx = x + w / 2
+        if state == "pointing":
+            tx = x - POINT_GAP if x - POINT_GAP >= 0 else x + w + POINT_GAP
+        return at(tx, y + h / 2), [round(x), round(y), round(w), round(h)]
+    left, right = min(b[0] for b in boxes), max(b[0] + b[2] for b in boxes)
+    x = left / 2 if left >= width - right else (right + width) / 2
+    return at(x, height / 2), None
+
+
 Emit = Callable[[str, dict[str, Any]], None]
 StartTask = Callable[..., Any]
 Task = dict[str, Any]
@@ -201,6 +314,8 @@ class Interaction:
     # The answer as shown (math notation kept) and the reply's language; spoken_text is what the voice said.
     display_text: str = ""
     language: str = "en"
+    # The ink region the answer is about, [x, y, w, h] in projector px (the projector outlines it), or None.
+    highlight: list[int] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -308,6 +423,32 @@ class Assistant:
         # The language of the last reply: what "auto" falls back on when a question leans neither way.
         self._reply_language = self._language if self._language in LANGUAGES else "en"
         self._typed = threading.local()
+        self._ui_lock = threading.Lock()
+        self._ui_rects: list[Box] = []
+        self._ui_rects_at: float | None = None
+        self._highlight: Box | None = None  # the last one sent: the page outlines it and reports it as UI
+
+    # ---- projected UI --------------------------------------------------------
+    def set_ui_rects(self, rects: Any) -> None:
+        """The projector page's UI boxes ([[x, y, w, h], ...], projector px: avatar, bubble, quiz card, highlight).
+        Ink mostly under them is dropped before the model and the target snapping; a report older than
+        UI_RECTS_TTL_S is ignored. Malformed entries are skipped; anything but a list clears them."""
+        boxes: list[Box] = []
+        for rect in rects if isinstance(rects, (list, tuple)) else []:
+            box = _box(rect)
+            if box is not None:
+                boxes.append(box)
+            if len(boxes) >= MAX_UI_RECTS:
+                break
+        with self._ui_lock:
+            self._ui_rects, self._ui_rects_at = boxes, time.monotonic()
+
+    def ui_rects(self) -> list[Box]:
+        """The UI boxes reported in the last UI_RECTS_TTL_S seconds; [] when the report is stale or missing."""
+        with self._ui_lock:
+            if self._ui_rects_at is None or time.monotonic() - self._ui_rects_at > UI_RECTS_TTL_S:
+                return []
+            return list(self._ui_rects)
 
     # ---- language ----------------------------------------------------------
     @property
@@ -491,6 +632,12 @@ class Assistant:
         if warped is None:
             return []
         ink = find_ink_regions(warped, **self.settings.ink_kwargs)
+        rects = self.ui_rects()
+        if ink and rects:
+            try:
+                ink = drop_ui_ink(ink, rects, self._highlight)
+            except Exception:
+                log.exception("projected-UI filter failed; keeping every ink region")
         if not ink or raw is None:
             return ink  # without the raw frame and its calibration a hotspot can't be placed on the board
         hotspots = list(getattr(self.glare.report(lambda: raw), "hotspots", None) or [])
@@ -521,40 +668,25 @@ class Assistant:
             task = self._plan(text, has_ink=bool(ink), language=language) if self.tutoring else None
             mode = self.tutor.mode if self.tutoring else "help"
             self.push_tutor()
-            context = self._retrieve(text)
-            sources = list(dict.fromkeys(chunk.source for chunk in context))
-            image, crop = self._board_image(raw, calibration, frame, ink)
-            extra: dict[str, Any] = {"language": language}
-            if crop is not None:
-                extra["crop"] = crop
-            action = svc.vlm.evaluate(
-                text,
-                image,
-                context,
-                ink,
-                self.settings.projector_size,
-                mode=mode,
-                task=task,
-                recent_turns=self.tutor.turns(),
-                **extra,
-            )
-            display = str(getattr(action, "display_text", None) or action.spoken_text)
-            # A failed call (timeout, model down) says nothing about the student: no grading, nothing remembered.
-            failed = bool(getattr(action, "failed", False))
-            checking = task is not None and task["kind"] == "quiz" and task["stage"] == "check"
-            if checking and not ink and not failed:
-                # Nothing on the board to grade. Saying "correct, next problem" here would leave the quiz behind.
-                display = TEXTS[language]["no_answer"]
-                action = replace(action, spoken_text=_speakable(display, language), animation_state="idle")
-            elif action.animation_state in DRAWING_STATES and not ink and not _is_learn(task):
-                # Nothing drawn to point at or approve; small VLMs still pick these for plain questions.
-                action = replace(action, animation_state="idle")
-            if task is not None and task["kind"] == "quiz" and not failed:
-                action, display = self._advance_quiz(task, action, display, graded=bool(ink), language=language)
+            failed = False
+            if task is not None and task.get("stage") in LOCAL_STAGES:
+                action, display = self._local_reply(task, language)  # code says it: no model call
+            else:
+                action, display, failed = self._think(text, raw, calibration, frame, ink, task, mode, language, sources)
             if not failed:
                 self.tutor.add_turn(text, action.spoken_text)
             self.push_tutor()
-            said = {"display_text": display, "spoken_text": action.spoken_text, "language": language}
+            checking = task is not None and task["kind"] == "quiz" and task.get("stage") == "check"
+            action, highlight = place_target(
+                action, ink, self.settings.projector_size, about_answer=checking, stand_aside=failed
+            )
+            self._highlight = _box(highlight) if highlight else None
+            said = {
+                "display_text": display,
+                "spoken_text": action.spoken_text,
+                "language": language,
+                "highlight": highlight,
+            }
             self._emit("avatar_update", {**action.to_dict(), **said})
             self.emit_status("speaking")
             audio_name = svc.tts.speak(action.spoken_text, lang=language)
@@ -574,11 +706,17 @@ class Assistant:
                 task=task,
                 display=display,
                 language=language,
+                highlight=highlight,
             )
         except Exception:
             log.exception("query pipeline failed")
             action = error_action(TEXTS[language]["error"], self.settings.projector_size)
-            said = {"display_text": action.spoken_text, "spoken_text": action.spoken_text, "language": language}
+            said = {
+                "display_text": action.spoken_text,
+                "spoken_text": action.spoken_text,
+                "language": language,
+                "highlight": None,
+            }
             self._emit("avatar_update", {**action.to_dict(), **said})
             self._record(
                 text,
@@ -596,10 +734,73 @@ class Assistant:
             self.emit_status("idle")
             self._busy.release()
 
+    def _think(
+        self,
+        text: str,
+        raw: Any,
+        calibration: Any,
+        frame: Any,
+        ink: list[Any],
+        task: Task | None,
+        mode: str,
+        language: str,
+        sources: list[str],
+    ) -> tuple[AvatarAction, str, bool]:
+        """The model's answer to `text`, with the quiz bookkeeping done: (action, text shown, failed). The files it
+        drew on go into `sources` as soon as they are known, so a failed call still records them."""
+        context = self._retrieve(text)
+        sources.extend(dict.fromkeys(chunk.source for chunk in context))
+        image, crop = self._board_image(raw, calibration, frame, ink)
+        extra: dict[str, Any] = {"language": language}
+        if crop is not None:
+            extra["crop"] = crop
+        action = self.services.vlm.evaluate(
+            text,
+            image,
+            context,
+            ink,
+            self.settings.projector_size,
+            mode=mode,
+            task=task,
+            recent_turns=self.tutor.turns(),
+            **extra,
+        )
+        display = str(getattr(action, "display_text", None) or action.spoken_text)
+        # A failed call (timeout, model down) says nothing about the student: no grading, nothing remembered.
+        failed = bool(getattr(action, "failed", False))
+        checking = task is not None and task["kind"] == "quiz" and task["stage"] == "check"
+        if checking and not ink and not failed:
+            # Nothing on the board to grade. Saying "correct, next problem" here would leave the quiz behind.
+            display = TEXTS[language]["no_answer"]
+            action = replace(action, spoken_text=_speakable(display, language), animation_state="idle")
+        elif action.animation_state in DRAWING_STATES and not ink and not _is_learn(task):
+            # Nothing drawn to point at or approve; small VLMs still pick these for plain questions.
+            action = replace(action, animation_state="idle")
+        if task is not None and task["kind"] == "quiz" and not failed:
+            action, display = self._advance_quiz(task, action, display, graded=bool(ink), language=language)
+        return action, display, failed
+
+    def _local_reply(self, task: Task, language: str) -> tuple[AvatarAction, str]:
+        """What code says itself, without the model: the stop-quiz question, or the stopped quiz's score."""
+        texts = TEXTS[_language(language)]
+        if task["stage"] == "confirm_stop":
+            shown = texts["confirm_stop"]
+        else:
+            shown = texts["stopped"].format(score=task.get("score", 0), total=task.get("total", 0))
+        width, height = self.settings.projector_size
+        return AvatarAction(_speakable(shown, language), "idle", width // 2, height // 2), shown
+
     def _plan(self, text: str, *, has_ink: bool = False, language: str = "en") -> Task | None:
         """What this question asks the model to do: a lesson step, a practice problem, a quiz step or plain help.
-        English and Spanish requests both count, the reply language's first."""
+        English and Spanish requests both count, the reply language's first. Stopping a running quiz is confirmed
+        first ("Do you want to end the quiz?"): the next turn's yes stops it, anything else goes on as usual."""
         tutor = self.tutor
+        if tutor.pending_stop:
+            tutor.clear_stop()
+            if tutor.quiz_active and (is_yes_any(text) or is_stop_intent_any(text)):
+                score, total = tutor.score, tutor.quiz_total
+                tutor.stop_quiz()
+                return {"kind": "quiz", "stage": "stopped", "score": score, "total": total}
         if tutor.offer_pending:
             reply = detect_offer_reply_any(text, language)
             if reply is not None:
@@ -608,6 +809,9 @@ class Assistant:
                 return {"kind": "learn", "topic": tutor.learn_topic, "stage": stage}
             # Only the very next turn answers the offer: a "no" or "I'll write it" much later means something else.
             tutor.expire_offer()
+        if tutor.quiz_active and is_stop_intent_any(text):
+            tutor.request_stop()
+            return {"kind": "quiz", "stage": "confirm_stop", "number": tutor.quiz_number, "total": tutor.quiz_total}
         topic = detect_learn_request_any(text, language, board_in_use=has_ink or tutor.quiz_active)
         if topic is not None:
             tutor.start_learning(topic)
@@ -701,6 +905,7 @@ class Assistant:
         task: Task | None = None,
         display: str | None = None,
         language: str = "en",
+        highlight: list[int] | None = None,
     ) -> None:
         item = Interaction(
             id=self._next_id,
@@ -719,6 +924,7 @@ class Assistant:
             task_kind=None if task is None else str(task["kind"]),
             display_text=display or action.spoken_text,
             language=_language(language),
+            highlight=list(highlight) if highlight else None,
         )
         self._next_id += 1
         self._history.append(item)

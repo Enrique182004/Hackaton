@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 import requests
 
+from biobench_sar import grading
 from biobench_sar.llm import vlm_client as vc
 from biobench_sar.llm.vlm_client import OFFER_QUESTION, SYSTEM_PROMPT, VLMClient, build_prompt, system_prompt
 from biobench_sar.schemas import ANIMATION_STATES, AvatarAction, InkRegion, RetrievedChunk
@@ -374,11 +375,11 @@ def test_quiz_check_prompt() -> None:
     # A numeric answer is graded in code; shown to the model, it gets copied into board_answer.
     assert "x = 5" not in text and "Expected answer" not in text
     symbolic = vc.quiz_task_text({**task, "answer": "x = 2 or x = -2"})
-    assert "Expected answer: x = 2 or x = -2" in symbolic
+    assert "Expected answer" not in symbolic and "x = 2" not in symbolic, "every answer is graded in code now"
     last = vc.quiz_task_text({**task, "number": 5, "next_problem": None})
     assert "last problem" in last and "Next problem" not in last
     unknown = vc.quiz_task_text({**task, "problem": None, "answer": None, "next_problem": None, "number": 3})
-    assert "the problem on the board" in unknown and "solve the problem yourself" in unknown
+    assert "the problem on the board" in unknown and "solve the problem yourself" not in unknown, "code grades it"
     assert "make up" not in unknown, "the next problem is the tutor's, not the model's"
     invented = vc.quiz_task_text({**task, "problem": "4x - 3 = 13", "answer": None})
     assert "Expected answer" not in invented and "x = 4" not in invented, "code solves it, so it is graded in code"
@@ -650,8 +651,12 @@ def test_quiz_check_keeps_model_text_when_it_agrees() -> None:
 def test_quiz_check_overrides_wrong_praise() -> None:
     fixed = vc.check_quiz_answer(PRAISE, QUIZ_CHECK, "x = 7")
     assert fixed.animation_state == "error" and (fixed.target_x, fixed.target_y) == (8, 9)
-    assert fixed.spoken_text.startswith("Not quite") and "5" not in fixed.spoken_text
-    assert "five" not in fixed.spoken_text.lower() and "2x" not in fixed.spoken_text
+    # Code's own hint for this problem's first step ("subtract 5"), never its answer (x = 5) or the next problem.
+    assert fixed.spoken_text == "Not quite. Subtract 5 from both sides first." and "2x" not in fixed.spoken_text
+    assert not grading.states_solution(fixed.spoken_text, grading.solve_text("3x + 5 = 20"))
+    assert fixed.hint_needed and fixed.board_answer == "x = 7"  # type: ignore[attr-defined]
+    generic = vc.check_quiz_answer(PRAISE, {**QUIZ_CHECK, "problem": "a word problem", "answer": "x = 5"}, "x = 7")
+    assert generic.spoken_text == vc.WRONG_TEXT, "no hint code can build: the generic one"
 
 
 def test_quiz_check_overrides_wrong_rejection() -> None:
@@ -823,12 +828,17 @@ def test_quiz_without_a_problem_dictates_one_picked_in_code() -> None:
 
 
 def test_quiz_check_echo_and_leaks_are_replaced() -> None:
+    hint = "Not quite. Subtract 5 from both sides first."
     echo = AvatarAction("I'm stuck.", "error", 1, 2)
-    assert vc.check_quiz_answer(echo, QUIZ_CHECK, "x = 7", query="I'm stuck.").spoken_text == vc.WRONG_TEXT
+    assert vc.check_quiz_answer(echo, QUIZ_CHECK, "x = 7", query="I'm stuck.").spoken_text == hint
     leak = AvatarAction("Not quite, x should be five.", "error", 1, 2)
-    assert vc.check_quiz_answer(leak, QUIZ_CHECK, "x = 7").spoken_text == vc.WRONG_TEXT
+    assert vc.check_quiz_answer(leak, QUIZ_CHECK, "x = 7").spoken_text == hint
+    stated = AvatarAction("Not quite. Fifteen divided by three is five, so x is 5.", "error", 1, 2)
+    assert vc.check_quiz_answer(stated, QUIZ_CHECK, "x = 7").spoken_text == hint
     reads_next = AvatarAction("Not quite. Problem two. 2x - 4 = 10", "error", 1, 2)
-    assert vc.check_quiz_answer(reads_next, QUIZ_CHECK, "x = 7").spoken_text == vc.WRONG_TEXT
+    assert vc.check_quiz_answer(reads_next, QUIZ_CHECK, "x = 7").spoken_text == hint
+    praise = AvatarAction("Correct, great job!", "error", 1, 2)
+    assert vc.check_quiz_answer(praise, QUIZ_CHECK, "x = 7").spoken_text == hint, "praise for a wrong answer"
 
 
 def test_quiz_check_praise_without_the_next_problem_gets_it_appended() -> None:
@@ -839,11 +849,28 @@ def test_quiz_check_praise_without_the_next_problem_gets_it_appended() -> None:
     assert vc.check_quiz_answer(worded, QUIZ_CHECK, "x = 5").spoken_text == worded.spoken_text
 
 
-@pytest.mark.parametrize("read", [None, "", "3x + 5 = 20", "3x = 15", "five"])
+@pytest.mark.parametrize("read", [None, "", "3x + 5 = 20", "3x = 15", "3 x plus five equals twenty"])
 def test_quiz_check_praise_without_a_readable_answer_is_not_approved(read: str | None) -> None:
     praise = AvatarAction("Correct, great job!", "celebrating", 1, 2)
     action = vc.check_quiz_answer(praise, QUIZ_CHECK, read)
     assert action.animation_state == "idle" and action.verdict is None and action.spoken_text == vc.NO_ANSWER_TEXT
+
+
+@pytest.mark.parametrize("read", ["x = something", "I can't tell", "x = 2y"])
+def test_quiz_check_of_an_unreadable_answer_asks_again(read: str) -> None:
+    praise = AvatarAction("Correct, great job!", "celebrating", 1, 2)
+    action = vc.check_quiz_answer(praise, QUIZ_CHECK, read)
+    assert action.animation_state == "idle" and action.verdict is None  # type: ignore[attr-defined]
+    assert action.spoken_text == "I couldn't read your answer clearly. Ask me to check it again."
+    spanish = vc.check_quiz_answer(praise, QUIZ_CHECK, read, language="es")
+    assert spanish.spoken_text == "No pude leer bien tu respuesta. Pídeme que la revise otra vez."
+
+
+def test_quiz_check_reads_an_answer_written_in_words() -> None:
+    praise = AvatarAction("Correct, great job!", "celebrating", 1, 2)
+    assert vc.check_quiz_answer(praise, QUIZ_CHECK, "five").verdict == "correct"  # type: ignore[attr-defined]
+    es = vc.check_quiz_answer(praise, QUIZ_CHECK, "x es igual a cinco", language="es")
+    assert es.verdict == "correct"  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize(
@@ -1238,7 +1265,8 @@ def test_spanish_math_prompts_are_spanish_with_the_scan_rule(kind: str) -> None:
     assert "Responde SIEMPRE en español de Latinoamérica" in prompt and "háblale de tú" in prompt
     for phrase in ("dos tercios", "x al cuadrado", "tres x más cinco es igual a doce", "menos cuatro"):
         assert phrase in prompt
-    assert ("board_answer" in prompt) == (kind == "quiz") and ("board_problem" in prompt) == (kind == "practice")
+    assert ("board_answer" in prompt) == (kind == "quiz")
+    assert ("board_problem" in prompt) == (kind in ("practice", "help")), "help copies it so code can solve it"
     for example in _few_shot(prompt):
         assert set(example) >= {"spoken_text", "animation_state", "target_x", "target_y"}
         assert not _digits_or_symbols(example["spoken_text"]), example
@@ -1345,7 +1373,7 @@ def test_spanish_quiz_check_correct_reads_the_next_problem_in_spanish_words() ->
 def test_spanish_quiz_check_wrong_and_missing_answers() -> None:
     leak = AvatarAction("Casi. La respuesta es cinco.", "error", 1, 2)
     wrong = vc.check_quiz_answer(leak, ES_QUIZ, "x = 7", language="es")
-    assert wrong.spoken_text == vc.TEXTS["es"]["wrong"] and wrong.verdict == "wrong"  # type: ignore[attr-defined]
+    assert wrong.spoken_text == "Casi. Primero resta 5 en ambos lados." and wrong.verdict == "wrong"  # type: ignore[attr-defined]
     hint = AvatarAction("Casi. ¿Qué restas en ambos lados?", "error", 1, 2)
     assert vc.check_quiz_answer(hint, ES_QUIZ, "x = 7", language="es").spoken_text == hint.spoken_text
     none = vc.check_quiz_answer(hint, ES_QUIZ, None, language="es")

@@ -214,7 +214,7 @@ def test_new_session() -> None:
     t = TutorSession()
     assert t.mode == "help" and t.learn_topic is None and not t.offer_pending and t.turns() == []
     assert t.current() is None and not t.dictated and not t.quiz_active
-    assert t.to_dict() == {"mode": "help", "learn_topic": None, "quiz": None}
+    assert t.to_dict() == {"mode": "help", "learn_topic": None, "quiz": None, "confirm_stop": False}
 
 
 def test_set_mode_rejects_unknown() -> None:
@@ -316,7 +316,7 @@ def test_record_and_dictate_without_a_quiz_are_ignored() -> None:
     t = TutorSession()
     t.record(True)
     t.mark_dictated()
-    assert t.to_dict() == {"mode": "help", "learn_topic": None, "quiz": None}
+    assert t.to_dict() == {"mode": "help", "learn_topic": None, "quiz": None, "confirm_stop": False}
 
 
 def test_start_quiz_copies_the_problem_list() -> None:

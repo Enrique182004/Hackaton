@@ -204,7 +204,7 @@ def test_event_order_and_final_idle(h: Harness) -> None:
     assert h.names() == ["transcript", "status", "avatar_update", "status", "speak", "interaction", "status"]
     assert h.states() == ["thinking", "speaking", "idle"]
     said = {"display_text": "one two three four", "spoken_text": "one two three four", "language": "en"}
-    assert h.payloads("speak") == [{"url": "/tts/a.mp3", "text": "one two three four", **said}]
+    assert h.payloads("speak") == [{"url": "/tts/a.mp3", "text": "one two three four", **said, "highlight": None}]
     assert h.assistant.state == "idle"
 
 
@@ -679,7 +679,12 @@ def test_learn_request_on_an_empty_board_offers_an_exercise(h: Harness) -> None:
     assert kwargs["task"] == {"kind": "learn", "topic": "solving fractions", "stage": "offer"}
     assert h.assistant.tutor.offer_pending
     assert h.payloads("avatar_update")[-1]["animation_state"] == "pointing", "lessons are never downgraded"
-    assert _tutor_events(h)[-1] == {"mode": "help", "learn_topic": "solving fractions", "quiz": None}
+    assert _tutor_events(h)[-1] == {
+        "mode": "help",
+        "learn_topic": "solving fractions",
+        "quiz": None,
+        "confirm_stop": False,
+    }
     assert h.assistant.history()[0]["task_kind"] == "learn"
 
 
@@ -703,7 +708,7 @@ def test_offer_reply_only_counts_while_an_offer_is_pending(h: Harness) -> None:
 
 def test_unrelated_reply_expires_the_offer(h: Harness) -> None:
     _ask(h, "teach me fractions")
-    assert _ask(h, "what is a numerator?")["task"] is None
+    assert _ask(h, "is it lunch time yet?")["task"] is None
     tutor = h.assistant.tutor
     assert not tutor.offer_pending and tutor.learn_topic is None, "only the very next turn answers the offer"
     assert _ask(h, "no")["task"] is None, "a 'no' two turns later is not an answer to the old offer"
@@ -793,6 +798,7 @@ def test_quiz_dictates_then_checks_problems_from_ticked_files(h: Harness) -> Non
         "mode": "help",
         "learn_topic": None,
         "quiz": {"active": False, "number": 2, "total": 2, "score": 1, "problem": None},
+        "confirm_stop": False,
     }
     assert _ask(h, "thanks")["task"] is None, "back to help after the quiz"
 
@@ -929,9 +935,16 @@ def test_quiz_check_without_ink_says_so_instead_of_praising(h: Harness) -> None:
 
 def test_stop_the_quiz(h: Harness) -> None:
     _ask(h, "quiz me")
-    assert _ask(h, "stop the quiz")["task"] is None
-    assert h.assistant.tutor.to_dict() == {"mode": "help", "learn_topic": None, "quiz": None}
-    assert _tutor_events(h)[-1]["quiz"] is None
+    calls = len(h.vlm.seen)
+    h.assistant.handle_query("stop the quiz")
+    assert h.assistant.tutor.quiz_active and h.assistant.tutor.pending_stop, "asked to confirm first"
+    assert h.payloads("speak")[-1]["text"] == "Do you want to end the quiz? Say yes to stop, or keep going."
+    assert _tutor_events(h)[-1]["confirm_stop"] is True
+    h.assistant.handle_query("yes")
+    assert len(h.vlm.seen) == calls, "code asks and stops: no model call"
+    assert h.assistant.tutor.to_dict() == {"mode": "help", "learn_topic": None, "quiz": None, "confirm_stop": False}
+    assert _tutor_events(h)[-1]["quiz"] is None and _tutor_events(h)[-1]["confirm_stop"] is False
+    assert h.payloads("speak")[-1]["text"] == "Okay, the quiz is over. You solved zero of ten on the first try."
 
 
 def test_quiz_me_again_repeats_the_current_problem(h: Harness) -> None:
@@ -1185,8 +1198,13 @@ def test_spanish_quiz_hint_repeat_and_stop(h: Harness) -> None:
     assert _ask(h, "¿Me lo repites?", ink=True)["task"]["stage"] == "dictate"
     assert _ask(h, "Revisa mi respuesta", state="celebrating", ink=True)["task"]["stage"] == "check"
     assert h.assistant.tutor.quiz_number == 2
-    _ask(h, "Termina el quiz")
+    h.assistant.handle_query("Termina el quiz")
+    assert h.payloads("speak")[-1]["text"] == (
+        "¿Quieres terminar el quiz? Di «sí» para terminar o sigue con tu respuesta."
+    )
+    h.assistant.handle_query("Sí")
     assert not h.assistant.tutor.quiz_active and h.assistant.tutor.mode == "help"
+    assert h.payloads("speak")[-1]["text"] == "Listo, terminamos el quiz. Resolviste uno de dos al primer intento."
 
 
 def test_spanish_practice_request(h: Harness) -> None:
