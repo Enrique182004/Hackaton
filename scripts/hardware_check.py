@@ -35,8 +35,32 @@ def camera_status(fps: float) -> str:
     return "FAIL"
 
 
+def opencv_camera_order() -> list[str]:
+    """Camera names by OpenCV index (macOS only), read without opening a camera; pyobjc comes with pyttsx3."""
+    if platform.system() != "Darwin":
+        return []
+    try:
+        import AVFoundation
+
+        devices = [
+            device
+            for media in (AVFoundation.AVMediaTypeVideo, AVFoundation.AVMediaTypeMuxed)
+            for device in AVFoundation.AVCaptureDevice.devicesWithMediaType_(media) or []
+        ]
+        return order_like_opencv([(str(d.localizedName()), str(d.uniqueID())) for d in devices])
+    except Exception:
+        return []
+
+
+def order_like_opencv(devices: Sequence[tuple[str, str]]) -> list[str]:
+    """(name, uniqueID) -> names in OpenCV's index order. Its AVFoundation backend sorts cameras by uniqueID, not
+    in the order macOS lists them: a USB webcam's "0x..." id comes first, so a Logitech BRIO was index 0 on a
+    MacBook Air whose system_profiler listed the built-in camera first."""
+    return [name for name, _unique_id in sorted(devices, key=lambda device: device[1])]
+
+
 def camera_names() -> list[str]:
-    """Camera names the OS reports (macOS only); OpenCV can't name devices, so this guides SAR_CAMERA_INDEX."""
+    """Camera names in macOS's own order (system_profiler), the fallback when pyobjc is missing."""
     if platform.system() != "Darwin":
         return []
     try:
@@ -64,10 +88,21 @@ def check_cameras(only: int | None, save_path: str | None, wanted: tuple[int, in
     except ImportError:
         return [("camera", "FAIL", "opencv-python not installed")]
     results: list[Result] = []
-    names = camera_names()
-    if names:
-        results.append(("camera names", "PASS", "; ".join(names) + " (index order usually follows this list)"))
+    order = opencv_camera_order()
+    if order:
+        listed = "; ".join(f"{index} {name}" for index, name in enumerate(order))
+        results.append(("camera names", "PASS", f"{listed} (the number is SAR_CAMERA_INDEX)"))
+    elif names := camera_names():
+        results.append(
+            (
+                "camera names",
+                "PASS",
+                "; ".join(names) + " (macOS's order, not always the index order: use the index whose row shows "
+                "your webcam's size, or look with --camera N --save-frame cam.jpg)",
+            )
+        )
     indices = [only] if only is not None else range(4)
+    working = False
     saved = False
     for index in indices:
         cap = cv2.VideoCapture(index)
@@ -94,11 +129,14 @@ def check_cameras(only: int | None, save_path: str | None, wanted: tuple[int, in
             continue
         fps = count / elapsed if elapsed > 0 else 0.0
         h, w = frame.shape[:2]
+        status = camera_status(fps)
+        working = working or status != "FAIL"
+        name = f"{order[index]}: " if 0 <= index < len(order) else ""
         results.append(
             (
                 f"camera {index}",
-                camera_status(fps),
-                f"{w}x{h} @ {fps:.1f} fps (PASS >= {CAMERA_PASS_FPS:g}, FAIL < {CAMERA_FAIL_FPS:g})",
+                status,
+                f"{name}{w}x{h} @ {fps:.1f} fps (PASS >= {CAMERA_PASS_FPS:g}, FAIL < {CAMERA_FAIL_FPS:g})",
             )
         )
         if resolution_status((w, h), wanted) != "PASS":
@@ -113,8 +151,9 @@ def check_cameras(only: int | None, save_path: str | None, wanted: tuple[int, in
             cv2.imwrite(save_path, frame)
             saved = True
             results.append(("snapshot", "PASS", f"saved {save_path}"))
-    if not any(r[0].startswith("camera") and r[1] != "FAIL" for r in results):
-        results.append(("camera", "FAIL", "no working camera found in indices 0..3"))
+    if not working:
+        checked = f"index {only}" if only is not None else "indices 0..3"
+        results.append(("camera", "FAIL", f"no working camera found in {checked}"))
     return results
 
 

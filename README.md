@@ -296,7 +296,7 @@ wins over the file. Desktop builds also look next to the app and in the data fol
 | `SAR_LANGUAGE` | `auto` | Answer language: `auto` (the language of each question), `en` or `es` (names and locales such as `es-MX` or `Español` work too). The dashboard switch changes it while running |
 | `SAR_QUIZ_LENGTH` | `10` | The most problems one quiz asks, and how many the code makes up when no ticked file has any |
 | **Camera and projector** | | |
-| `SAR_CAMERA_INDEX` | `0` | Which camera (`scripts/hardware_check.py` lists them). The kit's C930e is usually `1` |
+| `SAR_CAMERA_INDEX` | `0` | Which camera (`scripts/hardware_check.py` lists them, with names on a Mac). The kit's C930e is usually `1`; on a Mac a USB webcam is often `0` |
 | `SAR_CAMERA_WIDTH` / `_HEIGHT` | `1280` / `720` | Camera resolution to ask for. Use `1920` / `1080` for math (small symbols) |
 | `SAR_PROJECTOR_WIDTH` / `_HEIGHT` | `1280` / `800` | Projector resolution in pixels (the kit's Epson WXGA). Targets, the highlight and calibration use it |
 | `SAR_CHECKER_COLS` / `_ROWS` | `9` / `6` | Inner corners of the calibration checkerboard |
@@ -348,6 +348,7 @@ SAR_VLM_BACKEND=mock SAR_TTS_BACKEND=none .venv/bin/python -m biobench_sar   # U
 .venv/bin/python -m scripts.bench_vlm --scenarios --profile biology   # biology flowchart cases (the default profile)
 .venv/bin/python scripts/tune_ink.py --quick                          # ink-threshold sweep on synthetic boards
 .venv/bin/python packaging/launcher.py --self-test                     # what CI runs on every desktop build
+bash scripts/mac_dev_launcher.sh --open                                # macOS: run from an app that can ask for the camera (HARDWARE_DAY step 10)
 ```
 
 `--only H,QC` runs only those scenarios, `--runs N` repeats each one, and `--raw` grades the model without the

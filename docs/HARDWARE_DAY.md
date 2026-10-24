@@ -72,12 +72,14 @@ Budget about 45 minutes, and do part A the day before.
     (PowerShell: `.\.venv\Scripts\python.exe scripts\hardware_check.py`. The desktop app has no hardware check:
     its dashboard's Board checklist shows the camera, microphone and model instead.)
 
-    ✅ Expect: `settings file PASS`, `camera names` listing **Logitech Webcam C930e**, one
-    `camera N PASS 1920x1080 @ ~30 fps`, `microphone PASS`, `tesseract PASS`, `ollama PASS`,
-    `model qwen2.5vl:3b PASS`, `projector PASS a display runs at 1280x800`.
+    ✅ Expect: `settings file PASS`, `camera names` listing **Logitech Webcam C930e** (on a Mac), one
+    `camera N PASS 1920x1080 @ ~30 fps` (on a Mac with the camera's name in front of the size),
+    `microphone PASS`, `tesseract PASS`, `ollama PASS`, `model qwen2.5vl:3b PASS`,
+    `projector PASS a display runs at 1280x800`.
     - Camera gives 1280x720 → it is on a hub, or it is another camera. Plug it in directly.
-    - The 1080p camera is not index 1 → set `SAR_CAMERA_INDEX` in `sar.env` to the index that showed
-      1920x1080, then restart the assistant.
+    - The webcam is not index 1 → set `SAR_CAMERA_INDEX` in `sar.env` to its index, then restart the assistant.
+      On a Mac, `camera names` puts the index in front of each name (a USB webcam is often `0`, ahead of the
+      built-in camera); elsewhere, take the index whose `camera N` row shows 1920x1080.
     - On a Mac, the first run asks whether Terminal may use the camera and the microphone: click **OK**.
       Only the camera's first try can bring up that question, so if you missed it, allow it in System
       Settings as below.
@@ -85,7 +87,19 @@ Budget about 45 minutes, and do part A the day before.
       allow the microphone for the app that started the assistant (Terminal, or Claude if you started it from
       Claude's Terminal panel) in System Settings → Privacy & Security → Microphone, then restart the
       assistant. If you started it from Claude's Terminal panel and it still records silence, start it from
-      Terminal instead. Do the same for Camera.
+      Terminal instead (or from the launcher below). Do the same for Camera.
+    - Camera FAIL on a Mac (`no working camera found`) and macOS never asked, not even after `tccutil reset
+      Camera` → recent macOS can refuse the camera to anything started from a terminal without asking. Build a
+      small launcher app that asks for itself and then starts the assistant:
+
+      ```bash
+      bash scripts/mac_dev_launcher.sh --open
+      ```
+
+      Allow both questions (camera and microphone). The assistant now runs from
+      `build/sar-launcher/SAR Launcher.app` (output in `build/sar-launcher/launcher.log`; stop it with
+      `pkill -f SARLauncher`). Check the camera in the dashboard's Board checklist: the hardware check started
+      from Terminal still can't see it.
     - Camera or microphone dark on Windows → *Settings → Privacy & security → Camera* (and *Microphone*) →
       turn on **Let desktop apps access your camera**.
     - No `projector` line, or `displays ... skipped` → check by eye that the display settings show the
@@ -181,6 +195,7 @@ test cases). File anything that went wrong as a new issue with the photos.
 | Dashboard says it can't reach the assistant | The assistant window was closed. Start it again. |
 | Answers say the AI model is unreachable | Start Ollama (open the Ollama app), then ask again. |
 | Avatar points next to the writing, or the glowing outline is in the wrong place | Calibrate again (step 12) and check the projector page is full screen. |
+| Camera dark on a Mac, and macOS never asked to allow it | Start the assistant from the launcher app (step 10). |
 | Small symbols misread (decimals, minus signs) | Write bigger and bolder, and check the camera really runs at 1920×1080 (step 10). |
 | "I couldn't read your answer clearly" again and again | Write the answer alone on the bottom line, large, as `x = 5`. |
 | Washed-out spot on the board in the camera view | Glare: see step 13. |

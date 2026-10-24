@@ -77,12 +77,14 @@ Calcula unos 45 minutos y haz la parte A un día antes.
     (En PowerShell: `.\.venv\Scripts\python.exe scripts\hardware_check.py`. La app de escritorio no trae esta
     revisión: la lista de la pestaña **Pizarrón** de su panel muestra la cámara, el micrófono y el modelo.)
 
-    ✅ Debes ver: `settings file PASS`, `camera names` con **Logitech Webcam C930e**, un
-    `camera N PASS 1920x1080 @ ~30 fps`, `microphone PASS`, `tesseract PASS`, `ollama PASS`,
-    `model qwen2.5vl:3b PASS` y `projector PASS a display runs at 1280x800`.
+    ✅ Debes ver: `settings file PASS`, `camera names` con **Logitech Webcam C930e** (en una Mac), un
+    `camera N PASS 1920x1080 @ ~30 fps` (en una Mac con el nombre de la cámara antes del tamaño),
+    `microphone PASS`, `tesseract PASS`, `ollama PASS`, `model qwen2.5vl:3b PASS` y
+    `projector PASS a display runs at 1280x800`.
     - La cámara da 1280x720 → está en un hub o es otra cámara. Conéctala directo.
-    - La cámara de 1080p no es el índice 1 → pon en `SAR_CAMERA_INDEX` de `sar.env` el índice que mostró
-      1920x1080 y reinicia el asistente.
+    - La cámara web no es el índice 1 → pon su índice en `SAR_CAMERA_INDEX` de `sar.env` y reinicia el
+      asistente. En una Mac, `camera names` pone el índice antes de cada nombre (la cámara USB suele ser el `0`,
+      antes que la cámara integrada); en otros sistemas, usa el índice cuya línea `camera N` muestra 1920x1080.
     - En una Mac, la primera vez te pregunta si Terminal puede usar la cámara y el micrófono: haz clic en
       **OK**. Solo el primer intento de usar la cámara muestra esa pregunta; si no la viste, permítelo en
       Ajustes del Sistema como se explica abajo.
@@ -90,7 +92,20 @@ Calcula unos 45 minutos y haz la parte A un día antes.
       permite el micrófono para la app que inició el asistente (Terminal, o Claude si lo iniciaste desde la
       terminal de Claude) en Ajustes del Sistema → Privacidad y seguridad → Micrófono y reinicia el
       asistente. Si lo iniciaste desde la terminal de Claude y sigue grabando silencio, inícialo desde
-      Terminal. Haz lo mismo con la Cámara.
+      Terminal (o con el lanzador de abajo). Haz lo mismo con la Cámara.
+    - `camera FAIL` en una Mac (`no working camera found`) y macOS nunca preguntó, ni siquiera después de
+      `tccutil reset Camera` → las versiones recientes de macOS pueden negarle la cámara sin preguntar a todo lo
+      que se inicia desde una terminal. Crea una pequeña app lanzadora que pide el permiso por su cuenta y luego
+      inicia el asistente:
+
+      ```bash
+      bash scripts/mac_dev_launcher.sh --open
+      ```
+
+      Acepta las dos preguntas (cámara y micrófono). El asistente queda corriendo desde
+      `build/sar-launcher/SAR Launcher.app` (su salida está en `build/sar-launcher/launcher.log`; detenlo con
+      `pkill -f SARLauncher`). Revisa la cámara en la lista de la pestaña **Pizarrón** del panel: la revisión
+      del equipo iniciada desde Terminal sigue sin verla.
     - Cámara o micrófono sin imagen ni sonido en Windows → Configuración → Privacidad y seguridad → Cámara (y
       Micrófono) → activa **Permitir que las aplicaciones de escritorio accedan a la cámara**.
     - No sale la línea `projector`, o `displays ... skipped` → revisa a ojo en la configuración de pantallas
@@ -195,6 +210,7 @@ repórtalo como un issue nuevo con las fotos.
 | El panel dice que no hay conexión con el asistente | Se cerró la ventana del asistente. Vuelve a iniciarlo. |
 | Las respuestas dicen que no se puede llegar al modelo de IA | Inicia Ollama (abre la app de Ollama) y vuelve a preguntar. |
 | El avatar señala junto a lo escrito, o el contorno brillante sale en otro lugar | Vuelve a alinear (paso 12) y revisa que la página del proyector esté en pantalla completa. |
+| La cámara no se ve en una Mac y macOS nunca pidió permiso | Inicia el asistente con la app lanzadora (paso 10). |
 | Lee mal los símbolos pequeños (decimales, signos menos) | Escribe más grande y más grueso, y revisa que la cámara de verdad esté a 1920×1080 (paso 10). |
 | Dice una y otra vez que no pudo leer tu respuesta | Escribe la respuesta sola en el último renglón, grande, como `x = 5`. |
 | Pip dice «No puedo oír el micrófono», o la lista del Pizarrón dice «El micrófono solo manda silencio» | El micrófono solo graba ceros: permítelo para la app que inició el asistente (paso 10) y reinicia el asistente. |

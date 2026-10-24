@@ -21,7 +21,7 @@ hardware check load it automatically:
 | Setting | Value | Why |
 | --- | --- | --- |
 | `SAR_CAMERA_WIDTH` / `SAR_CAMERA_HEIGHT` | `1920` / `1080` | The C930e's full HD; the high-res ink crop needs it to keep decimals and minus signs sharp |
-| `SAR_CAMERA_INDEX` | usually `1` | `0` is normally the laptop's own camera; the hardware check lists the camera names |
+| `SAR_CAMERA_INDEX` | usually `1` | On Windows `0` is normally the laptop's own camera; on a Mac a USB webcam is often `0`, and the hardware check puts each camera's name next to its index |
 | `SAR_PROJECTOR_WIDTH` / `SAR_PROJECTOR_HEIGHT` | `1280` / `800` | WXGA native resolution (16:10). A wrong size skews calibration and pointing |
 
 **First run with the devices plugged in:**
@@ -33,7 +33,7 @@ cp sar.env.example sar.env
 
 Look for `camera N  PASS  1920x1080 @ ~30 fps` (if it says 1280x720, the C930e is on a USB hub or a
 different index) and `projector  PASS  a display runs at 1280x800`. Fix `SAR_CAMERA_INDEX` in `sar.env` if
-the 1080p camera is not index 1. If the projector line is missing, or a `displays` line says `skipped`, check
+the C930e is not index 1. If the projector line is missing, or a `displays` line says `skipped`, check
 the projector by eye in the display settings (Windows: *Settings → System → Display*; macOS: *System Settings →
 Displays*): a second display at 1280 × 800.
 

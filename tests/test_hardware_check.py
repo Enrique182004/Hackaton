@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import ctypes
 import importlib.util
+import itertools
+import plistlib
 import re
 import shutil
 import subprocess
+import sys
 import types
 from pathlib import Path
 from typing import Any
@@ -57,6 +60,113 @@ def test_projector_missing_warns() -> None:
 
 def test_parse_camera_names() -> None:
     assert hc.parse_camera_names(CAMERAS) == ["MacBook Air Camera", "Logitech Webcam C930e"]
+
+
+BRIO = ("Logitech BRIO", "0x210000046d085e")
+BUILT_IN = ("MacBook Air Camera", "6C707041-05AC-0010-000C-000000000001")
+
+
+def test_opencv_order_is_unique_id_order_not_macos_order() -> None:
+    # Hardware day: system_profiler listed the MacBook Air Camera first, but OpenCV opened the BRIO as index 0.
+    assert hc.order_like_opencv([BUILT_IN, BRIO]) == ["Logitech BRIO", "MacBook Air Camera"]
+
+
+def test_opencv_camera_order_is_empty_without_pyobjc_or_off_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "AVFoundation", None)  # import AVFoundation -> ImportError
+    monkeypatch.setattr(hc.platform, "system", lambda: "Darwin")
+    assert hc.opencv_camera_order() == []
+    monkeypatch.setattr(hc.platform, "system", lambda: "Windows")
+    assert hc.opencv_camera_order() == []
+
+
+def test_opencv_camera_order_reads_video_and_muxed_devices(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Device:
+        def __init__(self, name: str, unique_id: str) -> None:
+            self.name, self.unique_id = name, unique_id
+
+        def localizedName(self) -> str:
+            return self.name
+
+        def uniqueID(self) -> str:
+            return self.unique_id
+
+    by_media = {"vide": [Device(*BUILT_IN)], "muxx": [Device(*BRIO)]}
+    capture_device = types.SimpleNamespace(devicesWithMediaType_=by_media.get)
+    avf = types.SimpleNamespace(AVMediaTypeVideo="vide", AVMediaTypeMuxed="muxx", AVCaptureDevice=capture_device)
+    monkeypatch.setitem(sys.modules, "AVFoundation", avf)
+    monkeypatch.setattr(hc.platform, "system", lambda: "Darwin")
+    assert hc.opencv_camera_order() == ["Logitech BRIO", "MacBook Air Camera"]
+
+
+def _fake_cv2(monkeypatch: pytest.MonkeyPatch, working: dict[int, tuple[int, int]]) -> None:
+    """cv2 whose VideoCapture(i) opens only the indices in `working`, each giving frames of that (w, h)."""
+
+    class VideoCapture:
+        def __init__(self, index: int) -> None:
+            self.size = working.get(index)
+
+        def set(self, prop: int, value: float) -> bool:
+            return True
+
+        def isOpened(self) -> bool:
+            return self.size is not None
+
+        def read(self) -> tuple[bool, Any]:
+            assert self.size is not None
+            return True, types.SimpleNamespace(shape=(self.size[1], self.size[0], 3))
+
+        def release(self) -> None: ...
+
+    monkeypatch.setitem(
+        sys.modules,
+        "cv2",
+        types.SimpleNamespace(VideoCapture=VideoCapture, CAP_PROP_FRAME_WIDTH=3, CAP_PROP_FRAME_HEIGHT=4),
+    )
+    clock = itertools.count(0.0, 1.5)  # 90 frames per 1.5 s: 60 fps
+    monkeypatch.setattr(hc, "time", types.SimpleNamespace(time=lambda: next(clock)))
+
+
+def test_no_camera_fails_even_when_camera_names_are_listed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_cv2(monkeypatch, {})
+    monkeypatch.setattr(hc, "opencv_camera_order", lambda: ["Logitech BRIO", "MacBook Air Camera"])
+    results = hc.check_cameras(None, None)
+    assert results[0][0] == "camera names"
+    assert ("camera", "FAIL", "no working camera found in indices 0..3") in results
+    assert hc.check_cameras(1, None)[1:] == [
+        ("camera 1", "FAIL", "cannot open"),
+        ("camera", "FAIL", "no working camera found in index 1"),
+    ]
+
+
+def test_too_slow_camera_still_fails_with_a_size_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_cv2(monkeypatch, {0: (640, 480)})
+    clock = itertools.count(0.0, 30.0)  # 90 frames per 30 s: 3 fps
+    monkeypatch.setattr(hc, "time", types.SimpleNamespace(time=lambda: next(clock)))
+    monkeypatch.setattr(hc, "opencv_camera_order", lambda: [])
+    monkeypatch.setattr(hc, "camera_names", lambda: [])
+    statuses = {name: status for name, status, _detail in hc.check_cameras(None, None)}
+    assert statuses == {"camera 0": "FAIL", "camera 0 size": "WARN", "camera": "FAIL"}
+
+
+def test_each_camera_row_names_the_device_at_that_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_cv2(monkeypatch, {0: (1920, 1080), 1: (1920, 1080)})
+    monkeypatch.setattr(hc, "opencv_camera_order", lambda: ["Logitech BRIO", "MacBook Air Camera"])
+    results = {name: (status, detail) for name, status, detail in hc.check_cameras(None, None, (1920, 1080))}
+    assert results["camera names"][1].startswith("0 Logitech BRIO; 1 MacBook Air Camera")
+    assert results["camera 0"][0] == "PASS"
+    assert results["camera 0"][1].startswith("Logitech BRIO: 1920x1080 @ 60.0 fps")
+    assert results["camera 1"][1].startswith("MacBook Air Camera: 1920x1080")
+    assert "camera" not in results
+
+
+def test_macos_list_order_is_not_claimed_as_index_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_cv2(monkeypatch, {0: (1920, 1080)})
+    monkeypatch.setattr(hc, "opencv_camera_order", lambda: [])
+    monkeypatch.setattr(hc, "camera_names", lambda: ["MacBook Air Camera", "Logitech BRIO"])
+    results = {name: detail for name, _status, detail in hc.check_cameras(None, None)}
+    assert "usually follows" not in results["camera names"]
+    assert "not always the index order" in results["camera names"] and "--save-frame" in results["camera names"]
+    assert results["camera 0"].startswith("1920x1080 @")
 
 
 def test_resolution_status() -> None:
@@ -376,6 +486,103 @@ def test_setup_mac_keeps_an_existing_sar_env(mac_checkout: tuple[Path, dict[str,
     assert (repo / "sar.env").read_text() == "SAR_CAMERA_INDEX=0\n" and "Created sar.env" not in out.stdout
 
 
+@pytest.fixture
+def launcher_checkout(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    """A checkout at a path nothing hard-codes, with swiftc/codesign/pgrep/open stubbed; plutil is the real one."""
+    bash, plutil = shutil.which("bash"), shutil.which("plutil")
+    if bash is None or plutil is None:
+        pytest.skip("needs bash and plutil (macOS)")
+    repo, bin_dir = tmp_path / "some checkout", tmp_path / "bin"
+    (repo / "scripts").mkdir(parents=True)
+    bin_dir.mkdir()
+    for name in ("mac_dev_launcher.sh", "mac_dev_launcher.swift"):
+        shutil.copy(ROOT / "scripts" / name, repo / "scripts" / name)
+    for tool in ("dirname", "rm", "mkdir", "cat", "mv"):
+        found = shutil.which(tool)
+        assert found, tool
+        (bin_dir / tool).symlink_to(found)
+    (bin_dir / "plutil").symlink_to(plutil)
+    _stub(bin_dir, "uname", "echo Darwin")
+    _stub(bin_dir, "xcode-select", "echo /Library/Developer/CommandLineTools")
+    _stub(bin_dir, "open", 'echo "$*" >> "$HOME/open.log"')
+    _stub(bin_dir, "swiftc", 'echo "$*" >> "$HOME/swiftc.log"\n: > "$3"')  # swiftc -O -o OUT SRC
+    _stub(bin_dir, "codesign", 'echo "$*" >> "$HOME/codesign.log"')
+    _stub(bin_dir, "pgrep", "exit 1")
+    return repo, {"PATH": str(bin_dir), "HOME": str(tmp_path), "BASH": bash}
+
+
+def _build_launcher(repo: Path, env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [env["BASH"], "scripts/mac_dev_launcher.sh", *args],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def test_mac_dev_launcher_builds_for_its_own_checkout(launcher_checkout: tuple[Path, dict[str, str]]) -> None:
+    repo, env = launcher_checkout
+    out = _build_launcher(repo, env, "--open")
+    assert out.returncode == 0, out.stdout + out.stderr
+    app = repo / "build" / "sar-launcher" / "SAR Launcher.app"
+    info = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
+    assert info["SARCheckout"] == str(repo.resolve())
+    assert info["CFBundleExecutable"] == "SARLauncher" and (app / "Contents" / "MacOS" / "SARLauncher").exists()
+    assert info["NSCameraUsageDescription"] and info["NSMicrophoneUsageDescription"]
+    home = Path(env["HOME"])
+    assert "scripts/mac_dev_launcher.swift" in (home / "swiftc.log").read_text()
+    signed = repo.resolve() / "build" / "sar-launcher" / ".new" / "SAR Launcher.app"
+    assert (home / "codesign.log").read_text().strip() == f"--force --sign - {signed}"
+    assert (home / "open.log").read_text().strip() == str(app.resolve())
+    assert not (app.parent / ".new").exists()
+
+
+def test_mac_dev_launcher_rejects_unknown_options(launcher_checkout: tuple[Path, dict[str, str]]) -> None:
+    repo, env = launcher_checkout
+    out = _build_launcher(repo, env, "--run")
+    assert out.returncode == 2 and "Usage:" in out.stderr
+
+
+def test_mac_dev_launcher_failed_build_keeps_the_old_app(launcher_checkout: tuple[Path, dict[str, str]]) -> None:
+    repo, env = launcher_checkout
+    old = repo / "build" / "sar-launcher" / "SAR Launcher.app" / "Contents" / "MacOS" / "SARLauncher"
+    old.parent.mkdir(parents=True)
+    old.write_text("the launcher that works")
+    _stub(Path(env["PATH"]), "swiftc", "exit 1")
+    out = _build_launcher(repo, env)
+    assert out.returncode != 0
+    assert old.read_text() == "the launcher that works"
+
+
+def test_mac_dev_launcher_will_not_rebuild_a_running_launcher(
+    launcher_checkout: tuple[Path, dict[str, str]],
+) -> None:
+    repo, env = launcher_checkout
+    _stub(Path(env["PATH"]), "pgrep", "exit 0")
+    out = _build_launcher(repo, env)
+    assert out.returncode == 1 and "Stop the assistant first" in out.stderr
+    assert not (Path(env["HOME"]) / "swiftc.log").exists()
+
+
+def test_mac_dev_launcher_reads_the_checkout_from_the_build_not_the_source() -> None:
+    source = (ROOT / "scripts" / "mac_dev_launcher.swift").read_text(encoding="utf-8")
+    assert 'forInfoDictionaryKey: "SARCheckout"' in source and "/Users/" not in source
+
+
+def test_mac_dev_launcher_swift_parses() -> None:
+    swiftc = shutil.which("swiftc")
+    # /usr/bin/swiftc is a stub that offers to install the command line tools when they are missing.
+    xcode_select = shutil.which("xcode-select")
+    if swiftc is None or xcode_select is None or subprocess.run([xcode_select, "-p"], capture_output=True).returncode:
+        pytest.skip("needs swiftc (macOS command line tools)")
+    out = subprocess.run(
+        [swiftc, "-parse", str(ROOT / "scripts" / "mac_dev_launcher.swift")], capture_output=True, text=True, timeout=60
+    )
+    assert out.returncode == 0, out.stderr
+
+
 def test_setup_mac_accepts_python_3_10_and_3_11() -> None:
     text = SETUP_SH.read_text(encoding="utf-8")
     assert "for candidate in python3.12 python3.11 python3.10" in text
@@ -403,8 +610,6 @@ class _FakeStream:
 
 
 def _fake_pyaudio(monkeypatch: pytest.MonkeyPatch, sample: int) -> None:
-    import sys
-
     class PyAudio:
         def get_device_count(self) -> int:
             return 1
