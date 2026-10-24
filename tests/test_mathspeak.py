@@ -245,6 +245,9 @@ REVIEW_CASES: list[tuple[str, str]] = [
     ("a - 3", "a minus three"),
     ("a-3", "a minus three"),
     ("x = a -3", "x equals a minus three"),
+    ("Then a -3 = -1.", "Then a minus three equals negative one."),
+    ("Let B-2 = 5", "Let B minus two equals five"),
+    ("Do 2x + 3 = 11 next.", "Do two x plus three equals eleven next."),
     # ranges, labels and section numbers in prose
     ("Pick a number from 1-10.", "Pick a number from one to ten."),
     ("Grades 7-8", "Grades seven to eight"),
@@ -254,6 +257,31 @@ REVIEW_CASES: list[tuple[str, str]] = [
     ("Subtract 3 from 10-2.", "Subtract three from ten minus two."),
     ("10-3-2 = 5", "ten minus three minus two equals five"),
     ("Do 8-3 first.", "Do eight minus three first."),
+]
+
+# LaTeX that qwen2.5vl:3b wrote in a live run when not given the math system prompt.
+LATEX_CASES: list[tuple[str, str]] = [
+    (r"\( \frac{2}{3} \times \frac{3}{5} \)", "two thirds times three fifths"),
+    (
+        r"So, \( \frac{2 \times 3}{3 \times 5} = \frac{6}{15} \), which simplifies to \( \frac{2}{5} \).",
+        "So, the quantity two times three, over the quantity three times five, equals six fifteenths, "
+        "which simplifies to two fifths.",
+    ),
+    (r"\( \frac{5}{6} \div \frac{1}{3} \)", "five sixths divided by one third"),
+    (r"$x^{2} + 1$", "x squared plus one"),
+    (r"$$x = \frac{1}{2}$$", "x equals one half"),
+    (r"\sqrt{16} = 4", "the square root of sixteen equals four"),
+    (r"\sqrt[3]{8}", "the cube root of eight"),
+    (r"\[ x \leq 5 \]", "x is less than or equal to five"),
+    (r"\left( x + 1 \right)^2", "the quantity x plus one, squared"),
+    (r"x_{1} + x_{2}", "x sub one plus x sub two"),
+    (r"\frac{\frac{1}{2}}{3}", "one half over three"),
+    (r"\dfrac{3}{4} of \text{the pizza}", "three fourths of the pizza"),
+    (r"x \neq 3 \text{ and } y \geq -2", "x is not equal to three and y is greater than or equal to negative two"),
+    ("It costs $5 and $10.", "It costs five dollars and ten dollars."),
+    ("Pay $3 for $x$.", "Pay three dollars for x."),
+    (r"$x$ and $y + 1$", "x and y plus one"),
+    (r"3\text{ and }y", "three and y"),
 ]
 
 # Every problem and answer in knowledge/math/quiz_bank.csv and worksheet_linear_equations.md, read by hand.
@@ -335,7 +363,7 @@ BANK_CASES: list[tuple[str, str]] = [
     ("Problem 5: 2/3 × 3/5", "Problem five: two thirds times three fifths"),
 ]
 
-ALL_CASES = CASES + REVIEW_CASES + BANK_CASES
+ALL_CASES = CASES + REVIEW_CASES + LATEX_CASES + BANK_CASES
 KNOWLEDGE = Path(__file__).resolve().parents[1] / "biobench_sar" / "knowledge" / "math"
 DASHES = ["pages 3–5", "Try 2–3 more problems.", "5—6", "3 –5", "(x+1)–2", "3– 5", "x —2", "a–(b)", "1–2–3", "2—"]
 DEEP_CHAINS = ["1+" * 3000 + "1", "1/" * 2000 + "2", "1-" * 2000 + "1", "2(x)" * 1500, "x" + " = x" * 1500]
@@ -568,7 +596,7 @@ def test_fallback_logs_one_line_and_spells_numbers(
     assert "twelve" in out
 
 
-@pytest.mark.parametrize("text", ["x ∈ {1, 2}", "x ∉ A"])
+@pytest.mark.parametrize("text", ["x ∈ {1, 2}", "x ∉ A", r"\\frac{1}{2}", r"\\( x \\)", r"2 \\times 3"])
 def test_set_membership_is_a_math_symbol(text: str) -> None:
     assert has_math_symbols(text)
     assert not has_math_symbols(to_speech(text))

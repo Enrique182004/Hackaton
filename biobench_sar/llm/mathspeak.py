@@ -208,6 +208,56 @@ _RANGE_DASH_RE = re.compile(rf"(?<![\w.,–—-])({_DASH_NUM})[–—]({_DASH_NU
 _DASH_OPS = frozenset("+-*/^=<>×÷·±≤≥≠≈")
 _ROOT_WORD_RE = re.compile(r"\b(?:sqrt|cbrt)\b", re.IGNORECASE)
 _SECTION_RE = re.compile(r"\d+(?:\.\d+){2,}")
+# LaTeX the model sometimes writes even when told to use words: \( \frac{2}{3} \times \frac{3}{5} \)
+_LATEX_OPEN_RE = re.compile(r"\\[(\[]\s*|\$\$\s*")
+_LATEX_CLOSE_RE = re.compile(r"\s*\\[)\]]|\s*\$\$")
+_LATEX_INLINE_RE = re.compile(r"(?<![\w$])\$(?![\s\d$])([A-Za-z]|[^$\n]*?[\\^_={}+<>][^$\n]*?)(?<!\s)\$(?![\w$])")
+_LATEX_TEXT_RE = re.compile(r"\\(?:text|mathrm|mathbf|operatorname)\s*\{([^{}]*)\}")
+_LATEX_FRAC_RE = re.compile(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
+_LATEX_SQRT_RE = re.compile(r"\\sqrt\s*(?:\[\s*(\d)\s*\])?\s*\{([^{}]*)\}")
+_LATEX_SCRIPT_RE = re.compile(r"([\^_])\{([^{}]*)\}")
+_LATEX_CMD_RE = re.compile(r"\\([A-Za-z]+|[,;:! %{}])")
+_LATEX_SYMBOLS = {
+    "times": "×",
+    "div": "÷",
+    "cdot": "·",
+    "pm": "±",
+    "mp": "∓",
+    "le": "≤",
+    "leq": "≤",
+    "ge": "≥",
+    "geq": "≥",
+    "ne": "≠",
+    "neq": "≠",
+    "approx": "≈",
+    "in": "∈",
+    "notin": "∉",
+    "to": "→",
+    "rightarrow": "→",
+    "Rightarrow": "⇒",
+    "infty": "∞",
+    "pi": "π",
+    "theta": "θ",
+    "alpha": "α",
+    "beta": "β",
+    "circ": "°",
+    "cdots": "...",
+    "ldots": "...",
+    "dots": "...",
+    "sqrt": "√",
+    "left": "",
+    "right": "",
+    "quad": " ",
+    "qquad": " ",
+    ",": " ",
+    ";": " ",
+    ":": " ",
+    " ": " ",
+    "!": "",
+    "%": "%",
+    "{": "{",
+    "}": "}",
+}
 _AUX_RE = re.compile(r"(?:^\s*|([.!?;:,(\n\"“])\s*)(is|are|was|were|does|did)\s+$", re.IGNORECASE)
 _XY_PLANE_RE = re.compile(r"\b([xyz])-([xyz])(?=[- ]plane\b)")
 _POW_STARS_RE = re.compile(r"(?<=[\w)])\s*\*\*\s*(?=[\w(-])")
@@ -215,9 +265,10 @@ _UNIT_PER_RE = re.compile(r"(\d\s?)([A-Za-z]+)/([A-Za-z]+)\b")
 _NUM_PER_RE = re.compile(r"(\d)\s?/\s?([A-Za-z]{2,})\b")
 _WORD_SLASH_RE = re.compile(r"\b([A-Za-z]{2,})/([A-Za-z]+)\b")
 
-_CANDIDATE_RE = re.compile(r"[(\d\-−–—/^*=+<>×÷·∙⋅√∛≤≥≠≈∈∉±∓%°|$#→⇒²³¹⁰⁴-⁹⁺⁻⁽⁾ⁿ½⅓-⅞πθαβγΔδλμσφω∞_₀-₉]")
+_CANDIDATE_RE = re.compile(r"[\\(\d\-−–—/^*=+<>×÷·∙⋅√∛≤≥≠≈∈∉±∓%°|$#→⇒²³¹⁰⁴-⁹⁺⁻⁽⁾ⁿ½⅓-⅞πθαβγΔδλμσφω∞_₀-₉]")
 _SYMBOL_RE = re.compile(
     r"[\^*=+<>×÷·∙⋅√∛≤≥≠≈∈∉±∓%°/−²³¹⁰⁴-⁹ⁿ½⅓-⅞→⇒]"
+    r"|\\(?:[dt]?frac|sqrt|times|div|cdot|pm|leq?|geq?|neq?|approx|left|right|text|pi)(?![A-Za-z])|\\[()\[\]]"
     r"|\|[^|\n]+\|"
     r"|(?<![\w-])-\s?(?=[\d.(√])"
     r"|\d\s?-"
@@ -368,7 +419,33 @@ class _Tok:
     parts: tuple[str, ...] = ()  # var: (spoken name,); mixed: (whole, num, den); ratio: terms; money: (dollars, cents)
 
 
+def _latex(text: str) -> str:
+    """Turn the common LaTeX math commands into the plain notation the parser reads."""
+    text = _LATEX_INLINE_RE.sub(r"\1", text)
+    text = _LATEX_CLOSE_RE.sub("", _LATEX_OPEN_RE.sub("", text))
+    for _ in range(_MAX_DEPTH):  # innermost braces first, so nested fractions unfold one level per pass
+        nxt = _LATEX_TEXT_RE.sub(_latex_text, text)
+        nxt = _LATEX_FRAC_RE.sub(r"(\1)/(\2)", nxt)
+        nxt = _LATEX_SQRT_RE.sub(lambda m: f"{'∛' if m.group(1) == '3' else '√'}({m.group(2)})", nxt)
+        nxt = _LATEX_SCRIPT_RE.sub(lambda m: f"_{m.group(2)}" if m.group(1) == "_" else f"^({m.group(2)})", nxt)
+        if nxt == text:
+            break
+        text = nxt
+    text = _LATEX_CMD_RE.sub(lambda m: _LATEX_SYMBOLS.get(m.group(1), m[0]), text)
+    return re.sub(r"(?<=\S) {2,}(?=\S)", " ", text)
+
+
+def _latex_text(m: re.Match[str]) -> str:
+    """ "3\\text{ and }y" -> "3 and y": keep the words apart from the math around them."""
+    s, start, end = m.string, m.start(), m.end()
+    before = " " if start and not s[start - 1].isspace() else ""
+    after = " " if end < len(s) and not s[end].isspace() else ""
+    return f"{before}{m.group(1).strip()}{after}"
+
+
 def _prepass(text: str) -> str:
+    if any(mark in text for mark in ("\\", "$", "^{", "_{")):
+        text = _latex(text)
     text = text.replace("−", "-").replace("⋅", "·").replace("∗", "*")
     text = _RANGE_DASH_RE.sub(_range_dash, text)
     text = _EN_DASH_RE.sub(_en_dash, text)
