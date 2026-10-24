@@ -1,4 +1,5 @@
 import { $, el, formatDuration } from "./api.js";
+import { setBadge } from "./tabs.js";
 
 const SENTENCES = {
   idle: "Ready. Ask a question below, or on the board.",
@@ -6,6 +7,14 @@ const SENTENCES = {
   transcribing: "Writing down what you said…",
   thinking: "Thinking about your question…",
   speaking: "Answering on the board…",
+};
+
+const ASK_BADGES = {
+  idle: "ready",
+  listening: "listening…",
+  transcribing: "writing it down…",
+  thinking: "thinking…",
+  speaking: "answering…",
 };
 
 let connected = false;
@@ -53,6 +62,9 @@ export function renderStatus(s) {
   $("latency").textContent = s.last_latency_s == null ? "–" : `${s.last_latency_s.toFixed(1)} s`;
   $("uptime").textContent = formatDuration(s.uptime_s);
   $("viewport").dataset.live = s.camera_running ? "1" : "0";
+  if (!s.camera_running) setBadge("board", "camera not found", "bad");
+  else if (!s.calibrated) setBadge("board", "not lined up yet", "warn");
+  else setBadge("board", "ready", "ok");
 }
 
 export function renderState(state, detail) {
@@ -64,6 +76,7 @@ export function renderState(state, detail) {
   if (detail === "busy") text += " Still working on the last question, so please wait a moment.";
   $("status-text").textContent = text;
   $("listen-btn").dataset.live = state === "listening" ? "1" : "0";
+  setBadge("ask", ASK_BADGES[state] || state, state === "idle" ? "ok" : "warn");
 }
 
 // `hint` marks a degraded mode where polling still works, so it reads as a warning rather than a failure.
@@ -73,6 +86,7 @@ export function renderConnection(isConnected, hint = "") {
   if (!connected) {
     $("status-line").dataset.state = "offline";
     $("status-text").textContent = "Can't reach the assistant. Is the app still running?";
+    setBadge("ask", "not connected", "bad");
     return;
   }
   renderState(lastState);

@@ -3,6 +3,7 @@ import { initAsk, addInteraction, showPending, loadHistory, onListenState } from
 import { initCamera, setTarget } from "./camera.js";
 import { initFiles, refreshFiles, renderFiles } from "./files.js";
 import { renderStatus, renderState, renderConnection } from "./status.js";
+import { initTabs } from "./tabs.js";
 import { logEvent, renderConfig } from "./log.js";
 
 const STATUS_MS = 2000;
@@ -77,6 +78,7 @@ function initCalibration() {
   });
 }
 
+initTabs();
 renderConnection(false);
 initSocket();
 loadHistory().catch(() => {});
