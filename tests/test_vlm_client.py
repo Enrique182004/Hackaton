@@ -1035,6 +1035,15 @@ def test_good_replies_are_not_asked_again() -> None:
         ("Subtract five from both sides.", False),
         ("Is x equal to five?", False),
         ("If x equals five, what is three x?", False),
+        # the letter's value said another way
+        ("x turns out to be five.", True),
+        ("x ends up being five.", True),
+        ("That makes x five.", True),
+        ("x has to be five.", True),
+        ("The roots are five and negative three.", True),
+        ("What makes x alone on one side?", False),
+        ("Divide both sides by three.", False),
+        ("What do you get when you divide fifteen by three?", False),
     ],
 )
 def test_reveals_value(spoken: str, reveals: bool) -> None:
@@ -1409,6 +1418,11 @@ def test_spanish_reply_goes_through_mathspeak_es_and_keeps_display_text() -> Non
         ("x más tres es igual a ocho.", False),
         ("Recuerda que la respuesta es una fracción.", False),
         ("Entonces x es igual a menos cuatro.", True),
+        ("x tiene que ser cinco.", True),
+        ("Las raíces son cinco y menos tres.", True),
+        ("Eso hace que x sea cinco.", True),
+        ("Tienes que restar cinco en ambos lados.", False),
+        ("¿Cuánto tiene que ser x?", False),
     ],
 )
 def test_reveals_value_in_spanish(text: str, reveals: bool) -> None:
@@ -1965,6 +1979,27 @@ def test_help_on_a_board_already_solved_is_not_censored() -> None:
     with _posts(c, reply) as post:
         action = c.evaluate("is this right?", JPEG, [], REGIONS, SIZE)
     assert post.call_count == 1 and action.spoken_text == reply["spoken_text"]
+
+
+@pytest.mark.parametrize(
+    ("leak", "language"),
+    [
+        ("Then divide 15 by 3 to get 5.", "en"),
+        ("Fifteen divided by three is five.", "en"),
+        ("You should get five.", "en"),
+        ("Quince entre tres es cinco.", "es"),
+        ("Obtienes cinco.", "es"),
+    ],
+)
+def test_help_reply_stating_the_solution_another_way_is_asked_again(leak: str, language: str) -> None:
+    """Said without the letter, the value is still the solution: code solves the board's problem and compares."""
+    c = _math_client()
+    step = "Divide both sides by three." if language == "en" else "Divide ambos lados entre tres."
+    first = {**MATH_GOOD, "board_problem": "3x = 15", "spoken_text": f"{step} {leak}"}
+    with _posts(c, first, first) as post:
+        action = c.evaluate("help", JPEG, [], REGIONS, SIZE, language=language)
+    assert post.call_count == 2, "asked again"
+    assert action.spoken_text == step, "what still states it is cut"
 
 
 def test_quiz_hint_stating_the_solution_is_asked_again() -> None:

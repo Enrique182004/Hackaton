@@ -915,12 +915,51 @@ def solved_form(text: Any) -> bool:
 # ---- a reply that states the solution --------------------------------------------------------------------------
 
 _SENTENCES = re.compile(r"(?<=[.!?])\s+")
-_ANSWER_WORDS = re.compile(r"\b(?:answer|solution|result|respuesta|solucion|resultado)\s*(?:=|:)\s*")
+_ANSWER_WORDS = re.compile(
+    r"\b(?:answers?|solutions?|results?|roots?|zeros?|respuestas?|solucion(?:es)?|resultados?|raices|raiz)"
+    r"\s*(?:=|:|\bare\b|\bson\b)\s*"
+)
 _EQUALS = re.compile(r"=\s*")
+# A result said without "is": "divide 15 by 3 to get 5", "you should get five", "x turns out to be 5", "x ends up
+# being 5", "obtienes cinco", "te sale cinco", "x tiene que ser cinco". Marked "⇒": what follows is a result.
+_RESULT_WORDS = {
+    "en": re.compile(
+        r"\b(?:(?:to|you(?:'ll|\s+will|\s+should|\s+would|\s+can)?|we(?:'ll)?|should|will|would|then)\s+)?"
+        r"(?:get|gets|got)\b|\bgives?(?:\s+you)?\b|\bmakes?\b|\bturns?\s+out\s+to\s+be\b|"
+        r"\bends?\s+up\s+(?:being|as|at|with)\b|\bcomes?\s+(?:out\s+)?to\b|\bworks?\s+out\s+to\b|\bhas\s+to\s+be\b|"
+        r"\bleaves?(?:\s+you)?(?:\s+with)?\b"
+    ),
+    "es": re.compile(
+        r"\b(?:obtienes|obtenemos|obtiene|obtendras|sale|salen|da|dan|queda|quedan|resulta(?:\s+ser)?|"
+        r"tiene\s+que\s+ser|tendria\s+que\s+ser)\b"
+    ),
+}
+# "That makes x five", "eso hace que x sea cinco": the letter's value.
+_MAKES_LETTER = re.compile(r"\b(?:makes?|hace\s+que)\s+([a-z])\s+(?:sea\s+|valga\s+)?(?=[-\d(√.])")
+_LEFT_MATH = re.compile(r"[\d\s.+\-*/÷^()√]*$")
+
+
+def _results(text: str, language: str | None) -> str:
+    text = _MAKES_LETTER.sub(r"\1 = ", text)
+    for lang in _languages(language):
+        text = _RESULT_WORDS[lang].sub(" ⇒ ", text)
+    return text
+
+
+def _worked_left(before: str) -> bool:
+    """Whether the text before an "=" ends in arithmetic on numbers ("15 / 3", "then 20 - 5"), not a term with a
+    letter ("3 x", "2(x + 1)", "x / 3")."""
+    run = _LEFT_MATH.search(before).group()  # type: ignore[union-attr]  # "*$" always matches
+    prefix = before[: len(before) - len(run)]
+    return not re.search(r"(?<![a-z])[a-z]$", prefix) and bool(re.search(r"\d\s*[-+*/÷^]\s*[\d(√.]", run))
 
 
 def _stated(sentence: str, solutions: Answers, language: str | None) -> bool:
-    text = to_math(sentence, language)
+    math_text = to_math(sentence, language)
+    if language != "en":  # "cinco y menos tres" is two values, not 5y - 3
+        math_text = re.sub(r"(?<=\d)\s+y\s+(?=[-\d])", " ; ", math_text)
+    marked = _results(math_text, language)
+    text = marked.replace("⇒", "=")  # same length: a match in one is at the same place in the other
     by_letter: dict[str, list[Value]] = {}
     for letter, value in solutions:
         by_letter.setdefault(letter, []).append(value)
@@ -947,6 +986,17 @@ def _stated(sentence: str, solutions: Answers, language: str | None) -> bool:
         return True
     if "" in by_letter:  # arithmetic: "... = 5/6" anywhere gives the result away
         return any(says(found, by_letter[""]) for found in _EQUALS.finditer(text))
+    # The letter's value without the letter: arithmetic worked out to it ("15 divided by 3 is 5", "quince entre tres
+    # es cinco") or a result ("divide 15 by 3 to get 5", "you should get five", "obtienes cinco").
+    for found in re.finditer(r"[=⇒]\s*", marked):
+        before = marked[: found.start()]
+        if found.group().startswith("⇒"):
+            if re.search(r"(?<![a-z])[a-z]\s*$", before):
+                continue  # "x ⇒ 5" is x's value, read above; "y ⇒ 5" is another letter's
+        elif not _worked_left(before):
+            continue  # "3 x = 15", "the constant = 5": a step or a word, not a result
+        if says(found, every):
+            return True
     return False
 
 

@@ -822,21 +822,29 @@ _NUMBER_ES = (
     r"(?:\d|cero|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|"
     r"dieci\w+|veinte|veinti\w+|treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa|cien|ciento|mil)"
 )
-# "So x equals five.", "The answer is 5", "x should be seven": the value of the letter said as a result. Not a step
-# such as "three x equals fifteen" (the letter has a number in front) and not a question.
+# "So x equals five.", "The answer is 5", "x should be seven", "x turns out to be five", "That makes x five", "The
+# roots are five and negative three": the value of the letter said as a result. Not a step such as "three x equals
+# fifteen" (the letter has a number in front) and not a question.
 _REVEAL_RE = re.compile(
     r"(?:^|[,;:]|\b(?:so|then|and|means|now|great|yes|correct|because)\b)\s*"
-    r"(?:x|y|n|the\s+(?:answer|solution|value\s+of\s+[a-z])|your\s+answer)\s+"
-    r"(?:=|equals|is(?:\s+equal\s+to)?|would\s+be|will\s+be|should\s+be|must\s+be)\s+"
+    r"(?:(?:x|y|n|the\s+(?:answer|solution|value\s+of\s+[a-z])|your\s+answer)\s+"
+    r"(?:=|equals|is(?:\s+equal\s+to)?|would\s+be|will\s+be|should\s+be|must\s+be|has\s+to\s+be|"
+    r"turns\s+out\s+to\s+be|ends\s+up\s+(?:being|as)|comes\s+out\s+to|works\s+out\s+to)"
+    r"|the\s+(?:roots|solutions|answers|values\s+of\s+[a-z])\s+are)\s+"
     rf"(?:negative\s+|minus\s+)?{_NUMBER}"
+    rf"|\bmakes\s+(?:x|y|n)\s+(?:negative\s+|minus\s+)?{_NUMBER}"
 )
-# The same in Spanish, on accent-free text: "Entonces x es igual a cinco.", "La respuesta es cinco", "x vale siete".
+# The same in Spanish, on accent-free text: "Entonces x es igual a cinco.", "La respuesta es cinco", "x vale siete",
+# "x tiene que ser cinco", "Las raíces son cinco y menos tres", "Eso hace que x sea cinco".
 _REVEAL_RE_ES = re.compile(
     r"(?:^|[,;:]|\b(?:asi\s+que|entonces|o\s+sea|por\s+lo\s+tanto|luego|y|es\s+decir|correcto|bien|si|porque|"
     r"ahora|queda|nos\s+queda|te\s+queda)\b)\s*"
-    r"(?:x|n|ye|la\s+(?:respuesta|solucion)|el\s+valor\s+de\s+(?:la\s+)?(?:x|ye|n|letra|incognita)|tu\s+respuesta)\s+"
-    r"(?:=|es\s+igual\s+a|es|vale|equivale\s+a|igual\s+a|seria|sera|debe\s+ser|deberia\s+ser|da|queda\s+en)\s+"
+    r"(?:(?:x|n|ye|la\s+(?:respuesta|solucion)|el\s+valor\s+de\s+(?:la\s+)?(?:x|ye|n|letra|incognita)|tu\s+respuesta)\s+"
+    r"(?:=|es\s+igual\s+a|es|vale|equivale\s+a|igual\s+a|seria|sera|debe\s+ser|deberia\s+ser|da|queda\s+en|"
+    r"tiene\s+que\s+ser|tendria\s+que\s+ser|resulta(?:\s+ser)?|sale)"
+    r"|las\s+(?:raices|soluciones|respuestas)\s+son)\s+"
     rf"(?:menos\s+|negativo\s+)?{_NUMBER_ES}\b"
+    rf"|\bhace\s+que\s+(?:x|n|ye)\s+(?:sea|valga)\s+(?:menos\s+|negativo\s+)?{_NUMBER_ES}\b"
 )
 _SENTENCE_RE = re.compile(r"[^.!?]+[.!?]*")
 # Sentences of text that may still hold notation: "3.5" is no sentence end, "Try 3.5 - x. Then..." is two.

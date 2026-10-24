@@ -274,6 +274,61 @@ def test_states_solution_in_spanish(text: str, states: bool) -> None:
     assert states_solution(text, SOLVED, "es") is states
 
 
+@pytest.mark.parametrize(
+    ("text", "states"),
+    [
+        ("15 divided by 3 is 5.", True),
+        ("Then divide 15 by 3 to get 5.", True),
+        ("x turns out to be 5.", True),
+        ("x ends up being 5.", True),
+        ("That makes x five.", True),
+        ("You should get five.", True),
+        ("Fifteen divided by three gives you five.", True),
+        ("x has to be five.", True),
+        # hints: the step, the question, the numbers of a step
+        ("Divide both sides by three.", False),
+        ("What do you get when you divide fifteen by three?", False),
+        ("Subtract five from both sides.", False),
+        ("Subtract five from both sides to get 3x = 15.", False),
+        ("Twenty minus five is fifteen.", False),
+        ("Get the x term alone first.", False),
+        ("What makes both sides equal?", False),
+        ("You should get fifteen on the right.", False),
+        ("y turns out to be 5.", False),  # another letter
+    ],
+)
+def test_states_solution_said_another_way(text: str, states: bool) -> None:
+    assert states_solution(text, SOLVED, "en") is states
+
+
+@pytest.mark.parametrize(
+    ("text", "states"),
+    [
+        ("x tiene que ser cinco.", True),
+        ("Quince entre tres es cinco.", True),
+        ("Obtienes cinco.", True),
+        ("Te sale cinco.", True),
+        ("Eso hace que x sea cinco.", True),
+        ("Divide ambos lados entre tres.", False),
+        ("¿Qué obtienes si divides quince entre tres?", False),
+        ("Resta cinco en ambos lados.", False),
+        ("Te queda tres x igual a quince.", False),
+        ("Veinte menos cinco es quince.", False),
+    ],
+)
+def test_states_solution_said_another_way_in_spanish(text: str, states: bool) -> None:
+    assert states_solution(text, SOLVED, "es") is states
+
+
+def test_states_the_roots_said_together() -> None:
+    roots = solve_text("x^2 - 2x - 15 = 0")
+    assert states_solution("The roots are 5 and -3.", roots)
+    assert states_solution("Las raíces son cinco y menos tres.", roots, "es")
+    assert not states_solution("The roots are where the graph crosses zero.", roots)
+    assert not states_solution("Find two numbers that multiply to -15 and add to -2.", roots)
+    assert not states_solution("Negative three times five is negative fifteen.", roots), "the numbers of a step"
+
+
 def test_states_solution_of_quadratics_systems_and_arithmetic() -> None:
     roots = solve_text("x^2 - 2x - 15 = 0")
     assert states_solution("One answer is x = 5. Try factoring.", roots)
