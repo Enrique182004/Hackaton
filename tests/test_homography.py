@@ -93,3 +93,40 @@ def test_identity_scales() -> None:
     out = cal.camera_to_projector(np.array([[320, 240], [640, 480]], np.float32))
     assert np.allclose(out, [[640, 480], [1280, 960]])
     assert cal.warp_frame(np.zeros((480, 640, 3), np.uint8)).shape == (960, 1280, 3)
+
+
+def test_save_is_atomic_and_leaves_no_tmp(tmp_path) -> None:
+    path = tmp_path / "cal.json"
+    Calibration.identity((640, 480), (PW, PH)).save(path)
+    assert [p.name for p in tmp_path.iterdir()] == ["cal.json"]
+
+
+def test_failed_save_keeps_previous_calibration(tmp_path, monkeypatch) -> None:
+    import os
+
+    path = tmp_path / "cal.json"
+    original = Calibration.identity((640, 480), (PW, PH))
+    original.save(path)
+
+    def boom(src, dst) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", boom)
+    with pytest.raises(OSError):
+        Calibration.identity((320, 240), (PW, PH)).save(path)
+    monkeypatch.undo()
+
+    loaded = Calibration.load(path)
+    assert loaded is not None and np.allclose(loaded.matrix, original.matrix)
+    assert [p.name for p in tmp_path.iterdir()] == ["cal.json"]
+
+
+def test_load_rejects_projector_size_mismatch(tmp_path, caplog) -> None:
+    path = tmp_path / "cal.json"
+    Calibration.identity((640, 480), (PW, PH)).save(path)
+    with caplog.at_level("WARNING"):
+        assert Calibration.load(path, expected_projector_size=(1920, 1080)) is None
+    assert any("projector size" in r.message for r in caplog.records)
+    matched = Calibration.load(path, expected_projector_size=(PW, PH))
+    assert matched is not None and matched.projector_size == (PW, PH)
+    assert Calibration.load(path) is not None

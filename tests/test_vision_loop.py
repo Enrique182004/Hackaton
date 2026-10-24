@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any
 
@@ -215,3 +216,137 @@ def test_find_ink_regions_fast_on_1080p() -> None:
     per_call_ms = (time.perf_counter() - start) / 5 * 1000
     print(f"find_ink_regions 1080p: {per_call_ms:.1f} ms")
     assert per_call_ms < 150  # target <50 ms; loose bound for loaded CI machines
+
+
+# --- stale frames / fps after reconnect -------------------------------------------------------
+
+
+class BlockingCapture(FakeCapture):
+    """Delivers `frames` frames, then hangs in read() until released (a frozen camera)."""
+
+    def __init__(self, frames: int = 3) -> None:
+        super().__init__()
+        self.frames = frames
+        self.gate = threading.Event()
+
+    def read(self) -> tuple[bool, Any]:
+        self.reads += 1
+        if self.reads > self.frames:
+            self.gate.wait(10)
+            return False, None
+        time.sleep(0.005)
+        return True, np.full((48, 64, 3), 9, np.uint8)
+
+    def release(self) -> None:
+        super().release()
+        self.gate.set()
+
+
+def test_frame_cleared_when_camera_disconnects() -> None:
+    caps: list[FakeCapture] = []
+
+    def factory(i: int) -> FakeCapture:
+        # First capture dies after 3 frames; every reopen fails to produce frames.
+        caps.append(FakeCapture(fail_after=3 if not caps else 0))
+        return caps[-1]
+
+    loop = VisionLoop(capture_factory=factory)
+    assert loop.frame_age_s is None
+    loop.start()
+    try:
+        assert _wait(lambda: len(caps) >= 2, timeout=5)
+        assert loop.latest_frame() is None
+        assert loop.latest_warped() is None
+        assert loop.frame_age_s is None
+        assert loop.fps == 0.0
+    finally:
+        loop.stop()
+
+
+def test_frame_age_and_staleness_cutoff() -> None:
+    cap = BlockingCapture(frames=3)
+    loop = VisionLoop(capture_factory=lambda i: cap, max_frame_age_s=0.15)
+    loop.start()
+    try:
+        assert _wait(lambda: loop.latest_frame() is not None)
+        age = loop.frame_age_s
+        assert age is not None and age < 0.15
+        # Camera freezes without erroring: the last frame ages out.
+        assert _wait(lambda: loop.latest_frame() is None, timeout=2)
+        assert loop.latest_warped() is None
+        stale_age = loop.frame_age_s
+        assert stale_age is not None and stale_age > 0.15
+    finally:
+        loop.stop()
+
+
+def test_max_frame_age_can_be_disabled() -> None:
+    cap = BlockingCapture(frames=2)
+    loop = VisionLoop(capture_factory=lambda i: cap, max_frame_age_s=None)
+    loop.start()
+    try:
+        assert _wait(lambda: cap.reads > 2)
+        time.sleep(0.1)
+        assert loop.latest_frame() is not None
+    finally:
+        loop.stop()
+
+
+def test_fps_not_dragged_down_by_reconnect_gap() -> None:
+    caps: list[FakeCapture] = []
+
+    def factory(i: int) -> FakeCapture:
+        caps.append(FakeCapture(fail_after=20 if not caps else None))
+        return caps[-1]
+
+    loop = VisionLoop(capture_factory=factory)
+    loop.start()
+    try:
+        assert _wait(lambda: loop.fps > 0)
+        # First fps sample after the reconnect must reflect read cadence, not the ~0.5 s outage.
+        assert _wait(lambda: len(caps) >= 2 and caps[1].reads >= 2 and loop.fps > 0, timeout=5)
+        assert loop.fps > 20
+    finally:
+        loop.stop()
+
+
+# --- ink detection under sensor noise / uneven lighting ---------------------------------------
+
+
+def _tune_module():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "tune_ink.py"
+    spec = importlib.util.spec_from_file_location("tune_ink", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_blank_noisy_unevenly_lit_board_has_no_regions() -> None:
+    tune = _tune_module()
+    for seed in range(3):
+        assert find_ink_regions(tune.blank_board(seed)) == []
+
+
+def test_noisy_flowchart_finds_all_five_boxes() -> None:
+    tune = _tune_module()
+    for seed, stroke in ((0, 5), (1, 7), (2, 9)):
+        regions = find_ink_regions(tune.flowchart_board(seed, stroke=stroke))
+        hit, extra = tune.score(regions)
+        assert hit == 5, (seed, stroke, regions)
+        assert extra == 0, (seed, stroke, regions)  # the free-text note is allowed, nothing else
+        assert len(regions) <= 6
+
+
+def test_ink_thresholds_are_tunable() -> None:
+    tune = _tune_module()
+    img = tune.flowchart_board(0, stroke=7)
+    assert len(find_ink_regions(img)) == 6
+    # Large contrast offset: nothing clears the threshold.
+    assert find_ink_regions(img, c=120) == []
+    # Even block sizes are coerced to the next odd value rather than raising.
+    assert len(find_ink_regions(img, block_size=30)) == len(find_ink_regions(img, block_size=31))
+    assert len(find_ink_regions(img, max_regions=2)) == 2

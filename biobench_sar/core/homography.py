@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +10,7 @@ import cv2
 import numpy as np
 
 _MARGIN_FRAC = 0.06
+log = logging.getLogger(__name__)
 
 
 def _board_geometry(width: int, height: int, cols: int, rows: int) -> tuple[float, float, float]:
@@ -81,10 +84,16 @@ class Calibration:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"matrix": self.matrix.tolist(), "projector_size": list(self.projector_size)}
-        path.write_text(json.dumps(payload))
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            tmp.write_text(json.dumps(payload))
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     @classmethod
-    def load(cls, path: Path) -> "Calibration | None":
+    def load(cls, path: Path, expected_projector_size: tuple[int, int] | None = None) -> "Calibration | None":
         try:
             data = json.loads(Path(path).read_text())
             matrix = np.array(data["matrix"], dtype=np.float64)
@@ -92,6 +101,14 @@ class Calibration:
         except (OSError, ValueError, KeyError, TypeError):
             return None
         if matrix.shape != (3, 3):
+            return None
+        if expected_projector_size is not None and (width, height) != tuple(expected_projector_size):
+            log.warning(
+                "ignoring calibration %s: saved projector size %s != expected %s",
+                path,
+                (width, height),
+                tuple(expected_projector_size),
+            )
             return None
         return cls(matrix, (width, height))
 

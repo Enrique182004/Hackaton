@@ -15,6 +15,28 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_pos_int(name: str, default: int, minimum: int = 1) -> int:
+    value = _env_int(name, default)
+    return value if value >= minimum else default
+
+
+def _env_ink_c(name: str, default: int) -> int:
+    value = _env_int(name, default)
+    return value if value >= 0 else default
+
+
+def _env_block_size(name: str, default: int) -> int:
+    return normalize_block_size(_env_int(name, default), default)
+
+
+def normalize_block_size(value: int, default: int = 31) -> int:
+    """Adaptive-threshold block size must be odd and >= 3."""
+    if value < 1:
+        return default
+    value = max(value, 3)
+    return value if value % 2 == 1 else value + 1
+
+
 @dataclass(frozen=True)
 class Settings:
     camera_index: int = field(default_factory=lambda: _env_int("SAR_CAMERA_INDEX", 0))
@@ -46,6 +68,10 @@ class Settings:
     # edge | pyttsx3 | say | none
     tts_backend: str = field(default_factory=lambda: os.environ.get("SAR_TTS_BACKEND", "edge"))
     tts_voice: str = field(default_factory=lambda: os.environ.get("SAR_TTS_VOICE", "en-US-AriaNeural"))
+    ink_min_area: int = field(default_factory=lambda: _env_pos_int("SAR_INK_MIN_AREA", 150))
+    ink_block_size: int = field(default_factory=lambda: _env_block_size("SAR_INK_BLOCK_SIZE", 31))
+    ink_c: int = field(default_factory=lambda: _env_ink_c("SAR_INK_C", 15))
+    ink_max_regions: int = field(default_factory=lambda: _env_pos_int("SAR_INK_MAX_REGIONS", 10))
     host: str = field(default_factory=lambda: os.environ.get("SAR_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: _env_int("SAR_PORT", 5000))
 
