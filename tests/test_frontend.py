@@ -146,6 +146,35 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 
 @needs_node
+def test_poll_loop_never_runs_twice_at_once(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const { every } = await import("./dashboard/api.js");
+let active = 0, most = 0, calls = 0;
+const stop = every(20, async () => {
+  calls += 1; active += 1; most = Math.max(most, active);
+  await wait(60);  // slower than the interval, like a stalled /api/status
+  active -= 1;
+});
+for (let i = 0; i < 5; i++) {  // the tab is shown again while a request is still out
+  await wait(5);
+  for (const fn of doc.listeners.visibilitychange) fn();
+}
+await wait(300);
+stop();
+const after = calls;
+await wait(100);
+assert.equal(most, 1, "two polls overlapped");
+assert.ok(calls >= 3, `only ${calls} polls`);
+assert.equal(calls, after, "polled after stop()");
+""",
+    )
+
+
+@needs_node
 def test_dashboard_boots_without_socketio(tmp_path: Path) -> None:
     run_node(
         tmp_path,

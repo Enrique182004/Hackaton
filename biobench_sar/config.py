@@ -47,6 +47,11 @@ def _env_optional_pos_int(name: str) -> int:
     return value if value > 0 else 0
 
 
+def _env_pos_float(name: str, default: float) -> float:
+    value = _env_nonneg_float(name, default)
+    return value if value > 0 else default
+
+
 def _env_ink_c(name: str, default: int) -> int:
     value = _env_int(name, default)
     return value if value >= 0 else default
@@ -102,12 +107,12 @@ class Settings:
     vlm_model: str = field(default_factory=lambda: os.environ.get("SAR_VLM_MODEL", "qwen2.5vl:3b"))
     vlm_base_url: str = field(default_factory=lambda: os.environ.get("SAR_VLM_BASE_URL", "http://localhost:11434"))
     vlm_api_key: str | None = field(default_factory=lambda: os.environ.get("SAR_VLM_API_KEY"))
-    vlm_timeout: float = field(default_factory=lambda: float(os.environ.get("SAR_VLM_TIMEOUT", "90")))
+    vlm_timeout: float = field(default_factory=lambda: _env_pos_float("SAR_VLM_TIMEOUT", 90.0))
     whisper_model: str = field(default_factory=lambda: os.environ.get("SAR_WHISPER_MODEL", "base"))
     wake_word: str = field(default_factory=lambda: os.environ.get("SAR_WAKE_WORD", "assistant"))
     # push (hotkey/button only) | wake (always listening for wake word)
     listen_mode: str = field(default_factory=lambda: os.environ.get("SAR_LISTEN_MODE", "push"))
-    record_seconds: float = field(default_factory=lambda: float(os.environ.get("SAR_RECORD_SECONDS", "5")))
+    record_seconds: float = field(default_factory=lambda: _env_pos_float("SAR_RECORD_SECONDS", 5.0))
     # Wake-word chunks quieter than this RMS skip Whisper; push-to-talk only skips digital silence.
     silence_rms: float = field(default_factory=lambda: _env_nonneg_float("SAR_SILENCE_RMS", 0.01))
     # edge | pyttsx3 | say | none

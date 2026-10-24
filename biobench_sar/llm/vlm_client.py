@@ -37,7 +37,6 @@ TEMPERATURE = 0.2
 # A repeated "another one" should not get the same problem back.
 MODE_TEMPERATURE = {"practice": 0.6}
 RETRY_TEMPERATURE = 0.7
-PROFILES = ("biology", "math")
 MODES = ("help", "practice", "quiz")
 # "learn" is a task kind, not a session mode: it can interrupt any mode, so it gets its own prompt.
 PROMPT_KINDS = (*MODES, "learn")
@@ -1399,15 +1398,12 @@ class VLMClient:
             return reply.action
         try:
             kind = resolve_mode(mode, task)
-            t = task or {}
-            if kind == "quiz" and quiz_stage(t) == "dictate" and not _clean(t.get("problem")):
-                number, total = _as_int(t.get("number"), 1), _as_int(t.get("total"), DEFAULT_QUIZ_TOTAL)
-                task = {**t, "problem": _seed_problem(number, total)}
-                args = (query, image_jpeg, context, ink_regions, projector_size, mode, task, recent_turns)
             action, board = self._finish(reply, mode, task, query, language), reply.board_problem
-            note = None
-            if self.backend != "mock":
-                note = _retry_note(action, kind, task, query, recent_turns, board, language)
+            note = (
+                None
+                if self.backend == "mock"
+                else _retry_note(action, kind, task, query, recent_turns, board, language)
+            )
             if note is None:
                 return action
             logger.info("asking the model again: %s", note)
