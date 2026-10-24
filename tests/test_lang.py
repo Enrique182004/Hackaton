@@ -921,6 +921,9 @@ def test_is_quiz_stop_es(text: str, expected: bool) -> None:
         ("¿Qué son las fracciones equivalentes?", "las fracciones equivalentes"),
         ("¿qué significa denominador?", "denominador"),
         ("¿qué quiere decir ecuación?", "ecuación"),
+        # "¿cómo es una fracción?" asks what it is like; Whisper also hears "¿qué es...?" this way
+        ("¿Cómo es una fracciones?", "una fracciones"),
+        ("¿cómo son las fracciones equivalentes?", "las fracciones equivalentes"),
     ],
 )
 def test_detect_learn_request_es(text: str, expected: str) -> None:
@@ -960,6 +963,9 @@ def test_detect_learn_request_es(text: str, expected: str) -> None:
         "¿cuál es la respuesta?",
         "¿qué es lo que sigue?",
         "¿qué significa eso?",
+        "¿cómo es la respuesta?",
+        "¿cómo es posible?",
+        "¿cómo es que se hace?",
     ],
 )
 def test_detect_learn_request_es_ignores(text: str) -> None:

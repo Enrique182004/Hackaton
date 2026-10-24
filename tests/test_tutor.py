@@ -111,6 +111,9 @@ def test_is_repeat_request(text: str, expected: bool) -> None:
         ("What's a common denominator?", "a common denominator"),
         ("what is an equation", "an equation"),
         ("What does numerator mean?", "numerator"),
+        # Whisper often hears "what is a ..." as "what is that ...": with an empty board it can only mean the idea
+        ("What is that common denominator?", "common denominator"),
+        ("what's this fraction", "fraction"),
     ],
 )
 def test_detect_learn_request(text: str, expected: str) -> None:
@@ -156,7 +159,6 @@ def test_detect_learn_request(text: str, expected: str) -> None:
         "what is the answer",
         "what is x",
         "what is the next step",
-        "what's this fraction",
         "what is the denominator of my fraction",
         "what does this mean",
     ],
@@ -166,7 +168,14 @@ def test_detect_learn_request_ignores_board_questions(text: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "text", ["How do I add fractions?", "explain fractions to me", "how to graph a line", "what is a fraction"]
+    "text",
+    [
+        "How do I add fractions?",
+        "explain fractions to me",
+        "how to graph a line",
+        "what is a fraction",
+        "what is that common denominator",
+    ],
 )
 def test_how_to_forms_are_about_the_board_while_it_is_in_use(text: str) -> None:
     assert detect_learn_request(text) is not None
