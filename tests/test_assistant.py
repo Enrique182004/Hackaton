@@ -610,3 +610,15 @@ def test_pipeline_follows_selection_changes_between_queries(h: Harness) -> None:
     h.assistant.selection.select_all()
     h.assistant.handle_query("two")
     assert [c[2] for c in h.store.calls] == [["a.md"], None]
+
+
+def test_celebrating_without_ink_becomes_idle(h: Harness) -> None:
+    h.vlm.action = AvatarAction("All correct!", "celebrating", 10, 20)
+    h.assistant.handle_query("is this right?")
+    assert h.payloads("avatar_update")[0]["animation_state"] == "idle"
+
+
+def test_error_is_kept_without_ink(h: Harness) -> None:
+    h.vlm.action = AvatarAction("That step is unsafe.", "error", 10, 20)
+    h.assistant.handle_query("can I skip the autoclave?")
+    assert h.payloads("avatar_update")[0]["animation_state"] == "error"

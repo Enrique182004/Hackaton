@@ -813,3 +813,21 @@ def test_query_with_every_file_off_skips_rag(built: Any, fakes: Any) -> None:
     item = _ask(*built)
     assert fakes.store.query_calls == [], "store never queried"
     assert item["sources"] == [] and item["error"] is False
+
+
+def test_search_reads_only_selected_files(built: Any, fakes: Any) -> None:
+    _with_docs(fakes)
+    fakes.store.query_results = [_chunk("y", "b.txt", 0.8)]
+    client = built[0].test_client()
+    client.put(SELECTION, json={"sources": ["b.txt"]})
+    body = client.get("/api/search?q=runoff").get_json()
+    assert fakes.store.query_sources == [["b.txt"]]
+    assert [r["source"] for r in body["results"]] == ["b.txt"]
+
+
+def test_search_with_every_file_off_returns_nothing(built: Any, fakes: Any) -> None:
+    _with_docs(fakes)
+    client = built[0].test_client()
+    client.put(SELECTION, json={"sources": []})
+    assert client.get("/api/search?q=runoff").get_json() == {"results": []}
+    assert fakes.store.query_sources == []

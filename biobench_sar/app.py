@@ -282,9 +282,11 @@ def create_app(
             k = max(1, min(int(request.args.get("k", settings.rag_top_k)), MAX_SEARCH_RESULTS))
         except ValueError:
             k = settings.rag_top_k
-        if not text:
+        sources = assistant.selection.query_sources()
+        if not text or sources == []:
             return jsonify({"results": []})
-        results = svc.store.query(text, k)
+        # Same files the assistant would read, so "Search your files" shows what an answer can use.
+        results = svc.store.query(text, k, sources=sources)
         return jsonify({"results": [{"text": c.text, "source": c.source, "score": round(c.score, 3)} for c in results]})
 
     @app.get("/api/ink")

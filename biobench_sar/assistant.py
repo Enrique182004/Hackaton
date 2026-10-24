@@ -22,6 +22,7 @@ from biobench_sar.schemas import AvatarAction, error_action
 log = logging.getLogger(__name__)
 
 WORDS_PER_SECOND = 2.5
+DRAWING_STATES = frozenset({"pointing", "celebrating"})
 HISTORY_SIZE = 50
 
 Emit = Callable[[str, dict[str, Any]], None]
@@ -214,8 +215,8 @@ class Assistant:
             sources = list(dict.fromkeys(chunk.source for chunk in context))
             image = encode_jpeg(frame) if frame is not None else None
             action = svc.vlm.evaluate(text, image, context, ink, self.settings.projector_size)
-            if action.animation_state == "pointing" and not ink:
-                # Nothing on the board to point at; small VLMs still pick "pointing" for plain questions.
+            if action.animation_state in DRAWING_STATES and not ink:
+                # Nothing drawn to point at or approve; small VLMs still pick these for plain questions.
                 action = replace(action, animation_state="idle")
             self._emit("avatar_update", action.to_dict())
             self.emit_status("speaking")
