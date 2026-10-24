@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from biobench_sar.config import Settings
@@ -60,3 +62,42 @@ def test_ink_settings_feed_find_ink_regions(monkeypatch: pytest.MonkeyPatch) -> 
         img, min_area=s.ink_min_area, max_regions=s.ink_max_regions, block_size=s.ink_block_size, c=s.ink_c
     )
     assert len(regions) == 1
+
+
+def test_silence_rms_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SAR_SILENCE_RMS", raising=False)
+    assert Settings().silence_rms == 0.01
+
+
+@pytest.mark.parametrize(("raw", "expected"), [("0.05", 0.05), ("0", 0.0), ("1e-3", 0.001)])
+def test_silence_rms_env_override(monkeypatch: pytest.MonkeyPatch, raw: str, expected: float) -> None:
+    monkeypatch.setenv("SAR_SILENCE_RMS", raw)
+    assert Settings().silence_rms == expected
+
+
+@pytest.mark.parametrize("raw", ["-0.1", "abc", "", "nan", "inf"])
+def test_silence_rms_invalid_or_negative_falls_back(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    monkeypatch.setenv("SAR_SILENCE_RMS", raw)
+    assert Settings().silence_rms == 0.01
+
+
+def test_build_services_passes_silence_rms_to_audio(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from biobench_sar import app as app_module
+    from biobench_sar.core import vision_loop
+    from biobench_sar.llm import tts_engine, vlm_client
+    from biobench_sar.rag import vector_store
+
+    class Dummy:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+    for module, name in (
+        (vision_loop, "VisionLoop"),
+        (vector_store, "VectorStore"),
+        (vlm_client, "VLMClient"),
+        (tts_engine, "TTSEngine"),
+    ):
+        monkeypatch.setattr(module, name, Dummy)
+    settings = Settings(silence_rms=0.042, calibration_file=tmp_path / "calibration.json")
+    svc = app_module.build_services(settings, on_query=lambda q: None, on_state=lambda s: None)
+    assert svc.audio.silence_rms == 0.042

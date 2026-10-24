@@ -250,43 +250,107 @@ def test_push_trigger_returns_bool() -> None:
     assert t.trigger() is True
 
 
-def test_wake_push_wins_over_background_chunk() -> None:
+def test_wake_push_keeps_speech_from_the_interrupted_chunk() -> None:
+    chunk = np.full(48000, 0.2, dtype=np.float32)
+    push = np.full(16000, -0.3, dtype=np.float32)
     chunk_started = threading.Event()
     release_chunk = threading.Event()
-    calls: list[float] = []
+    states: list[str] = []
+    heard: list[np.ndarray] = []
     queries: list[str] = []
     done = threading.Event()
 
     def rec(s: float) -> np.ndarray:
-        calls.append(s)
         if s == 3.0 and not chunk_started.is_set():
             chunk_started.set()
             release_chunk.wait(3)
-        return AUDIO
-
-    texts = {3.0: "assistant ignored background", 5.0: "push question"}
-    last = {"s": 0.0}
-
-    def rec2(s: float) -> np.ndarray:
-        last["s"] = s
-        return rec(s)
+            return chunk
+        return push if s == 5.0 else SILENCE
 
     t = AudioTrigger(
         lambda q: (queries.append(q), done.set()),
         mode="wake",
         record_seconds=5.0,
         wake_chunk_seconds=3.0,
-        recorder=rec2,
-        transcriber=lambda a: texts[last["s"]],
+        on_state=states.append,
+        recorder=rec,
+        transcriber=lambda a: (heard.append(a), "push question")[1],
     )
     t.start()
     _wait(chunk_started)
     assert t.trigger() is True  # wake loop is mid-chunk
+    assert states == ["listening"]  # announced on accept, not after the chunk ends
+    time.sleep(0.1)  # the user starts talking right after the click
     release_chunk.set()
     _wait(done)
     t.stop()
-    assert queries[0] == "push question"  # background chunk was dropped, push recorded right after
-    assert 5.0 in calls
+    assert queries == ["push question"]
+    assert states == ["listening", "transcribing", "idle"]
+    assert len(heard) == 1  # the interrupted chunk was not wake-word checked on its own
+    lead = heard[0][: heard[0].size - push.size]
+    assert 0 < lead.size < chunk.size and np.all(lead == 0.2)
+    assert np.array_equal(heard[0][lead.size :], push)
+
+
+def test_since_request_keeps_only_the_post_click_tail() -> None:
+    t = AudioTrigger(lambda q: None, recorder=lambda s: AUDIO, transcriber=lambda a: "")
+    chunk = np.arange(48000, dtype=np.float32)
+    t._push_requested_at = time.monotonic() - 1.0
+    tail = t._since_request(chunk)
+    assert 24000 <= tail.size < 24000 + 3200  # 1 s since the click + 0.5 s pre-roll
+    assert tail[-1] == chunk[-1]
+    t._push_requested_at = time.monotonic() - 10.0
+    assert t._since_request(chunk).size == chunk.size
+
+
+def test_push_during_wake_followup_does_not_flash_idle() -> None:
+    states: list[str] = []
+    queries: list[str] = []
+    texts = iter(["assistant", "explain", "push q"])
+    followups = {"n": 0}
+
+    def rec(s: float) -> np.ndarray:
+        if s == 5.0:
+            followups["n"] += 1
+            if followups["n"] == 1:
+                assert t.trigger() is True  # clicked Listen during the wake follow-up
+        return AUDIO
+
+    t = AudioTrigger(
+        queries.append,
+        mode="wake",
+        on_state=states.append,
+        recorder=rec,
+        transcriber=lambda a: next(texts, ""),
+    )
+    t.start()
+    assert _until(lambda: len(queries) == 2)
+    t.stop()
+    assert queries == ["explain", "push q"]
+    assert states[:4] == ["listening", "listening", "transcribing", "idle"]
+
+
+def test_wake_loop_exit_with_pending_push_reports_idle() -> None:
+    states: list[str] = []
+
+    def paused() -> bool:
+        if not t._stop.is_set():
+            assert t.trigger() is True
+            t._stop.set()
+        return False
+
+    t = AudioTrigger(
+        lambda q: None,
+        mode="wake",
+        on_state=states.append,
+        recorder=lambda s: AUDIO,
+        transcriber=lambda a: "",
+        should_listen=paused,
+    )
+    t.start()
+    assert _until(lambda: t._wake_thread is not None and not t._wake_thread.is_alive())
+    assert states == ["listening", "idle"]
+    assert t._push_state == "idle"
 
 
 def test_wake_push_while_push_recording_returns_false() -> None:
@@ -334,10 +398,125 @@ def test_silence_guard_skips_transcription() -> None:
     assert chunks["n"] >= 3
 
 
-def test_silence_rms_is_configurable() -> None:
-    quiet = np.full(1600, 0.005, dtype=np.float32)
+QUIET = np.full(1600, 0.005, dtype=np.float32)  # soft speech: under the wake gate, far above digital silence
+
+
+def _wake_on_quiet(**kwargs: float) -> tuple[list[str], list[int]]:
+    queries: list[str] = []
     seen: list[int] = []
-    t = AudioTrigger(lambda q: None, transcriber=lambda a: (seen.append(1), "x")[1], silence_rms=0.001)
-    assert t._heard(quiet) == "x"
-    t2 = AudioTrigger(lambda q: None, transcriber=lambda a: (seen.append(1), "x")[1])
-    assert t2._heard(quiet) == "" and len(seen) == 1
+    t = AudioTrigger(
+        queries.append,
+        mode="wake",
+        recorder=lambda s: (time.sleep(0.005), QUIET)[1],
+        transcriber=lambda a: (seen.append(1), "assistant what is this")[1],
+        **kwargs,
+    )
+    t.start()
+    _until(lambda: bool(queries), timeout=0.3)
+    t.stop()
+    return queries, seen
+
+
+def test_wake_chunks_keep_the_default_silence_gate() -> None:
+    queries, seen = _wake_on_quiet()
+    assert queries == [] and seen == []
+
+
+def test_silence_rms_is_configurable() -> None:
+    queries, _ = _wake_on_quiet(silence_rms=0.001)
+    assert queries and queries[0] == "what is this"
+
+
+def _push_once(audio: np.ndarray) -> tuple[list[str], list[int]]:
+    queries: list[str] = []
+    seen: list[int] = []
+    states: list[str] = []
+    t = AudioTrigger(
+        queries.append,
+        on_state=states.append,
+        recorder=lambda s: audio,
+        transcriber=lambda a: (seen.append(1), "soft question")[1],
+    )
+    t.trigger()
+    # Transcription happens before "idle" but delivery after it, so a transcribed clip waits for its query.
+    assert _until(lambda: bool(queries) or (states[-1:] == ["idle"] and not seen))
+    return queries, seen
+
+
+def test_push_to_talk_hears_quiet_speech() -> None:
+    queries, seen = _push_once(QUIET)
+    assert queries == ["soft question"] and seen == [1]
+
+
+def test_push_to_talk_skips_digital_silence() -> None:
+    queries, seen = _push_once(np.full(1600, 1e-5, dtype=np.float32))
+    assert queries == [] and seen == []
+
+
+def test_wake_followup_hears_quiet_speech() -> None:
+    queries: list[str] = []
+    texts = iter(["assistant", "explain the diagram"])
+    t = AudioTrigger(
+        queries.append,
+        mode="wake",
+        recorder=lambda s: QUIET if s == 5.0 else AUDIO,
+        transcriber=lambda a: next(texts, ""),
+    )
+    t.start()
+    assert _until(lambda: bool(queries))
+    t.stop()
+    assert queries == ["explain the diagram"]
+
+
+class _ReentryDetector:
+    """Stands in for a Whisper model: records how many decodes overlap."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.active = 0
+        self.max_active = 0
+        self.calls = 0
+
+    def __call__(self, audio: np.ndarray) -> str:
+        with self._lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+        time.sleep(0.03)
+        with self._lock:
+            self.active -= 1
+            self.calls += 1
+        return " ok "
+
+    def transcribe(self, audio: np.ndarray, **kwargs: object) -> dict[str, str]:
+        return {"text": self(audio)}
+
+
+def _transcribe_concurrently(t: AudioTrigger, n: int = 6) -> list[str]:
+    barrier = threading.Barrier(n)
+    out: list[str] = []
+
+    def work() -> None:
+        barrier.wait(3)
+        out.append(t.transcribe(AUDIO))
+
+    threads = [threading.Thread(target=work) for _ in range(n)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(5)
+    return out
+
+
+def test_whisper_decodes_never_overlap() -> None:
+    model = _ReentryDetector()
+    t = AudioTrigger(lambda q: None, recorder=lambda s: AUDIO)
+    t._model = model  # skip loading real Whisper
+    assert _transcribe_concurrently(t) == ["ok"] * 6
+    assert model.calls == 6 and model.max_active == 1
+
+
+def test_injected_transcriber_decodes_never_overlap() -> None:
+    fake = _ReentryDetector()
+    t = AudioTrigger(lambda q: None, recorder=lambda s: AUDIO, transcriber=fake)
+    assert _transcribe_concurrently(t) == ["ok"] * 6
+    assert fake.calls == 6 and fake.max_active == 1
