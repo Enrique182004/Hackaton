@@ -65,9 +65,7 @@ def test_windows_data_dir_uses_localappdata(tmp_path: Path, monkeypatch: pytest.
     assert folder.is_dir()
 
 
-def test_windows_data_dir_without_localappdata_falls_back_to_home(
-    monkeypatch: pytest.MonkeyPatch, home: Path
-) -> None:
+def test_windows_data_dir_without_localappdata_falls_back_to_home(monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     assert paths.user_data_dir() == home / "AppData" / "Local" / "SAR Whiteboard Assistant"
@@ -87,9 +85,7 @@ def test_linux_data_dir_honours_xdg(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.parametrize("xdg", ["", "relative/dir"])
-def test_linux_data_dir_ignores_unset_or_relative_xdg(
-    xdg: str, monkeypatch: pytest.MonkeyPatch, home: Path
-) -> None:
+def test_linux_data_dir_ignores_unset_or_relative_xdg(xdg: str, monkeypatch: pytest.MonkeyPatch, home: Path) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setenv("XDG_DATA_HOME", xdg)
     folder = paths.user_data_dir()
