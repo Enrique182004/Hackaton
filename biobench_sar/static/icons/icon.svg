@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Whiteboard Assistant">
+  <title>Whiteboard Assistant</title>
+  <rect width="512" height="512" rx="112" fill="#23497d"/>
+  <rect x="5" y="5" width="502" height="502" rx="107" fill="none" stroke="#4f76ab" stroke-width="10"/>
+  <rect x="120" y="92" width="272" height="328" rx="30" fill="#f8f4ea"/>
+  <path d="M123 340 L389 340" fill="none" stroke="#b9c7d9" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M123 380 L389 380" fill="none" stroke="#b9c7d9" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M172 95 L172 417" fill="none" stroke="#d98b7f" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M200 322 Q214 302 228 322 Q242 342 256 322 Q270 302 284 322 Q298 342 312 322 Q326 302 340 322" fill="none" stroke="#23497d" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M200 362 Q214 342 228 362 Q242 382 256 362 Q270 342 284 362" fill="none" stroke="#23497d" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M282 150 L282 124" fill="none" stroke="#1d2b45" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="282" cy="116" r="12" fill="#b4442e"/>
+  <circle cx="282" cy="212" r="64" fill="none" stroke="#1d2b45" stroke-width="16"/>
+  <circle cx="260" cy="206" r="10" fill="#1d2b45"/>
+  <circle cx="304" cy="206" r="10" fill="#1d2b45"/>
+  <path d="M258 234 Q282 256 306 234" fill="none" stroke="#b4442e" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
