@@ -75,14 +75,24 @@ export async function loadHistory() {
   showEmpty();
 }
 
+const MIC_START_TIMEOUT_MS = 10000;
+let micTimer = null;
+
 function note(text, tone) {
   micNote = null;
+  clearTimeout(micTimer);
   setNote($("ask-msg"), text, tone);
 }
 
 function showMicNote(phase) {
   note(...MIC_NOTES[phase]);
   micNote = phase;
+  // "Getting ready" waits for the server's "listening" status; if that never comes, don't leave it up forever.
+  if (phase === "starting") {
+    micTimer = setTimeout(() => {
+      if (micNote === "starting") note("The microphone didn't start. Try Talk again, or type your question.", "warn");
+    }, MIC_START_TIMEOUT_MS);
+  }
 }
 
 // Called with every server status (socket push, or the status poll while the socket is down).

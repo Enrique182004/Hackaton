@@ -79,6 +79,7 @@ function initCalibration() {
 
 renderConnection(false);
 initSocket();
+loadHistory().catch(() => {});
 initCamera();
 initAsk();
 initFiles();
