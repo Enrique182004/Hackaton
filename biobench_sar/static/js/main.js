@@ -11,6 +11,16 @@
   const EDGE = 24; // min gap to the window edge; leaves room for the celebrate hop rotating the bubble
   const STATES = ["idle", "walking", "pointing", "celebrating", "error"];
   const MOVE_MS = 1500;
+  // The corner is read from across the room, so it says what to do rather than the internal state name.
+  const STATUS_LABELS = {
+    idle: "Ready – press Space to talk",
+    listening: "Listening…",
+    transcribing: "Writing it down…",
+    thinking: "Thinking…",
+    speaking: "Answering…",
+  };
+  const BUSY_LABEL = "Still busy – wait a moment";
+  const OFFLINE_LABEL = "Not connected";
 
   const $ = (id) => document.getElementById(id);
   const avatar = $("avatar");
@@ -24,6 +34,9 @@
   const debugConn = $("debug-conn");
   const debugEvent = $("debug-event");
   const crosshair = $("crosshair");
+  const quizCard = $("quiz-card");
+  const quizCount = $("quiz-card-count");
+  const quizProblem = $("quiz-card-problem");
 
   let currentState = "idle";
   let pendingState = "idle";
@@ -36,6 +49,7 @@
   let statusSinceConnect = false; // a server status arrived since the last disconnect
   let offlineTimer = null;
   let offlineHintTimer = null;
+  let tutorVersion = 0; // bumped per "tutor" render so an older GET can't roll the card back
 
   function setState(state) {
     if (!STATES.includes(state)) state = "idle";
@@ -145,7 +159,29 @@
     const s = d.state || "idle";
     clearTimeout(offlineHintTimer);
     statusEl.dataset.state = s;
-    statusLabel.textContent = d.detail ? s + " - " + d.detail : s;
+    statusLabel.textContent = d.detail === "busy" ? BUSY_LABEL : STATUS_LABELS[s] || s;
+  }
+
+  function onTutor(d) {
+    tutorVersion += 1;
+    const quiz = d.quiz;
+    const active = Boolean(quiz && quiz.active);
+    quizCard.classList.toggle("hidden", !active);
+    if (!active) return;
+    quizCount.textContent = "Quiz · problem " + quiz.number + " of " + quiz.total;
+    // No problem text means the assistant makes problems up and reads them out itself.
+    quizProblem.textContent = quiz.problem || "";
+  }
+
+  // "tutor" events missed while disconnected would leave a stale card, so ask the server once per connect.
+  function refreshTutor() {
+    const seen = tutorVersion;
+    quizCard.classList.add("hidden");
+    if (typeof fetch !== "function") return;
+    fetch("/api/tutor")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d && seen === tutorVersion) onTutor(d); })
+      .catch(() => {});
   }
 
   function clearTranscript() {
@@ -167,13 +203,13 @@
     clearTimeout(offlineHintTimer);
     body.classList.add("offline");
     statusEl.dataset.state = "offline";
-    statusLabel.textContent = text || "offline";
+    statusLabel.textContent = text || OFFLINE_LABEL;
   }
 
   function hintOffline() {
-    setOffline("offline - not sent");
+    setOffline("Not connected – question not sent");
     offlineHintTimer = setTimeout(() => {
-      if (!connected) statusLabel.textContent = "offline";
+      if (!connected) statusLabel.textContent = OFFLINE_LABEL;
     }, 2000);
   }
 
@@ -191,6 +227,7 @@
     pendingState = "idle";
     setState("idle");
     if (!statusSinceConnect) renderStatus({ state: "idle" });
+    refreshTutor();
   }
 
   function showCalibration(d) {
@@ -237,7 +274,7 @@
     // Server-emitted "interaction" events are for the dashboard; the projector deliberately has no handler.
     const handlers = {
       avatar_update: onAvatarUpdate, speak: onSpeak, status: onStatus, transcript: onTranscript,
-      show_calibration: showCalibration, hide_calibration: hideCalibration,
+      show_calibration: showCalibration, hide_calibration: hideCalibration, tutor: onTutor,
     };
     Object.keys(handlers).forEach((name) => {
       socket.on(name, (data) => {

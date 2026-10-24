@@ -204,9 +204,33 @@ input::placeholder { color: var(--ink-faint); }
 .calibrate .hint { margin: var(--s2) 0 0; }
 
 /* ---- step 3: ask -------------------------------------------------------- */
+.modes[hidden], .quiz-bar[hidden], .quiz-problem[hidden], .learn-line[hidden], .quiz-bar .btn[hidden] { display: none; }
+.modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s2); margin: 0 0 var(--s2); }
+@media (max-width: 720px) { .modes { grid-template-columns: 1fr; } }
+.mode {
+  display: grid; align-content: center; gap: 1px; min-height: 44px; padding: 5px var(--s3);
+  text-align: left; color: var(--ink); background: var(--card); cursor: pointer;
+  border: 2px solid var(--rule); border-radius: 8px; font: inherit; line-height: 1.25;
+}
+.mode:hover { border-color: var(--ink-faint); }
+.mode b { font: 700 0.95rem var(--font-body); }
+.mode small { color: var(--ink-soft); font-size: 0.8rem; }
+.mode[aria-pressed="true"] { border-color: var(--accent); box-shadow: 3px 3px 0 var(--accent); }
+.mode[aria-pressed="true"] b::before { content: "✓ "; color: var(--accent); }
+.mode:disabled { opacity: 0.6; cursor: progress; }
+.quiz-bar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0 var(--s3); margin: 0 0 var(--s2); padding: 2px var(--s3);
+  background: var(--card); border: 2px dashed var(--pencil); border-radius: 8px;
+}
+.quiz-bar p { margin: 0; }
+.quiz-progress { font-weight: 700; font-size: 0.92rem; color: var(--ink-soft); }
+.quiz-problem { font: 700 1.3rem/1.2 var(--font-head); letter-spacing: 0.02em; overflow-wrap: anywhere; }
+.quiz-bar .btn { margin: var(--s1) 0 var(--s1) auto; }
+.ask-extras { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 var(--s4); margin: var(--s2) 0 0; }
+.learn-line { margin: 0 0 0 auto; font: 700 1.25rem/1.1 var(--font-hand); color: var(--pencil); }
 .ask { display: grid; grid-template-columns: 1fr auto auto; gap: var(--s3); }
 @media (max-width: 600px) { .ask { grid-template-columns: 1fr 1fr; } .ask input { grid-column: span 2; } }
-.examples { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s3); margin: var(--s2) 0 0; }
+.examples { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s1) var(--s3); margin: 0; }
 .scribble { font: 700 1.3rem/1 var(--font-hand); color: var(--pencil); }
 .example {
   min-height: 44px; padding: 0; border: 0; background: none; cursor: pointer;
@@ -217,8 +241,10 @@ input::placeholder { color: var(--ink-faint); }
 
 .entries {
   list-style: none; margin: var(--s3) 0 0; padding: 0 var(--s2) 0 0; display: grid; gap: var(--s3);
-  max-height: min(56vh, 560px); overflow-y: auto; overscroll-behavior: contain;
+  /* What's left of the screen under the mode picker and question box, so the Ask step fits without page scroll. */
+  max-height: clamp(180px, calc(100vh - 445px), 560px); overflow-y: auto; overscroll-behavior: contain;
 }
+#panel-ask:has(.quiz-bar:not([hidden])) .entries { max-height: clamp(160px, calc(100vh - 513px), 560px); }
 .entry { position: relative; padding: var(--s2) var(--s3) var(--s2) var(--s4); background: var(--card); border-left: 4px solid var(--accent); animation: write-in 280ms ease both; }
 .entry[data-state="error"] { border-left-color: var(--bad); }
 .entry[data-state="celebrating"] { border-left-color: var(--ok); }

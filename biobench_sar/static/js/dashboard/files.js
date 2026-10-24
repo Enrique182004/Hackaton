@@ -1,7 +1,11 @@
 import { $, el, request, setNote } from "./api.js";
+import { logEvent } from "./log.js";
+import { onProfileChange, words } from "./profile.js";
 import { setBadge, suggestStep } from "./tabs.js";
 
 const UPLOAD_TIMEOUT_MS = 300000;
+const OFFLINE_HINT = "Check the assistant's Terminal window is still open, then try again.";
+const PHOTO = "Photo (text read from the image)";
 const KINDS = {
   pdf: "PDF document",
   docx: "Word document",
@@ -9,16 +13,18 @@ const KINDS = {
   csv: "Spreadsheet (CSV)",
   md: "Notes",
   txt: "Text file",
-  png: "Photo (text read from the image)",
-  jpg: "Photo (text read from the image)",
-  jpeg: "Photo (text read from the image)",
+  png: PHOTO,
+  jpg: PHOTO,
+  jpeg: PHOTO,
+  image: PHOTO,
 };
 
 let documents = [];
 
+// The extension first: the ingestor reports every photo as type "image".
 function kindOf(doc) {
-  const ext = (doc.type || doc.source.split(".").pop() || "").toLowerCase();
-  return KINDS[ext] || "File";
+  const ext = doc.source.includes(".") ? doc.source.split(".").pop().toLowerCase() : "";
+  return KINDS[ext] || KINDS[(doc.type || "").toLowerCase()] || "File";
 }
 
 function isActive(doc) {
@@ -29,14 +35,15 @@ function summary() {
   const total = documents.length;
   const active = documents.filter(isActive).length;
   $("use-all-btn").hidden = total === 0 || active === total;
-  if (total === 0) return "No files yet. The assistant will answer from general knowledge only.";
+  if (total === 0) return words().noFiles;
   if (active === total) return `The assistant uses all ${total} file${total === 1 ? "" : "s"} when answering.`;
-  if (active === 0) return "No files ticked. The assistant won't look at your notes.";
+  if (active === 0) return words().noneTicked;
   return `The assistant uses ${active} of ${total} files when answering.`;
 }
 
-function fileRow(doc) {
-  const id = `use-${doc.source.replace(/[^a-z0-9]/gi, "-")}`;
+// Ids from the row index: names that differ only in punctuation would otherwise share one.
+function fileRow(doc, index) {
+  const id = `use-${index}`;
   const box = el("input", { type: "checkbox", id, checked: isActive(doc) });
   box.addEventListener("change", () => saveSelection());
   const remove = el("button", { type: "button", className: "remove-btn", textContent: "Remove", "aria-label": `Remove ${doc.source}` });
@@ -53,12 +60,12 @@ function fileRow(doc) {
 
 export function renderFiles(body) {
   documents = body.documents || [];
-  $("files").replaceChildren(...documents.map(fileRow));
+  $("files").replaceChildren(...documents.map((doc, i) => fileRow(doc, i)));
   $("files-summary").textContent = summary();
   const total = documents.length;
   const active = documents.filter(isActive).length;
   if (total === 0) {
-    setBadge("files", "add your notes", "warn");
+    setBadge("files", words().filesBadge, "warn");
     suggestStep("files");
   } else if (active === 0) {
     setBadge("files", "none ticked", "warn");
@@ -77,7 +84,8 @@ async function saveSelection(all = false) {
   try {
     renderFiles(await request("/api/documents/selection", { method: "PUT", json: payload }));
   } catch (err) {
-    setNote($("upload-msg"), `Couldn't save your choice: ${err.message}`, "bad");
+    logEvent("selection", err.message);
+    setNote($("upload-msg"), `Couldn't save which files are ticked. ${OFFLINE_HINT}`, "bad");
     await refreshFiles().catch(() => {});
   }
 }
@@ -89,14 +97,16 @@ async function removeFile(source, button) {
     await request(`/api/documents/${encodeURIComponent(source)}`, { method: "DELETE" });
     setNote($("upload-msg"), `Removed ${source}.`, "ok");
   } catch (err) {
-    setNote($("upload-msg"), `Couldn't remove ${source}: ${err.message}`, "bad");
+    logEvent("remove", `${source}: ${err.message}`);
+    setNote($("upload-msg"), `Couldn't remove ${source}. ${OFFLINE_HINT}`, "bad");
   }
   await refreshFiles().catch(() => {});
 }
 
 function describeFailure(f) {
   if (/unsupported/i.test(f.error)) return `${f.name} (that type of file can't be read)`;
-  return `${f.name} (${f.error})`;
+  logEvent("upload", `${f.name}: ${f.error}`);
+  return `${f.name} (try saving it again as a PDF or text file)`;
 }
 
 async function upload(files) {
@@ -114,7 +124,8 @@ async function upload(files) {
     if (failed.length) parts.push(`Couldn't read ${failed.map(describeFailure).join("; ")}.`);
     setNote(msg, parts.join(" "), failed.length ? "warn" : "ok");
   } catch (err) {
-    setNote(msg, err.status === 413 ? "That upload is too big (50 MB at most)." : `Upload failed: ${err.message}`, "bad");
+    if (err.status !== 413) logEvent("upload", err.message);
+    setNote(msg, err.status === 413 ? "That upload is too big (50 MB at most)." : `Upload failed. ${OFFLINE_HINT}`, "bad");
   }
   await refreshFiles().catch(() => {});
 }
@@ -144,9 +155,14 @@ export function initFiles() {
     upload([...e.dataTransfer.files]);
   });
   $("use-all-btn").addEventListener("click", () => saveSelection(true));
+  onProfileChange(() => renderFiles({ documents }));
   $("search-form").addEventListener("submit", (e) => {
     e.preventDefault();
-    search($("search-input").value.trim()).catch((err) => setNote($("upload-msg"), `Search failed: ${err.message}`, "bad"));
+    // Shown in the results list: the upload note lives on the files tab, out of sight from here.
+    search($("search-input").value.trim()).catch((err) => {
+      logEvent("search", err.message);
+      $("hits").replaceChildren(el("li", { textContent: `Search didn't work. ${OFFLINE_HINT}` }));
+    });
   });
   refreshFiles().catch(() => {});
 }

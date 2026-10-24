@@ -1,4 +1,7 @@
 import { $, el, request, setNote } from "./api.js";
+import { logEvent } from "./log.js";
+import { MODE_LABELS, currentProfile, onProfileChange, words } from "./profile.js";
+import { LISTENING_NOTE } from "./status.js";
 
 let pending = null;
 let serverState = "idle";
@@ -9,25 +12,34 @@ let micNote = null;
 // so "speak now" waits for the server's own "listening" status.
 const MIC_NOTES = {
   starting: ["Getting the microphone ready…", ""],
-  listening: ["Listening… speak now.", "ok"],
+  listening: [LISTENING_NOTE, "ok"],
   transcribing: ["Writing down what you said…", ""],
 };
 
-const STATE_NOTES = {
-  pointing: "pointed at your drawing",
-  error: "spotted a problem",
-  celebrating: "all correct!",
-};
+function modeNote(item) {
+  if (currentProfile() !== "math") return null;
+  if (item.task_kind === "learn") return "learning something new";
+  return MODE_LABELS[item.mode] || null;
+}
 
 function marginNote(item) {
   const parts = [];
-  // "all correct" / "pointed at" only mean something when the assistant actually saw a drawing.
+  const mode = modeNote(item);
+  if (mode) parts.push(mode);
+  // "all correct" / "pointed at" / "a mistake" only mean something when the assistant actually saw a drawing.
   const sawDrawing = item.had_frame && item.ink_regions > 0;
-  if (STATE_NOTES[item.animation_state] && (sawDrawing || item.animation_state === "error")) parts.push(STATE_NOTES[item.animation_state]);
+  const work = words().work;
+  if (item.animation_state === "error") {
+    parts.push(sawDrawing ? `found a mistake in ${work}` : "something went wrong, so this isn't a real answer");
+  } else if (sawDrawing && item.animation_state === "pointing") {
+    parts.push(`pointed at ${work}`);
+  } else if (sawDrawing && item.animation_state === "celebrating") {
+    parts.push("all correct!");
+  }
   if (item.sources.length) parts.push(`read ${item.sources.join(", ")}`);
   else parts.push("didn't use your files");
   if (!item.had_frame) parts.push("couldn't see the board");
-  parts.push(`${Math.round(item.latency_s)} s`);
+  parts.push(`took ${Math.round(item.latency_s)} s`);
   return parts.join(" · ");
 }
 
@@ -78,7 +90,8 @@ export async function loadHistory() {
 const MIC_START_TIMEOUT_MS = 10000;
 let micTimer = null;
 
-function note(text, tone) {
+// The Ask step's one note line, shared with the mode picker so the step stays one screen tall.
+export function note(text, tone) {
   micNote = null;
   clearTimeout(micTimer);
   setNote($("ask-msg"), text, tone);
@@ -107,17 +120,31 @@ export function onListenState(state) {
 function listenError(err) {
   if (err.status === 503) return "No microphone found. Plug one in and restart the app, or type your question.";
   if (err.status === 409) return "Already listening.";
-  return `The microphone isn't working right now (${err.message}).`;
+  logEvent("listen", err.message);
+  return "The microphone isn't working right now. Try Talk again, or type your question.";
+}
+
+function renderExamples() {
+  const input = $("ask-input");
+  const buttons = words().examples.map((text) => {
+    const button = el("button", { type: "button", className: "example", textContent: text });
+    button.addEventListener("click", () => {
+      input.value = text;
+      $("ask-form").requestSubmit();
+    });
+    return button;
+  });
+  $("examples").replaceChildren(el("span", { className: "scribble", textContent: "try:" }), ...buttons);
 }
 
 export function initAsk() {
   const input = $("ask-input");
-  for (const button of document.querySelectorAll(".example")) {
-    button.addEventListener("click", () => {
-      input.value = button.textContent;
-      $("ask-form").requestSubmit();
-    });
-  }
+  renderExamples();
+  onProfileChange(() => {
+    renderExamples();
+    // Margin notes depend on the subject, and history can load before /api/config answers.
+    loadHistory().catch(() => {});
+  });
   $("ask-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = input.value.trim();
@@ -128,7 +155,12 @@ export function initAsk() {
       input.value = "";
       note("Sent! Watch the board for the answer.", "ok");
     } catch (err) {
-      note(err.status === 409 ? "Still answering the last question. Try again in a moment." : `Couldn't send your question (${err.message}).`, "warn");
+      if (err.status === 409) {
+        note("Still answering the last question. Try again in a moment.", "warn");
+      } else {
+        logEvent("query", err.message);
+        note("Couldn't send your question. Check the assistant's Terminal window is still open, then try again.", "warn");
+      }
     } finally {
       $("ask-btn").disabled = false;
     }

@@ -13,12 +13,18 @@ function svgNode(tag, attrs) {
   return node;
 }
 
+// The picture lives on the Board tab and the drawing count on More tools; other tabs need neither.
+const boardShown = () => !$("panel-board").hidden;
+const inkShown = () => boardShown() || !$("panel-more").hidden;
+
 // Chains on load/error instead of reassigning src on a timer, so a slow frame is never cancelled mid-flight.
 function startFrames() {
   const img = $("frame");
   const next = (delay) => setTimeout(load, delay);
   let started = false;
   const load = () => {
+    // Re-check soon (no fetch) so the picture appears quickly once the Board tab opens.
+    if (!boardShown()) return next(FRAME_MS);
     if (started && document.hidden) return next(FRAME_MS * 4);
     started = true;
     img.onload = () => next(FRAME_MS);
@@ -55,6 +61,7 @@ export function initCamera() {
   }
   startFrames();
   every(INK_MS, async () => {
+    if (!inkShown()) return;
     if (!warped || !$("ink-toggle").checked) return drawOverlay([], [1920, 1080]);
     try {
       const data = await request("/api/ink");

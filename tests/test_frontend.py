@@ -88,6 +88,10 @@ def run_node(tmp_path: Path, template: str, body: str) -> str:
 DASHBOARD = """
 const doc = installDom(IDS);
 const $ = (id) => doc.getElementById(id);
+const LISTENING = "Listening… ask your question now. It stops by itself after about 5 seconds.";
+const text = (node) => (typeof node === "string" ? node : [node.textContent, ...node.children.map(text)].join(" ").trim());
+const logText = () => $("log").children.map(text).join("\\n");
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 """
 
 
@@ -102,7 +106,7 @@ const http = installFetch();
 http.setStatus({ state: "listening" });
 await import("./dashboard/main.js");
 await settle();
-assert.equal($("conn-text").textContent, "Connected (no live updates)");
+assert.equal($("conn-text").textContent, "Connected (updates every few seconds)");
 for (const [id, type] of [["ask-form", "submit"], ["listen-btn", "click"], ["file-input", "change"],
                           ["search-form", "submit"], ["calibrate-btn", "click"]]) {
   assert.ok($(id).listeners[type]?.length, `${id} has no ${type} handler`);
@@ -111,9 +115,9 @@ const paths = http.calls.map((c) => c.path);
 for (const p of ["/api/status", "/api/documents", "/api/config"]) assert.ok(paths.includes(p), `${p} never fetched`);
 // With no socket, the status poll drives the status line and the push-to-talk note.
 assert.equal($("status-line").dataset.state, "listening");
-assert.equal($("status-text").textContent, "Listening… speak now.");
+assert.equal($("status-text").textContent, LISTENING);
 await $("listen-btn").fire("click");
-assert.equal($("ask-msg").textContent, "Listening… speak now.");
+assert.equal($("ask-msg").textContent, LISTENING);
 """,
     )
 
@@ -136,7 +140,7 @@ assert.equal(msg.textContent, "Getting the microphone ready…");
 sock.fire("status", { state: "idle" });  // e.g. the previous answer finishing first
 assert.equal(msg.textContent, "Getting the microphone ready…");
 sock.fire("status", { state: "listening" });
-assert.equal(msg.textContent, "Listening… speak now.");
+assert.equal(msg.textContent, LISTENING);
 sock.fire("status", { state: "transcribing" });
 assert.equal(msg.textContent, "Writing down what you said…");
 sock.fire("status", { state: "idle" });
@@ -163,7 +167,7 @@ await settle();
 sock.fire("status", { state: "listening" });
 reply({ status: 202, body: { accepted: true } });
 await click;
-assert.equal($("ask-msg").textContent, "Listening… speak now.");
+assert.equal($("ask-msg").textContent, LISTENING);
 """,
     )
 
@@ -239,6 +243,7 @@ PROJECTOR = """
 const doc = installDom(IDS, { bodyData: { projectorWidth: "1920", projectorHeight: "1080" } });
 const $ = (id) => doc.getElementById(id);
 const sock = installIo();
+installFetch();
 runClassic(PROJECTOR_JS);
 """
 
@@ -253,7 +258,7 @@ def test_projector_resync_keeps_status_that_arrived_first(tmp_path: Path) -> Non
 sock.fire("status", { state: "thinking" });
 sock.fire("connect");
 assert.equal($("status").dataset.state, "thinking");
-assert.equal($("status-label").textContent, "thinking");
+assert.equal($("status-label").textContent, "Thinking…");
 """,
     )
 
@@ -271,15 +276,531 @@ sock.fire("show_calibration", {});
 sock.fire("transcript", { text: "what is this" });
 assert.ok($("calibration-img"));
 sock.fire("disconnect");
-assert.equal($("status-label").textContent, "offline");
+assert.equal($("status-label").textContent, "Not connected");
 sock.fire("connect");
 assert.equal($("calibration-img"), null);
 assert.equal($("transcript").textContent, "");
 assert.ok($("transcript").classList.contains("hidden"));
 assert.ok(!doc.body.classList.contains("offline"));
 // The pre-disconnect status is stale, so idle stands in until the server's push arrives.
-assert.equal($("status-label").textContent, "idle");
+assert.equal($("status-label").textContent, "Ready – press Space to talk");
 sock.fire("status", { state: "speaking" });
-assert.equal($("status-label").textContent, "speaking");
+assert.equal($("status-label").textContent, "Answering…");
+""",
+    )
+
+
+@needs_node
+def test_projector_corner_uses_plain_words(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR
+        + """
+const label = () => $("status-label").textContent;
+sock.fire("connect");
+for (const [state, words] of [["idle", "Ready – press Space to talk"], ["listening", "Listening…"],
+                              ["transcribing", "Writing it down…"], ["thinking", "Thinking…"], ["speaking", "Answering…"]]) {
+  sock.fire("status", { state });
+  assert.equal(label(), words);
+}
+sock.fire("status", { state: "thinking", detail: "busy" });
+assert.equal(label(), "Still busy – wait a moment");
+sock.fire("disconnect");
+const space = { code: "Space", key: " ", repeat: false, preventDefault() {} };
+for (const fn of doc.listeners.keydown) fn(space);
+assert.equal(label(), "Not connected – question not sent");
+assert.deepEqual(sock.emitted, []);
+""",
+    )
+
+
+QUIZ = '{"active": true, "number": 2, "total": 8, "score": 1, "problem": "3x + 5 = 20"}'
+
+
+@needs_node
+def test_projector_quiz_card_follows_tutor_events(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR
+        + f"const QUIZ = {QUIZ};\n"
+        + """
+const card = $("quiz-card");
+installFetch({ "GET /api/tutor": { status: 200, body: { mode: "quiz", learn_topic: null, quiz: QUIZ } } });
+sock.fire("connect");
+await settle();
+// A reconnect asks the server, so a quiz that started while the page was away still shows.
+assert.ok(!card.classList.contains("hidden"));
+assert.equal($("quiz-card-count").textContent, "Quiz · problem 2 of 8");
+assert.equal($("quiz-card-problem").textContent, "3x + 5 = 20");
+// Made-up problems have no text: the card keeps the count only.
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: { ...QUIZ, number: 3, problem: null } });
+assert.equal($("quiz-card-count").textContent, "Quiz · problem 3 of 8");
+assert.equal($("quiz-card-problem").textContent, "");
+sock.fire("tutor", { mode: "help", learn_topic: null, quiz: null });
+assert.ok(card.classList.contains("hidden"));
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: { ...QUIZ, active: false } });
+assert.ok(card.classList.contains("hidden"));
+""",
+    )
+
+
+@needs_node
+def test_projector_quiz_card_ignores_a_stale_get(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR
+        + f"const QUIZ = {QUIZ};\n"
+        + """
+let reply;
+installFetch({ "GET /api/tutor": () => new Promise((resolve) => { reply = resolve; }) });
+sock.fire("connect");
+await settle();
+sock.fire("tutor", { mode: "help", learn_topic: null, quiz: null });
+reply({ status: 200, body: { mode: "quiz", learn_topic: null, quiz: QUIZ } });
+await settle();
+assert.ok($("quiz-card").classList.contains("hidden"));
+""",
+    )
+
+
+# ---- dashboard: connection, tutor modes, wording ------------------------------------
+
+
+@needs_node
+def test_dashboard_says_connecting_until_the_socket_fails(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+installFetch();
+await import("./dashboard/main.js");
+await settle();
+// The template's "Connecting…" stays: nothing has failed yet.
+assert.equal($("status-text").textContent, "");
+assert.equal($("conn-text").textContent, "");
+assert.notEqual($("badge-ask").textContent, "not connected");
+sock.fire("connect_error", { message: "xhr poll error" });
+sock.fire("connect_error", { message: "xhr poll error" });
+assert.match($("status-text").textContent, /^Can't reach the assistant\\. Check its Terminal window/);
+assert.equal($("badge-ask").textContent, "not connected");
+assert.equal(logText().match(/connect_error/g).length, 1);
+sock.fire("connect");
+assert.equal($("conn-text").textContent, "Connected");
+assert.equal($("status-text").textContent, "Ready. Ask a question below, or on the board.");
+""",
+    )
+
+
+@needs_node
+@pytest.mark.parametrize("connects", [False, True])
+def test_dashboard_offline_only_after_the_grace_period(tmp_path: Path, connects: bool) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + f"const CONNECTS = {json.dumps(connects)};\n"
+        + """
+const sock = installIo();
+installFetch();
+await import("./dashboard/main.js");
+if (CONNECTS) sock.fire("connect");
+await wait(3200);
+assert.equal($("conn-text").textContent, CONNECTS ? "Connected" : "Not connected");
+""",
+    )
+
+
+@needs_node
+def test_mode_picker_sets_and_follows_the_tutor_mode(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+const http = installFetch({
+  "PUT /api/tutor/mode": (init) => ({ status: 200, body: { mode: JSON.parse(init.body).mode, learn_topic: null, quiz: null } }),
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+const pressed = () => ["help", "practice", "quiz"].filter((m) => $(`mode-${m}`).getAttribute("aria-pressed") === "true");
+assert.equal($("modes").hidden, false);
+assert.deepEqual(pressed(), ["help"]);
+assert.equal($("badge-ask").textContent, "step-by-step help");
+assert.equal($("quiz-bar").hidden, true);
+await $("mode-practice").fire("click");
+const put = http.calls.find((c) => c.method === "PUT" && c.path === "/api/tutor/mode");
+assert.deepEqual(JSON.parse(put.body), { mode: "practice" });
+assert.deepEqual(pressed(), ["practice"]);
+assert.equal($("badge-ask").textContent, "similar problem");
+assert.equal($("ask-msg").textContent, "Now write a problem on the board and ask for one like it.");
+assert.equal($("mode-practice").disabled, false);
+// The student says "quiz me": the server pushes the new mode and the picker follows.
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: null });
+assert.deepEqual(pressed(), ["quiz"]);
+assert.equal($("quiz-bar").hidden, false);
+assert.equal($("quiz-start-btn").hidden, false);
+assert.equal($("quiz-stop-btn").hidden, true);
+assert.match($("quiz-progress").textContent, /worksheets you tick/);
+// Busy states still win the badge; idle shows the mode again.
+sock.fire("status", { state: "thinking" });
+assert.equal($("badge-ask").textContent, "thinking…");
+sock.fire("status", { state: "idle" });
+assert.equal($("badge-ask").textContent, "quiz");
+""",
+    )
+
+
+@needs_node
+def test_mode_picker_failure_is_explained_and_logged(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+installFetch({ "PUT /api/tutor/mode": { status: 500, body: { error: "KeyError: mode" } } });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+await $("mode-quiz").fire("click");
+assert.equal($("ask-msg").textContent,
+  "Couldn't change how the assistant helps. Check the assistant's Terminal window is still open, then try again.");
+assert.equal($("ask-msg").dataset.tone, "warn");
+assert.match(logText(), /KeyError: mode/);
+assert.equal($("mode-help").getAttribute("aria-pressed"), "true");
+""",
+    )
+
+
+@needs_node
+def test_quiz_bar_shows_progress_problem_and_stop(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + f"const QUIZ = {QUIZ};\n"
+        + """
+const sock = installIo();
+const http = installFetch({
+  "POST /api/tutor/quiz/start": { status: 200, body: { mode: "quiz", learn_topic: null, quiz: { ...QUIZ, number: 1, score: 0 } } },
+  "POST /api/tutor/quiz/stop": { status: 200, body: { mode: "help", learn_topic: null, quiz: null } },
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: null });
+await $("quiz-start-btn").fire("click");
+assert.equal($("quiz-progress").textContent, "Problem 1 of 8 · 0 right so far");
+assert.equal($("quiz-problem").textContent, "3x + 5 = 20");
+assert.equal($("quiz-problem").hidden, false);
+assert.equal($("quiz-start-btn").hidden, true);
+assert.equal($("quiz-stop-btn").hidden, false);
+assert.match($("ask-msg").textContent, /^Quiz started! Say or type “I'm ready”/);
+sock.fire("tutor", { mode: "quiz", learn_topic: "equations", quiz: QUIZ });
+assert.equal($("quiz-progress").textContent, "Problem 2 of 8 · 1 right so far");
+assert.equal($("badge-ask").textContent, "quiz · 2 of 8");
+assert.equal($("learn-line").textContent, "Learning: equations");
+assert.equal($("learn-line").hidden, false);
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: { ...QUIZ, number: 3, total: 10, problem: null } });
+assert.equal($("quiz-problem").hidden, true);
+assert.equal($("learn-line").hidden, true);
+await $("quiz-stop-btn").fire("click");
+assert.ok(http.calls.some((c) => c.method === "POST" && c.path === "/api/tutor/quiz/stop"));
+assert.equal($("quiz-bar").hidden, true);
+assert.equal($("ask-msg").textContent, "Quiz stopped.");
+assert.equal($("badge-ask").textContent, "step-by-step help");
+// Back in quiz mode after a quiz that got somewhere: the bar reports how it went.
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: { ...QUIZ, active: false, score: 5 } });
+assert.equal($("quiz-progress").textContent, "Last quiz: 5 right. Press Start quiz to go again.");
+assert.equal($("quiz-start-btn").hidden, false);
+""",
+    )
+
+
+@needs_node
+def test_math_examples_and_wording_by_default(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+const http = installFetch();
+await import("./dashboard/main.js");
+await settle();
+const examples = $("examples").children.slice(1);
+assert.deepEqual(examples.map((b) => b.textContent),
+  ["I want to learn how to solve fractions", "Help me with the next step", "Quiz me on equations"]);
+assert.equal($("badge-files").textContent, "add worksheets");
+assert.match($("files-summary").textContent, /^No worksheets or notes yet\\./);
+await examples[0].fire("click");
+await settle();
+const query = http.calls.find((c) => c.method === "POST" && c.path === "/api/query");
+assert.deepEqual(JSON.parse(query.body), { text: "I want to learn how to solve fractions" });
+""",
+    )
+
+
+@needs_node
+def test_biology_profile_hides_modes_and_keeps_its_examples(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+installFetch({ "GET /api/config": { status: 200, body: { profile: "biology", listen_mode: "push", wake_word: "assistant" } } });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+assert.equal($("modes").hidden, true);
+assert.equal($("quiz-bar").hidden, true);
+assert.equal($("badge-ask").textContent, "ready");
+assert.deepEqual($("examples").children.slice(1).map((b) => b.textContent), [
+  "Is my flowchart missing a sterile step?",
+  "Why does Leptosol runoff make the water cloudy?",
+  "Where should I take my water samples?",
+]);
+assert.equal($("files-tab-name").textContent, "Study files");
+assert.equal($("files-hint").textContent,
+  "Add your notes, protocols or papers. Before answering, the assistant looks in the files you tick. Untick a file to leave it out.");
+assert.equal($("badge-files").textContent, "add your notes");
+assert.equal($("ask-input").placeholder, "Ask about your drawing or your notes…");
+""",
+    )
+
+
+HISTORY = [
+    {"query": "is it 5?", "animation_state": "error", "ink_regions": 0, "had_frame": False, "latency_s": 3.2,
+     "mode": "quiz", "task_kind": "quiz", "sources": []},
+    {"query": "is it 5?", "animation_state": "error", "ink_regions": 2, "had_frame": True, "latency_s": 2.6,
+     "mode": "quiz", "task_kind": "quiz", "sources": []},
+    {"query": "teach me fractions", "animation_state": "idle", "ink_regions": 0, "had_frame": True, "latency_s": 2,
+     "mode": "help", "task_kind": "learn", "sources": ["guide.md"]},
+    {"query": "next step?", "animation_state": "pointing", "ink_regions": 1, "had_frame": True, "latency_s": 4,
+     "mode": "help", "task_kind": None, "sources": []},
+]  # fmt: skip
+
+
+@needs_node
+@pytest.mark.parametrize("profile", ["math", "biology"])
+def test_margin_notes_name_the_mode_and_what_went_wrong(tmp_path: Path, profile: str) -> None:
+    items = [{**item, "spoken_text": "…"} for item in HISTORY]
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + f"const ITEMS = {json.dumps(items)};\nconst PROFILE = {json.dumps(profile)};\n"
+        + """
+installIo();
+installFetch({
+  "GET /api/history": { status: 200, body: { interactions: ITEMS } },
+  "GET /api/config": { status: 200, body: { profile: PROFILE } },
+});
+await import("./dashboard/main.js");
+await settle();
+const notes = $("timeline").children.map((li) => li.children.find((c) => c.className === "margin-note").textContent);
+const math = PROFILE === "math";
+assert.deepEqual(notes, [
+  (math ? "quiz · " : "") + "something went wrong, so this isn't a real answer · didn't use your files · couldn't see the board · took 3 s",
+  (math ? "quiz · found a mistake in your work" : "found a mistake in your drawing") + " · didn't use your files · took 3 s",
+  (math ? "learning something new · " : "") + "read guide.md · took 2 s",
+  (math ? "step-by-step help · pointed at your work" : "pointed at your drawing") + " · didn't use your files · took 4 s",
+]);
+""",
+    )
+
+
+@needs_node
+def test_file_rows_name_photos_and_have_unique_ids(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+installFetch({
+  "GET /api/documents": {
+    status: 200,
+    body: {
+      documents: [
+        { source: "worksheet photo.jpg", type: "image", chunks: 2, active: true },
+        { source: "scan", type: "image", chunks: 1, active: true },
+        { source: "unit 1.md", type: "md", chunks: 3, active: true },
+        { source: "unit-1.md", type: "md", chunks: 3, active: false },
+      ],
+    },
+  },
+});
+await import("./dashboard/main.js");
+await settle();
+const rows = $("files").children;
+const meta = rows.map((li) => li.children[1].children[0].textContent);
+assert.deepEqual(meta, ["Photo (text read from the image) · 2 sections", "Photo (text read from the image) · 1 section",
+                        "Notes · 3 sections", "Notes · 3 sections"]);
+const ids = rows.map((li) => li.children[0].id);
+assert.equal(new Set(ids).size, 4);
+for (const li of rows) assert.equal(li.children[1].htmlFor, li.children[0].id);
+assert.equal($("files-summary").textContent, "The assistant uses 3 of 4 files when answering.");
+""",
+    )
+
+
+@needs_node
+def test_camera_polling_waits_for_its_tab(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+const http = installFetch();
+const { selectStep } = await import("./dashboard/tabs.js");
+$("ink-toggle").checked = true;  // as the template ships it
+await import("./dashboard/main.js");
+await settle();
+// The Ask tab opens first: neither the picture nor the drawing count is on screen.
+assert.equal($("panel-board").hidden, true);
+assert.equal($("frame").src, "");
+assert.ok(!http.calls.some((c) => c.path === "/api/ink"));
+selectStep("board");
+await wait(1700);
+assert.match($("frame").src, /^\\/api\\/frame\\.jpg\\?warped=1/);
+assert.ok(http.calls.some((c) => c.path === "/api/ink"));
+""",
+    )
+
+
+@needs_node
+def test_settings_use_plain_words(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+installFetch();
+const { renderConfig } = await import("./dashboard/log.js");
+const rows = () => {
+  const items = $("config").children;
+  const out = {};
+  for (let i = 0; i < items.length; i += 2) out[items[i].textContent] = items[i + 1].textContent;
+  return out;
+};
+renderConfig({ profile: "math", listen_mode: "push", wake_word: "assistant", tts_backend: "edge", checkerboard: [9, 6] });
+assert.deepEqual(rows(), {
+  "Subject": "Math",
+  "Microphone mode": "Press Talk (or Space on the projector page)",
+  "Voice": "Online voice (needs internet)",
+  "Checkerboard inner corners": "9 × 6",
+});
+renderConfig({ listen_mode: "wake", wake_word: "hey board", tts_backend: "none" });
+assert.deepEqual(rows(), {
+  "Microphone mode": "Always listening: say “hey board” first",
+  "Wake word": "hey board",
+  "Voice": "Off (answers are only written)",
+});
+""",
+    )
+
+
+@needs_node
+def test_checklist_explains_camera_model_and_voice(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+installFetch();
+const { renderStatus } = await import("./dashboard/status.js");
+const base = { camera_running: true, calibrated: true, total_documents: 1, active_documents: 1, audio_available: true };
+const checks = () => $("checks").children.map(text).join("\\\\n");
+renderStatus({ ...base, camera_running: false, vlm_backend: "mock", vlm_model: "mock", tts_backend: "edge" });
+assert.match(checks(), /Camera not found .*not open in another app \\(Zoom, FaceTime\\).*\\(Ctrl\\+C\\) and start it again\\./);
+assert.match(checks(), /Demo mode: answers are pretend Ask whoever set up the assistant/);
+assert.match(checks(), /Answers are read aloud on the projector page \\(click it once to allow sound\\)/);
+renderStatus({ ...base, vlm_backend: "ollama", vlm_model: "qwen2.5vl:3b", tts_backend: "none" });
+assert.match(checks(), /AI model chosen: qwen2\\.5vl:3b If an answer says it couldn't reach the AI model, start Ollama and ask again\\./);
+assert.doesNotMatch(checks(), /AI model ready/);
+""",
+    )
+
+
+@needs_node
+def test_calibration_errors_point_at_the_projector_page(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+const replies = [
+  { status: 200, body: { ok: false, error: "checkerboard not detected; check camera view and lighting" } },
+  { status: 500, body: { error: "cv2.error: (-215) assertion failed" } },
+  { status: 200, body: { ok: true, error: "PermissionError: data/calibration.json" } },
+];
+installFetch({ "POST /api/calibrate": () => replies.shift() });
+await import("./dashboard/main.js");
+const msg = $("calib-msg");
+await $("calibrate-btn").fire("click");
+assert.match(msg.textContent, /^Couldn't see the checkerboard\\. Check the projector page is open on the projector in full screen/);
+await $("calibrate-btn").fire("click");
+assert.match(msg.textContent, /^Couldn't line up\\. Check the projector page is open on the projector in full screen/);
+assert.doesNotMatch(msg.textContent, /cv2/);
+await $("calibrate-btn").fire("click");
+assert.equal(msg.textContent, "Lined up, but it couldn't be saved, so do this again after restarting the assistant.");
+assert.match(logText(), /assertion failed/);
+assert.match(logText(), /PermissionError/);
+""",
+    )
+
+
+@needs_node
+def test_error_notes_are_friendly_and_raw_detail_goes_to_the_log(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+installFetch({
+  "POST /api/query": { status: 500, body: { error: "RuntimeError: boom" } },
+  "POST /api/listen": { status: 500, body: { error: "OSError: -9996" } },
+  "GET /api/search": { status: 500, body: { error: "chromadb exploded" } },
+  "PUT /api/documents/selection": { status: 500, body: { error: "disk full" } },
+  "GET /api/documents": { status: 200, body: { documents: [{ source: "a.pdf", type: "pdf", chunks: 1, active: true }] } },
+  "POST /api/upload": { status: 200, body: { files: [{ name: "b.pdf", chunks: 0, error: "PDF is encrypted" }], total_chunks: 0 } },
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+const hint = "Check the assistant's Terminal window is still open, then try again.";
+$("ask-input").value = "help";
+await $("ask-form").fire("submit");
+assert.equal($("ask-msg").textContent, `Couldn't send your question. ${hint}`);
+await $("listen-btn").fire("click");
+assert.equal($("ask-msg").textContent, "The microphone isn't working right now. Try Talk again, or type your question.");
+$("search-input").value = "fractions";
+await $("search-form").fire("submit");
+await settle();
+assert.equal(text($("hits").children[0]), `Search didn't work. ${hint}`);
+await $("files").children[0].children[0].fire("change");
+await settle();
+assert.equal($("upload-msg").textContent, `Couldn't save which files are ticked. ${hint}`);
+$("file-input").files = [new File(["x"], "b.pdf")];
+await $("file-input").fire("change");
+await settle();
+assert.equal($("upload-msg").textContent, "Couldn't read b.pdf (try saving it again as a PDF or text file).");
+for (const raw of ["RuntimeError: boom", "OSError: -9996", "chromadb exploded", "disk full", "PDF is encrypted"]) {
+  assert.ok(logText().includes(raw), `${raw} missing from the activity log`);
+}
 """,
     )
