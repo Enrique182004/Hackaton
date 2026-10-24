@@ -2318,6 +2318,27 @@ else if (REPLY !== "disabled") {
 
 
 @needs_node
+def test_phone_card_off_the_network_from_the_start(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        PHONE_DASHBOARD
+        + f"const LAN = {json.dumps({**LAN, 'urls': []})};\n"
+        + """
+globalThis.qrcode = () => assert.fail("no address, so no code to draw");
+installIo();
+installFetch({ "GET /api/lan": { status: 200, body: LAN } });
+await import("./dashboard/main.js");
+await settle();
+assert.equal($("phone-card").hidden, false);
+assert.equal($("phone-qr").hidden, true, "no empty white square where the code would be");
+assert.equal($("phone-url").textContent, "This laptop isn't on a network. Join the classroom Wi-Fi.");
+assert.equal($("phone-pin").textContent, "482 913");
+""",
+    )
+
+
+@needs_node
 def test_phone_qr_code_from_the_vendored_library(tmp_path: Path) -> None:
     run_node(
         tmp_path,

@@ -13,7 +13,8 @@ const ACTIONS = {
 };
 
 let last = null;
-let drawnUrl = null;
+// The URL the code on screen encodes; undefined until the first render, so a first reply with no URL hides the box.
+let drawnUrl;
 // Bumped on every render, so a GET that was in flight during New PIN can't bring the old PIN back.
 let version = 0;
 // GET /api/lan said no (a phone, or a server without phone mode): stop asking.
