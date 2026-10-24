@@ -25,8 +25,18 @@ def _freeze(monkeypatch: pytest.MonkeyPatch, meipass: Path, executable: Path) ->
 
 
 def test_version_is_a_plain_semver_string() -> None:
+    # Inno Setup's VersionInfoVersion (packaging/windows/installer.iss) only takes numbers.
     parts = __version__.split(".")
     assert len(parts) == 3 and all(p.isdigit() for p in parts)
+
+
+def test_release_rules_agree_with_the_version_rule() -> None:
+    # A release tag must be exactly "v" + __version__, which is plain X.Y.Z: no pre-release tags anywhere.
+    workflow = (REPO / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
+    docs = (REPO / "docs" / "DESKTOP_BUILDS.md").read_text(encoding="utf-8")
+    assert '"${GITHUB_REF_NAME#v}" != "$version"' in workflow
+    assert "prerelease" not in workflow
+    assert "makes a pre-release" not in docs and "no pre-release tags" in docs
 
 
 def test_source_checkout_is_not_frozen_and_resources_are_the_repo() -> None:

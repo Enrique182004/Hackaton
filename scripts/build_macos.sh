@@ -33,9 +33,9 @@ fi
 
 echo "==> Install PyInstaller"
 if "$PY" -m pip --version >/dev/null 2>&1; then
-  "$PY" -m pip install --upgrade "pyinstaller>=6.10"
+  "$PY" -m pip install --upgrade "pyinstaller>=6.10,<7"
 else
-  uv pip install --python "$PY" "pyinstaller>=6.10"  # uv-made venvs have no pip
+  uv pip install --python "$PY" "pyinstaller>=6.10,<7"  # uv-made venvs have no pip
 fi
 
 VERSION=$("$PY" -c 'import biobench_sar; print(biobench_sar.__version__)')
