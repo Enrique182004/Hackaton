@@ -23,7 +23,7 @@ All paths are inside `biobench_sar/`.
 | Area | Files |
 | --- | --- |
 | Server | `app.py` (routes, Socket.IO), `assistant.py` (Sense → Think → Act pipeline, status, history, file selection), `config.py`, `schemas.py` |
-| Tutor | `tutor.py` (modes, voice commands, quiz progress) |
+| Tutor | `tutor.py` (modes, learn-a-topic requests, voice commands, quiz progress, conversation memory) |
 | Vision | `core/homography.py`, `core/vision_loop.py` |
 | Audio | `core/audio_trigger.py`, `llm/tts_engine.py` |
 | RAG | `rag/ingestor.py`, `rag/vector_store.py`, `rag/quiz_bank.py` |

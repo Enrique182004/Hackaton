@@ -152,7 +152,7 @@ Everything is an environment variable (see `biobench_sar/config.py`). The ones y
 .venv/bin/python -m pytest -q        # unit tests, no hardware or network needed
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 SAR_VLM_BACKEND=mock SAR_TTS_BACKEND=none .venv/bin/python -m biobench_sar   # UI without a model
-.venv/bin/python -m scripts.bench_vlm -n 3   # VLM latency + scenario benchmark against Ollama
+.venv/bin/python -m scripts.bench_vlm -n 3   # VLM latency against Ollama (--scenarios: biology flowchart cases)
 ```
 
 CI runs lint and tests on every pull request. Every change goes through its own branch and PR — see
@@ -164,7 +164,7 @@ CI runs lint and tests on every pull request. Every change goes through its own 
 | --- | --- |
 | `biobench_sar/app.py` | Flask + Socket.IO routes |
 | `biobench_sar/assistant.py` | Sense → Think → Act pipeline, status, history |
-| `biobench_sar/tutor.py` | Tutor modes (help / practice / quiz), voice-command detection, quiz progress |
+| `biobench_sar/tutor.py` | Tutor modes (help / practice / quiz), learn-a-topic requests, voice-command detection, quiz progress, conversation memory |
 | `biobench_sar/core/` | camera loop, ink detection, homography calibration, mic / wake word |
 | `biobench_sar/rag/` | document ingestion, ChromaDB store, quiz bank parser |
 | `biobench_sar/llm/` | VLM client (prompts per profile and mode + JSON schema), math-to-speech, text-to-speech |
