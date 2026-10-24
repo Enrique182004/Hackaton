@@ -5,9 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from biobench_sar.config import PACKAGE_DIR
-
-DEFAULT_ENV_FILE = PACKAGE_DIR.parent / "sar.env"
+# Not from biobench_sar.config: importing it here would read SAR_DATA_DIR before load_env_file applies the file.
+DEFAULT_ENV_FILE = Path(__file__).resolve().parent.parent / "sar.env"
 
 
 def env_file_path() -> Path:

@@ -81,6 +81,21 @@ def test_silence_rms_invalid_or_negative_falls_back(monkeypatch: pytest.MonkeyPa
     assert Settings().silence_rms == 0.01
 
 
+@pytest.mark.parametrize("raw", ["abc", "", "0", "-5", "nan", "inf"])
+def test_bad_timeout_or_record_seconds_falls_back(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    monkeypatch.setenv("SAR_VLM_TIMEOUT", raw)
+    monkeypatch.setenv("SAR_RECORD_SECONDS", raw)
+    settings = Settings()
+    assert (settings.vlm_timeout, settings.record_seconds) == (90.0, 5.0)
+
+
+def test_timeout_and_record_seconds_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SAR_VLM_TIMEOUT", "30")
+    monkeypatch.setenv("SAR_RECORD_SECONDS", "2.5")
+    settings = Settings()
+    assert (settings.vlm_timeout, settings.record_seconds) == (30.0, 2.5)
+
+
 class Dummy:
     def __init__(self, *args: object, **kwargs: object) -> None:
         self.args, self.kwargs = args, kwargs
