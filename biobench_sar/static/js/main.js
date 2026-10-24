@@ -485,7 +485,7 @@ if (socket) {
     connected = true;
     setConn("proj.debug.connected");
     resync();
-    reportUi(true);
+    uiChanged();
   });
   socket.on("disconnect", () => { connected = false; statusSinceConnect = false; setConn("proj.debug.disconnected"); setOffline(); });
   socket.on("connect_error", (e) => {
