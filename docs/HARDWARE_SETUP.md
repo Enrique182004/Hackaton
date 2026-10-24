@@ -33,9 +33,9 @@ cp sar.env.example sar.env
 
 Look for `camera N  PASS  1920x1080 @ ~30 fps` (if it says 1280x720, the C930e is on a USB hub or a
 different index) and `projector  PASS  a display runs at 1280x800`. Fix `SAR_CAMERA_INDEX` in `sar.env` if
-the 1080p camera is not index 1. The projector line is checked on macOS. On Windows the check prints a
-`displays` line instead, which says `skipped` unless the `screeninfo` package is installed, so check the
-projector in Windows' display settings (*Settings → System → Display*: the second display at 1280 × 800).
+the 1080p camera is not index 1. If the projector line is missing, or a `displays` line says `skipped`, check
+the projector by eye in the display settings (Windows: *Settings → System → Display*; macOS: *System Settings →
+Displays*): a second display at 1280 × 800.
 
 **Epson WXGA 3LCD projector**
 
@@ -271,8 +271,8 @@ Calibrate again after moving the webcam (section 6).
 | "Checkerboard not detected" | Projector page not full screen; camera cannot see the whole board; glare over part of the checkerboard; someone in the way | Press `F` on the projector page, re-aim the camera, fix glare, step aside, try again |
 | Avatar points next to the drawing, not at it | Camera, projector or board moved since calibration; projector page not full screen | Run **Line up camera and projector** again with the projector page full screen (`F`) |
 | The glowing outline is around the wrong part of the board | Same as above: the outline uses the same line-up | Calibrate again |
-| `displays ... skipped` in the hardware check (Windows) | The display check needs the optional `screeninfo` package | Check Windows' display settings by eye: a second display at 1280 × 800 |
-| `tesseract FAIL` in the hardware check (Windows) | The Tesseract installer doesn't add itself to `PATH` | Add `C:\Program Files\Tesseract-OCR` to your user `PATH`, open a new PowerShell window and run the check again (only photo uploads need it) |
+| No `projector` line, or `displays ... skipped`, in the hardware check | This computer's display list couldn't be read | Check the display settings by eye: a second display at 1280 × 800 |
+| `tesseract FAIL` in the hardware check | Tesseract isn't installed (only photo uploads need it) | `winget install UB-Mannheim.TesseractOCR` (Windows) or `brew install tesseract` (macOS). If it is installed and still fails on Windows, add `C:\Program Files\Tesseract-OCR` to your user `PATH` and open a new PowerShell window |
 | Decimals, minus signs or exponents misread | Camera at 720p; thin or light marker; symbols too small | 1920×1080 camera; black marker; bigger, clearer symbols (section 4) |
 | No orange boxes around drawings | Faint, dry or light-coloured marker; uneven light | Fresh black or blue marker; even lighting |
 | Board looks pure white and the ink looks faded everywhere | Camera over-exposed | Dim the lights near the board; lower exposure in the camera's own app |

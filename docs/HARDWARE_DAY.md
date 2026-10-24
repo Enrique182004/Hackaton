@@ -63,8 +63,7 @@ Budget about 45 minutes, and do part A the day before.
 
     ✅ Expect: `settings file PASS`, `camera names` listing **Logitech Webcam C930e**, one
     `camera N PASS 1920x1080 @ ~30 fps`, `microphone PASS`, `tesseract PASS`, `ollama PASS`,
-    `model qwen2.5vl:3b PASS`, `projector PASS a display runs at 1280x800` (on macOS; Windows prints a
-    `displays` line instead).
+    `model qwen2.5vl:3b PASS`, `projector PASS a display runs at 1280x800`.
     - Camera gives 1280x720 → it is on a hub, or it is another camera. Plug it in directly.
     - The 1080p camera is not index 1 → set `SAR_CAMERA_INDEX` in `sar.env` to the index that showed
       1920x1080, then restart the assistant.
@@ -72,10 +71,11 @@ Budget about 45 minutes, and do part A the day before.
       Privacy & Security → Microphone. Do the same for Camera.
     - Camera or microphone dark on Windows → *Settings → Privacy & security → Camera* (and *Microphone*) →
       turn on **Let desktop apps access your camera**.
-    - `displays ... skipped` on Windows → check by eye that Windows' display settings show the projector at
-      1280 × 800.
-    - `tesseract FAIL` on Windows → add `C:\Program Files\Tesseract-OCR` to your user `PATH` and open a new
-      PowerShell window. Only photo uploads need it.
+    - No `projector` line, or `displays ... skipped` → check by eye that the display settings show the
+      projector at 1280 × 800.
+    - `tesseract FAIL` → install it (`winget install UB-Mannheim.TesseractOCR` on Windows, `brew install
+      tesseract` on a Mac). Only photo uploads need it. If Windows still fails after installing, add
+      `C:\Program Files\Tesseract-OCR` to your user `PATH` and open a new PowerShell window.
 
 ## D. Line up camera and projector
 
@@ -134,16 +134,18 @@ Details and limits: [MOBILE.md](MOBILE.md).
 15. **Turn it on.** Stop the assistant, add `SAR_LAN=1` to `sar.env` and start it again. Allow the firewall
     prompt (Windows: **Private networks**; macOS: **Allow**).
     ✅ The terminal (or the app's console window) prints the phone address, e.g.
-    `http://192.168.1.20:5050/join`, and a six-digit **PIN**. The laptop keeps using
-    `http://127.0.0.1:5050/dashboard` and never needs the PIN.
-16. **Join from a phone.** Put the phone on the same Wi-Fi, open the address and type the PIN.
+    `http://192.168.1.20:5050/join`, and a six-digit **PIN**. On the laptop, which keeps using
+    `http://127.0.0.1:5050/dashboard` and never needs the PIN, **More tools → Use a phone or tablet** shows
+    the same address and PIN with a QR code.
+16. **Join from a phone.** Put the phone on the same Wi-Fi and scan the QR code with its camera, or open the
+    address and type the PIN.
     ✅ The phone shows the dashboard. A question typed on the phone (or spoken with the keyboard's dictation
     mic) makes Pip answer on the board.
     - The page doesn't load → both must be on the same Wi-Fi, and guest or campus networks often block devices
       from reaching each other (use a phone hotspot). Disconnect any VPN on the laptop.
     - "Too many wrong PINs" → that phone waits a minute. Phones that already joined keep working.
-17. **End of class.** Use **Disconnect all phones** (or **New PIN**, which also signs every phone out), then
-    remove `SAR_LAN=1` and restart. A restart always makes a new PIN.
+17. **End of class.** On the phone card, press **Disconnect all phones** (or **New PIN**, which also signs
+    every phone out), then remove `SAR_LAN=1` and restart. A restart always makes a new PIN.
 
 ## H. Write down what you saw
 

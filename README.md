@@ -235,14 +235,15 @@ Open `http://localhost:5050/dashboard` on your laptop. It has four tabs:
 3. **Ask**: pick a mode, start or stop a quiz, type a question, press **Talk**, or click an example. Every
    answer is written into the notebook with a note saying what the assistant did, which files it read and how
    long it took.
-4. **More tools**: the lined-up or raw camera view, detected drawings, file search, settings and the activity
-   log.
+4. **More tools**: the lined-up or raw camera view, detected drawings, file search, settings, the activity
+   log and, in phone mode, the **Use a phone or tablet** card.
 
 ## Phones and tablets
 
 A phone on the same Wi-Fi can be a remote dashboard (type or dictate questions, change modes, run quizzes,
 tick files) while the laptop does the work. Start with `SAR_LAN=1`. The terminal prints the phone address and
-a six-digit PIN, and phones join with that PIN. Any bind other devices can reach (`SAR_LAN=1`, or a `SAR_HOST`
+a six-digit PIN, and the laptop's dashboard shows them with a QR code (**More tools → Use a phone or
+tablet**, where **New PIN** and **Disconnect all phones** are too). Any bind other devices can reach (`SAR_LAN=1`, or a `SAR_HOST`
 other than `127.0.0.1`, `localhost` or `::1`) turns the PIN gate on. Setup, limits and the security model:
 [docs/MOBILE.md](docs/MOBILE.md).
 

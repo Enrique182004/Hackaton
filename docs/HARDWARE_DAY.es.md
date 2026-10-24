@@ -68,8 +68,7 @@ Calcula unos 45 minutos y haz la parte A un día antes.
 
     ✅ Debes ver: `settings file PASS`, `camera names` con **Logitech Webcam C930e**, un
     `camera N PASS 1920x1080 @ ~30 fps`, `microphone PASS`, `tesseract PASS`, `ollama PASS`,
-    `model qwen2.5vl:3b PASS` y `projector PASS a display runs at 1280x800` (en macOS; en Windows sale una
-    línea `displays`).
+    `model qwen2.5vl:3b PASS` y `projector PASS a display runs at 1280x800`.
     - La cámara da 1280x720 → está en un hub o es otra cámara. Conéctala directo.
     - La cámara de 1080p no es el índice 1 → pon en `SAR_CAMERA_INDEX` de `sar.env` el índice que mostró
       1920x1080 y reinicia el asistente.
@@ -77,10 +76,13 @@ Calcula unos 45 minutos y haz la parte A un día antes.
       Sistema → Privacidad y seguridad → Micrófono. Haz lo mismo con la Cámara.
     - Cámara o micrófono sin imagen ni sonido en Windows → Configuración → Privacidad y seguridad → Cámara (y
       Micrófono) → activa **Permitir que las aplicaciones de escritorio accedan a la cámara**.
-    - `displays ... skipped` en Windows → revisa a ojo, en Configuración → Sistema → Pantalla, que el
-      proyector esté a 1280 × 800.
-    - `tesseract FAIL` en Windows → agrega `C:\Program Files\Tesseract-OCR` al `PATH` de tu usuario y abre
-      otra ventana de PowerShell. Solo hace falta para subir fotos.
+    - No sale la línea `projector`, o `displays ... skipped` → revisa a ojo en la configuración de pantallas
+      (Windows: Configuración → Sistema → Pantalla; macOS: Ajustes del Sistema → Pantallas) que el proyector
+      esté a 1280 × 800.
+    - `tesseract FAIL` → instálalo (`winget install UB-Mannheim.TesseractOCR` en Windows, `brew install
+      tesseract` en Mac). Solo hace falta para subir fotos. Si en Windows sigue fallando después de
+      instalarlo, agrega `C:\Program Files\Tesseract-OCR` al `PATH` de tu usuario y abre otra ventana de
+      PowerShell.
 
 ## D. Alinear la cámara y el proyector
 
@@ -135,31 +137,33 @@ Cambia el idioma del panel a **Español** (o deja **Auto** y simplemente habla e
 
 ✅ La voz en español es mexicana y lee las matemáticas con palabras en español.
 
-## G. Teléfonos (opcional)
+## G. Celulares (opcional)
 
-Los teléfonos y tabletas conectados al mismo Wi-Fi pueden servir como panel a distancia, aunque todo el
+Los celulares y tabletas conectados al mismo Wi-Fi pueden servir como panel a distancia, aunque todo el
 trabajo lo sigue haciendo la laptop. Detalles y límites: [MOBILE.md](MOBILE.md) (en inglés).
 
 15. **Actívalo.** Detén el asistente, agrega `SAR_LAN=1` a `sar.env` y vuelve a iniciarlo. Acepta el aviso
     del firewall (Windows: **Redes privadas**; macOS: **Permitir**).
-    ✅ La terminal (o la ventana de consola de la app) muestra la dirección para los teléfonos, por ejemplo
-    `http://192.168.1.20:5050/join`, y un **PIN** de seis dígitos. La laptop sigue usando
-    `http://127.0.0.1:5050/dashboard` y nunca necesita el PIN.
-16. **Entra desde un teléfono.** Conecta el teléfono al mismo Wi-Fi, abre esa dirección y escribe el PIN.
-    ✅ El teléfono muestra el panel. Una pregunta escrita en el teléfono (o dictada con el micrófono del
+    ✅ La terminal (o la ventana de consola de la app) muestra la dirección para los celulares, por ejemplo
+    `http://192.168.1.20:5050/join`, y un **PIN** de seis dígitos. En la laptop, que sigue usando
+    `http://127.0.0.1:5050/dashboard` y nunca necesita el PIN, **Más herramientas → Usar un celular o una
+    tableta** muestra la misma dirección y el PIN con un código QR.
+16. **Entra desde un celular.** Conecta el celular al mismo Wi-Fi y escanea el código QR con su cámara, o abre
+    la dirección y escribe el PIN.
+    ✅ El celular muestra el panel. Una pregunta escrita en el celular (o dictada con el micrófono del
     teclado) hace que Pip conteste en el pizarrón.
     - La página no carga → los dos deben estar en el mismo Wi-Fi, y las redes de invitados o de la escuela
-      muchas veces no dejan que los dispositivos se vean entre sí (usa el hotspot de un teléfono). Desconecta
+      muchas veces no dejan que los dispositivos se vean entre sí (usa el hotspot de un celular). Desconecta
       cualquier VPN de la laptop.
-    - Aviso de demasiados PIN incorrectos → ese teléfono espera un minuto. Los que ya entraron siguen
-      funcionando.
-17. **Al terminar la clase.** Desconecta todos los teléfonos desde el panel (o pide un PIN nuevo, que también
-    los saca a todos), quita `SAR_LAN=1` y reinicia. Cada reinicio crea un PIN nuevo.
+    - «Demasiados PIN incorrectos» → ese celular espera un minuto. Los que ya entraron siguen funcionando.
+17. **Al terminar la clase.** En la misma tarjeta, presiona **Desconectar todos los celulares** (o **PIN
+    nuevo**, que también los desconecta a todos), quita `SAR_LAN=1` y reinicia. Cada reinicio crea un PIN
+    nuevo.
 
 ## H. Anota lo que viste
 
 Marca cada paso con ✅ o escribe qué pasó en su lugar, con una foto del pizarrón y del panel tomada con el
-teléfono. Adjunta la salida de `hardware_check.py`. Con esto se cierran los issues de GitHub **#2** (cámara y
+celular. Adjunta la salida de `hardware_check.py`. Con esto se cierran los issues de GitHub **#2** (cámara y
 micrófono), **#3** (alineación en un pizarrón real), **#7** (palabra de activación, si pruebas
 `SAR_LISTEN_MODE=wake`; en español responde a «asistente») y **#9** (casos de prueba). Lo que haya salido mal,
 repórtalo como un issue nuevo con las fotos.
