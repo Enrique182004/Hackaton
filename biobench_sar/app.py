@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import re
 import sys
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,9 @@ MAX_SEARCH_RESULTS = 10
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 DEFAULT_PORTS = {"http": 80, "https": 443}
 NO_TEXT_ERROR = "no readable text found (scanned PDF or blank image?)"
+ONLY_ANSWERS_ERROR = "only answers found: they are kept out of the notes, so there is nothing to store"
+# Any text works: query() only needs one to rank a file's chunks, and every one of them comes back.
+ALL_CHUNKS_PROBE = "answer"
 
 
 @dataclass
@@ -104,11 +108,32 @@ def create_app(
     if services is None:
         assistant.calibrated = _load_initial_calibration(settings)
     _prune_quiz_bank(assistant, svc.store)
+    strip_answers = settings.profile == "math"
+    # Files stored before answers were stripped at upload, that could not be re-ingested: they need a re-upload.
+    flagged: set[str] = set()
+    flagged_lock = threading.Lock()
+
+    def flag_answers(names: list[str]) -> None:
+        with flagged_lock:
+            flagged.update(names)
+
+    def unflag_answers(name: str) -> None:
+        with flagged_lock:
+            flagged.discard(name)
 
     def documents_body() -> dict[str, Any]:
         documents = svc.store.list_sources()
         active = assistant.active_sources
-        listed = [{**d, "active": active is None or d["source"] in active} for d in documents]
+        with flagged_lock:
+            stale = set(flagged)
+        listed = [
+            {
+                **d,
+                "active": active is None or d["source"] in active,
+                **({"has_answers": True} if d["source"] in stale else {}),
+            }
+            for d in documents
+        ]
         return {
             "documents": listed,
             "total_chunks": sum(d["chunks"] for d in documents),
@@ -175,13 +200,19 @@ def create_app(
             path = settings.upload_dir / f"{uuid.uuid4().hex}{suffix}"
             try:
                 storage.save(path)
-                chunks = [replace(c, source=name, metadata={**c.metadata, "source": name}) for c in ingest_file(path)]
+                # Math: answers come out of the whole file before it is chunked, so the store never holds one.
+                ingested = ingest_file(path, strip_answers=strip_answers)
+                chunks = [replace(c, source=name, metadata={**c.metadata, "source": name}) for c in ingested]
                 if not any(c.text.strip() for c in chunks):
                     # Keep whatever an earlier upload of this name stored: a blank rescan must not wipe it.
-                    results.append({"name": name, "chunks": 0, "error": NO_TEXT_ERROR})
+                    answers_only = strip_answers and any(c.text.strip() for c in ingest_file(path))
+                    results.append(
+                        {"name": name, "chunks": 0, "error": ONLY_ANSWERS_ERROR if answers_only else NO_TEXT_ERROR}
+                    )
                     continue
                 # Replace, not add: ids are content hashes, so an edited file would keep its old chunks.
                 added, removed = svc.store.replace_source(name, chunks)
+                unflag_answers(name)
                 total += added
                 count = svc.store.source_count(name)
                 (stored if count else emptied).append(name)
@@ -312,6 +343,7 @@ def create_app(
         deleted = svc.store.delete_source(source)
         assistant.selection.discard(source)
         assistant.quiz_bank.remove_source(source)
+        unflag_answers(source)
         if not deleted:
             return jsonify({"deleted": 0, "error": "no such document"}), 404
         notify_documents_changed()
@@ -484,6 +516,7 @@ def create_app(
     app.config["SAR_ON_STATE"] = assistant.on_state
     app.config["SAR_SHOULD_LISTEN"] = assistant.should_listen
     app.config["SAR_NOTIFY_DOCUMENTS"] = notify_documents_changed
+    app.config["SAR_FLAG_ANSWERS"] = flag_answers
     return app, socketio
 
 
@@ -534,6 +567,7 @@ def seed_knowledge(
     marker: Path | None = None,
     quiz_bank: Any = None,
     on_done: Callable[[list[str]], None] | None = None,
+    strip_answers: bool = False,
 ) -> int:
     """Ingest a profile's bundled documents (directory = knowledge/<profile>) so a fresh install can answer.
 
@@ -541,7 +575,8 @@ def seed_knowledge(
     documents back on the next start. The marker is only written once every file went in, so a file that failed
     is tried again on the next start. Without a marker, only an empty store is seeded. A seed file is skipped
     when the store already has a file of that name (the student's own quiz_bank.csv is never merged into or
-    overwritten). `on_done` gets the seeded file names.
+    overwritten). `on_done` gets the seeded file names. strip_answers (math): the store gets each file without its
+    answers; the quiz bank still parses the original file, answers included.
     """
     from biobench_sar.rag.ingestor import SUPPORTED_EXTENSIONS, ingest_file
     from biobench_sar.rag.quiz_bank import parse_quiz_file
@@ -568,7 +603,7 @@ def seed_knowledge(
             skipped += 1
             continue
         try:
-            count = store.add_chunks(ingest_file(path))
+            count = store.add_chunks(ingest_file(path, strip_answers=strip_answers))
         except Exception:
             log.exception("could not seed %s", path.name)
             failed += 1
@@ -605,7 +640,96 @@ def seed_app_knowledge(app: Flask, settings: Settings, directory: Path | None = 
         marker=settings.seed_marker_file,
         quiz_bank=assistant.quiz_bank,
         on_done=done,
+        strip_answers=settings.profile == "math",
     )
+
+
+# A chunk's lines, and a CSV chunk's "Row N: ..." rows (the ingestor joins those on one line).
+_SEGMENT = re.compile(r"\n|(?=\bRow \d+: )")
+
+
+def _segments(texts: Iterable[str]) -> set[str]:
+    return {part.strip() for text in texts for part in _SEGMENT.split(text) if part.strip()}
+
+
+def _is_seed_copy(texts: list[str], seed: Path) -> bool:
+    """Whether stored chunks are the bundled seed file as an older version stored it (most of their lines are lines
+    of the seed file ingested with its answers), not the student's own file under the same name."""
+    from biobench_sar.rag.ingestor import ingest_file
+
+    stored = _segments(texts)
+    return bool(stored) and 2 * len(stored & _segments(c.text for c in ingest_file(seed))) >= len(stored)
+
+
+def _stored_texts(store: Any, source: str, count: int) -> list[str]:
+    """Every chunk text the store holds for `source` (`count` of them), through the store's public query."""
+    if count <= 0:
+        return []
+    return [chunk.text for chunk in store.query(ALL_CHUNKS_PROBE, count, sources=[source])]
+
+
+def migrate_answer_keys(store: Any, directory: Path | None, *, quiz_bank: Any = None) -> tuple[list[str], list[str]]:
+    """For a math store filled before answers were stripped at upload: (re-ingested, flagged) file names.
+
+    A file whose stored chunks still hold answers (an "Answer:" line, an answer key, a CSV answer column) is
+    re-ingested without them when it is a bundled seed file as an older version stored it; its quiz problems are
+    re-read from that file. Any other such file (an upload, whose
+    original is gone, or the student's own file under a seed file's name) is flagged for a re-upload; the
+    per-chunk stripping at prompt time still covers it meanwhile. Never raises for one bad file.
+    """
+    from biobench_sar.rag.ingestor import ingest_file
+    from biobench_sar.rag.quiz_bank import chunks_with_answers, parse_quiz_file
+
+    reingested: list[str] = []
+    flagged: list[str] = []
+    for document in store.list_sources():
+        source = str(document.get("source") or "")
+        try:
+            texts = _stored_texts(store, source, int(document.get("chunks") or 0))
+            if not any(chunks_with_answers([(source, text) for text in texts])):
+                continue
+            seed = directory / source if directory is not None and source else None
+            if seed is not None and seed.is_file() and _is_seed_copy(texts, seed):
+                store.replace_source(source, ingest_file(seed, strip_answers=True))
+                if quiz_bank is not None:
+                    quiz_bank.replace_source(source, parse_quiz_file(seed, source))
+                reingested.append(source)
+            else:
+                flagged.append(source)
+        except Exception:
+            log.exception("could not check %s for stored answers", source)
+    if reingested:
+        log.info("re-ingested %s without their answers", ", ".join(reingested))
+    if flagged:
+        log.warning(
+            "these files were stored with their answers before answers were stripped at upload; re-upload them: %s",
+            ", ".join(flagged),
+        )
+    return reingested, flagged
+
+
+def migrate_app_knowledge(app: Flask, settings: Settings) -> tuple[list[str], list[str]]:
+    """migrate_answer_keys for a running math app: flagged files show `has_answers` in the document list."""
+    if settings.profile != "math":
+        return [], []
+    assistant: Assistant = app.config["SAR_ASSISTANT"]
+    reingested, flagged = migrate_answer_keys(
+        app.config["SAR_SERVICES"].store, settings.knowledge_dir, quiz_bank=assistant.quiz_bank
+    )
+    app.config["SAR_FLAG_ANSWERS"](flagged)
+    if reingested or flagged:
+        app.config["SAR_NOTIFY_DOCUMENTS"]()
+    return reingested, flagged
+
+
+def prepare_knowledge(app: Flask, settings: Settings) -> None:
+    """Startup work on the knowledge base, off the request threads: strip stored answers, then seed a fresh store."""
+    try:
+        migrate_app_knowledge(app, settings)
+    except Exception:
+        log.exception("could not check the stored files for answers")
+    if settings.seed_knowledge:
+        seed_app_knowledge(app, settings)
 
 
 def _port_free(host: str, port: int) -> bool:
@@ -666,8 +790,7 @@ def main() -> None:
     svc: Services = app.config["SAR_SERVICES"]
     _request_camera_access(settings.camera_index)
     svc.vision.start()
-    if settings.seed_knowledge:
-        threading.Thread(target=seed_app_knowledge, args=(app, settings), daemon=True, name="seed").start()
+    threading.Thread(target=prepare_knowledge, args=(app, settings), daemon=True, name="knowledge").start()
     threading.Thread(target=_warm_up, args=(svc,), daemon=True, name="warm-up").start()
     try:
         svc.audio.start()

@@ -237,13 +237,31 @@ def pick_progressive(problems: Sequence[QuizProblem], length: int) -> list[QuizP
 
 
 # ---- answers kept away from the model ------------------------------------------------------------------------
+# Math notes are worksheets and quiz banks: with an answer in a prompt the model reads it out, or copies it as the
+# student's answer. For the math profile the ingestor strips a whole file's text before chunking and embedding it
+# (strip_document_answers), so the store never holds one; strip_chunk_answers is the safety net at prompt time.
 
-_ANSWER_TAIL = re.compile(r"[(\[]?\s*\b(?:answers?|ans|solutions?|respuestas?)\b\s*[:=].*$", re.I)
+_ANSWER_WORD = r"(?:answers?|ans|solutions?|soluci[oó]n(?:es)?|respuestas?)"
+_ANSWER_TAIL = re.compile(rf"[(\[]?\s*\b{_ANSWER_WORD}\b\s*[:=].*$", re.I)
+# "Answer: x = 6", "Answers: 6, 8, 7", "Solución 3: x = 2", "**Respuesta:** x = 6".
+_ANSWER_ROW = re.compile(rf"^\s*[-*•>]*\s*{_ANSWER_WORD}\s*(?:#?\s*\d{{1,3}}\s*)?[:=]\s*\S", re.I)
+# "Answer:" or "Solución" on a line of its own: the answer, or a worked solution, is on the lines below it.
+_ANSWER_HEAD = re.compile(r"^\s*[-*•>]*\s*(?:answer|ans|solution|soluci[oó]n|respuesta)\s*[:=]?\s*$", re.I)
+# A section of answers that runs to a heading over something else: "Answer key", "Answers:", "Respuestas".
+_KEY_LINE = re.compile(
+    r"^\W*(?:(?:the\s+)?answer\s+key|answers|solutions|soluciones|respuestas|clave(?:\s+de\s+respuestas)?|"
+    r"hoja\s+de\s+respuestas)\W*$",
+    re.I,
+)
+# A heading named after answers: "## Answer key", "## Solución"; "## Answers to part A" only when answers follow.
+_KEY_TITLE = re.compile(rf"^(?:the\s+)?(?:{_ANSWER_WORD}|answer\s+key|clave(?:\s+de\s+respuestas)?)\W*$", re.I)
+_KEY_TITLE_START = re.compile(rf"^(?:the\s+)?(?:{_ANSWER_WORD}|answer\s+key|clave\s+de\s+respuestas)\b", re.I)
+_LEVEL_LINE = re.compile(r"^\s*(?:level|nivel|difficulty|dificultad)\s*[:\-]?\s*\d+\b.{0,60}$", re.I)
+_ANSWER_COLUMN = re.compile(rf"\b{_ANSWER_WORD}\b", re.I)
+_TABLE_SEPARATOR = re.compile(r"^\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*\|?$")
 # The ingestor writes a CSV row as "Row 3: problem is 3/4 - 1/2, answer is 1/4, topic is ..., level is 1."
 _CSV_ROW = re.compile(r"^\s*Row\s+\d+\s*:")
-_CSV_ANSWER = re.compile(
-    r"(?:,\s*)?\b(?:\w+[ _])?(?:answer|solution|respuesta)s?\s+is\s+.*?(?=,\s|\.\s|\.?\s*$)", re.I | re.M
-)
+_CSV_ANSWER = re.compile(rf"(?:,\s*)?\b(?:\w+[ _])?{_ANSWER_WORD}\s+is\s+.*?(?=,\s|\.\s|\.?\s*$)", re.I | re.M)
 
 
 _VALUE = r"[-−]?\s*(?:\d+\s+\d+\s*/\s*\d+|\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?|\.\d+)"
@@ -254,6 +272,13 @@ _ANSWER_SHAPE = re.compile(
     r"(?:\s+[(\[]\s*[a-záéíóúñ]{2,}.*|\s+[-–—]\s+[a-záéíóúñ]{2,}.*|\s*:\s+[a-záéíóúñ]{2,}.*)?\.?$",
     re.I,
 )
+# "x = 6" or "6": never a problem. A bare fraction can be one ("12/16" under "Simplify each fraction").
+_LETTER_VALUE = re.compile(rf"^[a-z]\s*(?:<=|>=|=|<|>|≤|≥)\s*{_VALUE}", re.I)
+_PLAIN_NUMBER = re.compile(r"^[-−]?\s*\d+(?:[.,]\d+)?\.?$")
+# "1) 6  2) 8  3) 7", "1. x = 6, 2. x = 8": a key written on one line.
+_ANSWER_LIST = re.compile(rf"^(?:\s*[(\[]?\d{{1,3}}\s*[.):\]]\s*{_SOLVED}\s*[,;]?)+\s*$", re.I)
+# "x + 9 = 15 → x = 6", "3/4 - 1/2 => 1/4": the value after an arrow.
+_ARROW_ANSWER = re.compile(rf"\s*(?:→|⇒|=>|->)\s*{_SOLVED}\s*\.?\s*$", re.I)
 _LINE_PREFIX = re.compile(
     r"^\s*(?:[-*•>]+\s*)?(?:(?:problem|question|exercise|problema|pregunta|ejercicio|q)\s*#?\s*)?"
     r"(?:\d{1,3}\s*[.):]\s*)?",
@@ -263,25 +288,180 @@ _LINE_PREFIX = re.compile(
 _SOLVED_IN_LINE = re.compile(r"(?:^|[\s,;:(→>])[a-z]\s*=\s*[-−]?\s*\d", re.I)
 
 
+def is_answer_column(name: str) -> bool:
+    """A CSV or table column of answers: "answer", "Correct answer", "solution_steps", "Respuesta", "Solución"."""
+    return bool(_ANSWER_COLUMN.search(re.sub(r"[_\-]+", " ", str(name or ""))))
+
+
 def _answer_body(line: str) -> str:
     return _LINE_PREFIX.sub("", _clean(line), count=1).strip()
+
+
+def _cells(row: str) -> list[str]:
+    return [cell.strip() for cell in row.strip().strip("|").split("|")]
+
+
+def _row(cells: list[str]) -> str:
+    return "| " + " | ".join(cells) + " |" if any(cells) else ""
 
 
 def _is_answer_line(line: str) -> bool:
     cleaned = _clean(line)
     if cleaned.startswith("|"):
-        cells = [cell.strip() for cell in cleaned.strip("|").split("|")]
+        cells = _cells(cleaned)
         values = [cell for cell in cells if cell and not cell.isdigit()]
         return bool(values) and all(_ANSWER_SHAPE.match(cell) for cell in values)
     body = _answer_body(line)
     return bool(body) and bool(_ANSWER_SHAPE.match(body))
 
 
+def _is_heading_line(cleaned: str) -> bool:
+    return bool(
+        _HEADING.match(cleaned) or _TOPIC.match(cleaned) or _LEVEL_LINE.match(cleaned) or _KEY_LINE.match(cleaned)
+    )
+
+
+def _key_heading(cleaned: str) -> bool:
+    """ "Answer key" / "Answers:" as a line, or a heading named only after answers ("## Solución")."""
+    heading = _HEADING.match(cleaned)
+    return bool(_KEY_LINE.match(cleaned) or (heading and _KEY_TITLE.match(heading.group("text"))))
+
+
+def _key_entry(line: str) -> bool:
+    """A line that belongs in an answer key: a bare or worked answer, a list of them, a table row of them."""
+    cleaned = _clean(line)
+    if cleaned.startswith("|"):
+        cells = [cell for cell in _cells(cleaned) if cell]
+        return any(map(is_answer_column, cells)) or (len(cells) >= 2 and bool(_ANSWER_SHAPE.match(cells[-1])))
+    return bool(
+        _is_answer_line(line)
+        or _ANSWER_LIST.match(cleaned)
+        or _ANSWER_ROW.match(cleaned)
+        or _SOLVED_IN_LINE.search(_answer_body(line))
+    )
+
+
+def _section_is_key(lines: Sequence[str], start: int) -> bool:
+    """Whether the lines from `start` to the next heading are answers only (at least one)."""
+    found = False
+    for line in lines[start:]:
+        cleaned = _clean(line)
+        if _is_heading_line(cleaned):
+            break
+        if not cleaned or _TABLE_SEPARATOR.match(cleaned):
+            continue
+        if not _key_entry(line):
+            return False
+        found = True
+    return found
+
+
+def _opens_key_section(cleaned: str, lines: Sequence[str], i: int) -> bool:
+    """A heading or a short title that starts with answers ("## Answers to part A", "Solutions for level 2") over a
+    section of answers only. Prose that starts the same way ("Solutions must be simplified.") is not one."""
+    heading = _HEADING.match(cleaned)
+    title = heading.group("text") if heading else cleaned
+    if not _KEY_TITLE_START.match(title) or (not heading and (len(title.split()) > 6 or title.endswith("."))):
+        return False
+    return _section_is_key(lines, i + 1)
+
+
+def _under_label(state: str, line: str, cleaned: str, heading: bool) -> tuple[str, bool]:
+    """(next state, whether the line goes) for a line under an "Answer:" / "Solución" label. States: "open" (just
+    seen), "block" (dropping its worked solution), "solved" (its final value went); "" ends the label."""
+    if not cleaned:
+        return ("" if state == "solved" else state), False
+    body = _answer_body(line)
+    solved = _is_answer_line(line) or bool(_SOLVED_IN_LINE.search(body))
+    math = solved or _looks_like_math(body)
+    if heading:
+        return "", False
+    if (
+        _NUMBERED.match(cleaned)
+        and not solved
+        and (state == "solved" or _mostly_math(body) or _PREFIXED.match(cleaned))
+    ):
+        return "", False  # the next problem; a numbered step with words ("1) Resta 3: 2x = 8") stays in the solution
+    if not math and state in ("open", "solved"):
+        return "", False  # "Answer: ____" left blank, or the text after the solution
+    return ("solved" if solved or state == "solved" else "block"), True
+
+
+def _strip_lines(lines: Sequence[str], *, in_key: bool = False) -> list[str | None]:
+    """Each line as kept (an answer cell or tail cut off), or None when it is an answer. See strip_answers."""
+    out: list[str | None] = []
+    label = ""
+    drop: list[int] | None = None  # the answer columns of the table being read; None outside a table
+    numbers: set[int] = set()  # the problem numbers seen so far: an answer key repeats them
+    for i, line in enumerate(lines):
+        cleaned = _clean(line)
+        heading = _is_heading_line(cleaned)
+        if in_key:
+            if not heading or _section_is_key(lines, i + 1):
+                out.append(None)
+                continue
+            in_key = False  # a heading over something other than answers ends the key
+        if label:
+            label, gone = _under_label(label, line, cleaned, heading)
+            if gone:
+                out.append(None)
+                continue
+        if _key_heading(cleaned):
+            in_key, label, drop = True, "", None
+            out.append(None)
+            continue
+        if _ANSWER_ROW.match(cleaned):
+            out.append(None)
+            continue
+        if _ANSWER_HEAD.match(cleaned):
+            label = "open"
+            out.append(None)
+            continue
+        if _opens_key_section(cleaned, lines, i):
+            in_key, drop = True, None
+            out.append(None)
+            continue
+        numbered = _NUMBERED.match(cleaned)
+        if numbered:
+            number, body = int(numbered.group("n")), _answer_body(line)
+            bare = _is_answer_line(line) and (bool(_LETTER_VALUE.match(body) or _PLAIN_NUMBER.match(body)))
+            # A number seen before on a problem: "1. 5/6" or "1. 15 - 9 = 6, so x = 6" there is problem 1's answer.
+            again = number in numbers and (_is_answer_line(line) or bool(_SOLVED_IN_LINE.search(body)))
+            if bare or again:
+                out.append(None)
+                continue
+            if _looks_like_math(body):
+                numbers.add(number)
+        if cleaned.startswith("|"):
+            cells = _cells(cleaned)
+            if drop is None:
+                drop = [j for j, cell in enumerate(cells) if is_answer_column(cell)]  # the header row
+            if drop:
+                line = _row([cell for j, cell in enumerate(cells) if j not in drop])
+            elif not _TABLE_SEPARATOR.match(cleaned):
+                filled = [j for j, cell in enumerate(cells) if cell]
+                # "| x + 9 = 15 | x = 6 |" under a header that does not say "answer": the value goes.
+                if (
+                    len(filled) >= 2
+                    and _ANSWER_SHAPE.match(cells[filled[-1]])
+                    and any(_looks_like_math(cells[j]) and not _ANSWER_SHAPE.match(cells[j]) for j in filled[:-1])
+                ):
+                    cells[filled[-1]] = ""
+                    line = _row(cells)
+        else:
+            drop = None
+        if _CSV_ROW.match(line):
+            line = _CSV_ANSWER.sub("", line)
+        line = _ARROW_ANSWER.sub("", _ANSWER_TAIL.sub("", line)).rstrip()
+        out.append(None if cleaned and not line.strip() else line)
+    return out
+
+
 def _opens_on_answers(text: str, *, keyed: bool) -> bool:
     """Whether a chunk starts inside an answer key: its first line is a bare answer ("7. x = 14"), or, for a source
     known to have an answer key, a numbered line that ends solved ("8. 10 - 3x = 4, so x = 2")."""
     first = next((line for line in text.splitlines() if _clean(line)), "")
-    if not first or _HEADING.match(_clean(first)) or _ANSWER_KEY.match(_clean(first)) or _CSV_ROW.match(first):
+    if not first or _HEADING.match(_clean(first)) or _KEY_LINE.match(_clean(first)) or _CSV_ROW.match(first):
         return False
     if _is_answer_line(first):
         return True
@@ -289,7 +469,7 @@ def _opens_on_answers(text: str, *, keyed: bool) -> bool:
 
 
 def _has_answer_key(text: str) -> bool:
-    return any(_ANSWER_KEY.match(_clean(line)) for line in text.splitlines())
+    return any(_key_heading(_clean(line)) for line in text.splitlines())
 
 
 def strip_chunk_answers(chunks: Sequence[tuple[str, str]]) -> list[str]:
@@ -301,37 +481,39 @@ def strip_chunk_answers(chunks: Sequence[tuple[str, str]]) -> list[str]:
     return [strip_answers(text, in_key=_opens_on_answers(text, keyed=source in keyed)) for source, text in chunks]
 
 
+def chunks_with_answers(chunks: Sequence[tuple[str, str]]) -> list[bool]:
+    """Per (source, text) chunk: whether it still holds an answer, i.e. strip_chunk_answers takes something out."""
+
+    def lines(text: str) -> list[str]:
+        return [line.rstrip() for line in text.splitlines()]
+
+    return [lines(text) != lines(kept) for (_, text), kept in zip(chunks, strip_chunk_answers(chunks), strict=True)]
+
+
 def strip_answers(text: str, *, in_key: bool = False) -> str:
-    """The text without its answers: "Answer: x = 6" lines, "(answer: 6)", an answer-key block and a quiz-bank row's
-    "answer is ...". Retrieved notes go into every math prompt; with an answer in them the model reads it out or
-    copies it as the student's answer. `in_key`: the text starts inside an answer key (a later chunk of one)."""
-    out: list[str] = []
-    label_only = False  # an "Answer:" line with the answer on the next line
-    for line in text.splitlines():
-        cleaned = _clean(line)
-        if _ANSWER_KEY.match(cleaned):
-            in_key = True
-            continue
-        if in_key:
-            if not _HEADING.match(cleaned):
-                continue  # everything under "Answer key" is an answer
-            in_key = False
-        if label_only and cleaned:
-            label_only = False
-            if _is_answer_line(cleaned):
-                continue
-        if _ANSWER_LINE.match(cleaned):
-            continue
-        if _ANSWER_LABEL.match(cleaned):
-            label_only = True
-            continue
-        if _CSV_ROW.match(line):
-            line = _CSV_ANSWER.sub("", line)
-        line = _ANSWER_TAIL.sub("", line).rstrip()
-        if cleaned and not line.strip():
-            continue
-        out.append(line)
-    return "\n".join(out)
+    """The text without its answers: "Answer: x = 6" / "Respuesta: ..." / "Solución: ..." lines, "(answer: 6)",
+    "→ x = 6", a worked solution under an "Answer:" label, an answer-key section ("Answer key", "Answers",
+    "Respuestas", "## Solución") up to a heading over something else, numbered answers ("7. x = 14", or "1. 5/6"
+    once problem 1 was seen), a table's answer column and a quiz-bank row's "answer is ...". `in_key`: the text
+    starts inside an answer key (a later chunk of one)."""
+    return "\n".join(line for line in _strip_lines(text.splitlines(), in_key=in_key) if line is not None)
+
+
+def strip_document_answers(parts: Sequence[str]) -> list[str]:
+    """A whole document's text, in order (its pages or slides, or the one text of a .md file), without its answers,
+    for the ingestor to chunk: a key or a worked solution that runs over paragraphs, pages or slides goes all of it,
+    and a numbered answer counts as one when its problem came anywhere before. One stripped text per part."""
+    owners: list[int] = []
+    lines: list[str] = []
+    for n, part in enumerate(parts):
+        for line in part.splitlines():
+            owners.append(n)
+            lines.append(line)
+    out: list[list[str]] = [[] for _ in parts]
+    for n, line in zip(owners, _strip_lines(lines), strict=True):
+        if line is not None:
+            out[n].append(line)
+    return ["\n".join(kept) for kept in out]
 
 
 # ---- solving and inventing problems ---------------------------------------------------------------------------
