@@ -153,7 +153,7 @@ The built app (`SAR Whiteboard Assistant.exe`, or `….app/Contents/MacOS/SAR Wh
 | --- | --- |
 | `--no-browser` | Don't open the dashboard in the default browser |
 | `--port N` | Serve on port N (default `SAR_PORT`, else 5050) |
-| `--self-test` | Start on a free port with `SAR_VLM_BACKEND=mock`, `SAR_TTS_BACKEND=none`, `SAR_LISTEN_MODE=push` and a throw-away data folder (no camera, microphone or Ollama needed); check `/api/status`, `/dashboard`, `/`, static files, the Socket.IO handshake, UTF-8 mode (a build must have it on), imports, embeddings and Whisper assets; print `SELF-TEST OK` and exit 0, or the failures and exit 1, within 120 s |
+| `--self-test` | Start on a free port with `SAR_VLM_BACKEND=mock`, `SAR_TTS_BACKEND=none`, `SAR_LISTEN_MODE=push` and a throw-away data folder (no camera, microphone or Ollama needed); check `/api/status`, `/dashboard`, `/`, static files, the Socket.IO handshake, UTF-8 mode (a build must have it on), imports, embeddings, Whisper assets and quiz grading (sympy solves an equation); print `SELF-TEST OK` and exit 0, or the failures and exit 1, within 120 s |
 | `--version` | Print the version |
 
 `--self-test` is also the quickest way to check a teacher's install: run it from a terminal and send us
