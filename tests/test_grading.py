@@ -210,6 +210,31 @@ def test_solved_form() -> None:
     assert not grading.solved_form("3x + 5 = 20") and not grading.solved_form("hello")
 
 
+@pytest.mark.parametrize(
+    ("board", "solution"),
+    [
+        ("1/2 + 1/3 = 2/5", "5/6"),  # the student's own wrong result copied with the problem
+        ("1/2 + 1/3 = 3/6 + 2/6 = 5/6", "5/6"),
+        ("1/2 + 1/3\n5/6", "5/6"),
+        ("un medio más un tercio es igual a dos quintos", "5/6"),
+        ("12 ÷ 4 = 2", "3"),
+        ("2x + 3 = 11\nx = 5", "x = 4"),  # a wrong answer below the problem
+        ("2x + 3 = 11 ; 2x = 14", "x = 4"),  # a wrong step
+        ("x + y = 10 ; x - y = 4 ; x = 8", "x = 7 and y = 3"),
+        ("x^2 = 49 ; x = 7", "x = 7 or x = -7"),
+        ("x = 5 ; 2x + 3 = 11", "x = 4"),
+        ("3x + 5 = 20", "x = 5"),
+    ],
+)
+def test_board_solution_is_the_problems_whatever_is_copied_with_it(board: str, solution: str) -> None:
+    assert format_answers(grading.board_solution(board) or frozenset()) == solution
+
+
+def test_board_solution_of_a_board_with_no_problem_is_none() -> None:
+    for board in ("x = 5", "x = 5 or x = -3", "", None, "hello", "= 5/6"):
+        assert grading.board_solution(board) is None, board
+
+
 def test_format_answers() -> None:
     assert format_answers(parse_answers("x = -3 or x = 5")) == "x = 5 or x = -3"
     assert format_answers(parse_answers("y = 3, x = 7")) == "x = 7 and y = 3"

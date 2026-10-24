@@ -1348,11 +1348,12 @@ def _states(action: AvatarAction, solutions: grading.Answers | None, language: s
 
 def solutions_for(kind: str, task: Mapping[str, Any] | None, board: str | None) -> grading.Answers | None:
     """The solution a reply must never state: the quiz problem's, or in help the one of the problem the model copied
-    off the board (board_problem), solved in code. None when there is none (or the board line is an answer already)."""
+    off the board (board_problem), solved in code. That is the problem's even when the student's own result is copied
+    with it ("1/2 + 1/3 = 2/5": five sixths, never said). None when there is none (the board holds only an answer)."""
     if kind == "quiz":
         return expected_answers(task) or None
-    if kind == "help" and board and not grading.solved_form(board):
-        return grading.solve_text(board)
+    if kind == "help" and board:
+        return grading.board_solution(board)
     return None
 
 

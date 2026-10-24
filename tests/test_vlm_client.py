@@ -2051,6 +2051,47 @@ def test_help_reply_still_stating_the_solution_loses_that_sentence() -> None:
     assert action.spoken_text == "Try factoring the left side."
 
 
+@pytest.mark.usefixtures("no_mathspeak")
+@pytest.mark.parametrize(
+    ("language", "query", "reply", "kept"),
+    [
+        (
+            "en",
+            "Is this right?",
+            "Not quite. One half plus one third equals five sixths, not two fifths. Find a common denominator first.",
+            "Not quite. Find a common denominator first.",
+        ),
+        ("en", "Is this right?", "Not quite: 1/2 + 1/3 = 5/6. Find a common denominator.", "Find a common denominator."),
+        (
+            "es",
+            "¿Está bien?",
+            "Casi. Un medio más un tercio es igual a cinco sextos. Busca un denominador común.",
+            "Casi. Busca un denominador común.",
+        ),
+    ],
+)
+def test_help_reply_on_a_board_with_the_students_own_result_never_states_the_solution(
+    language: str, query: str, reply: str, kept: str
+) -> None:
+    c = _math_client()
+    leak = {**MATH_GOOD, "board_problem": "1/2 + 1/3 = 2/5", "spoken_text": reply}
+    with _posts(c, leak, leak) as post:
+        action = c.evaluate(query, JPEG, [], REGIONS, SIZE, language=language)
+    assert post.call_count == 2, "asked again once"
+    assert vc.RETRY_NOTES[language]["reveal"] in post.call_args.kwargs["json"]["messages"][1]["content"]
+    assert action.spoken_text == kept
+    assert not grading.states_solution(action.spoken_text, grading.parse_answers("5/6"), language)
+
+
+def test_help_reply_on_a_board_with_a_wrong_answer_below_never_states_the_solution() -> None:
+    c = _math_client()
+    leak = {**MATH_GOOD, "board_problem": "2x + 3 = 11\nx = 5", "spoken_text": "Not quite. You should get four."}
+    good = {**MATH_GOOD, "board_problem": "2x + 3 = 11\nx = 5", "spoken_text": "Check the subtraction step first."}
+    with _posts(c, leak, good) as post:
+        action = c.evaluate("Is this right?", JPEG, [], REGIONS, SIZE)
+    assert post.call_count == 2 and action.spoken_text == "Check the subtraction step first."
+
+
 def test_spanish_help_reply_stating_the_solution_is_removed() -> None:
     c = _math_client()
     leak = {

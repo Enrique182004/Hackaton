@@ -1011,6 +1011,28 @@ def solved_form(text: Any) -> bool:
     return bool(parse_answers(text)) and solve_text(text) is None
 
 
+def board_solution(text: Any) -> Answers | None:
+    """The solution of the problem a board starts with, whatever else is copied with it: the student's own result
+    ("1/2 + 1/3 = 2/5" -> 5/6, worked out from its left side) or steps and an answer below it ("2x + 3 = 11 ; x = 5"
+    -> x = 4, "x + y = 10 ; x - y = 4 ; x = 8" -> x = 7 and y = 3). Answers before it are skipped. None when the
+    board holds no problem ("x = 5") or none code can solve."""
+    parts: list[str] = []
+    for raw in _EQUATIONS.split(to_math(_INSTRUCTION.sub("", _plain(text).strip()))):
+        clause = raw.strip(" .?!")
+        if "=" in clause and not re.search(r"[a-z]", clause.replace("sqrt", "")):
+            clause = clause.split("=")[0].strip()  # arithmetic: the problem is the left side, whatever follows
+        elif not parts and solved_form(clause):
+            continue
+        if clause:
+            parts.append(clause)
+    # One equation, or a system of as many as it has letters: the first that solves is the problem.
+    for count in range(1, min(len(parts), MAX_LETTERS) + 1):
+        solved = solve_text(" ; ".join(parts[:count]))
+        if solved:
+            return solved
+    return None
+
+
 # ---- a reply that states the solution --------------------------------------------------------------------------
 
 _SENTENCES = re.compile(r"(?<=[.!?])\s+")
