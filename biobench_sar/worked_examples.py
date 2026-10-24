@@ -14,6 +14,8 @@ import unicodedata
 from fractions import Fraction
 from math import gcd, lcm
 
+# mathspeak reads bottoms up to 20 as words ("seventeen twelfths"); above that it says "five over thirty".
+MAX_BOTTOM = 20
 KINDS = (
     "concept",
     "add",
@@ -79,7 +81,8 @@ def _sum_to(raw_top: int, bottom: int) -> str:
 
 
 def _concept(rng: random.Random, es: bool) -> str:
-    top, bottom = rng.choice([(1, 2), (3, 4), (2, 3), (3, 8), (5, 6), (2, 5), (1, 4)])
+    # Never one slice: Spanish would say "tomas uno" for a feminine "rebanada".
+    top, bottom = rng.choice([(3, 4), (2, 3), (3, 8), (5, 6), (2, 5), (3, 5), (5, 8)])
     if es:
         return (
             f"Por ejemplo, partes una pizza en {bottom} rebanadas iguales y tomas {top}: eso es {top}/{bottom}. "
@@ -146,7 +149,10 @@ def _subtract(rng: random.Random, es: bool) -> str:
 
 
 def _multiply(rng: random.Random, es: bool) -> str:
-    b, d = rng.randint(2, 6), rng.randint(2, 6)
+    while True:  # a product bottom mathspeak reads as a word ("twentieths", not "over thirty")
+        b, d = rng.randint(2, 6), rng.randint(2, 6)
+        if b * d <= MAX_BOTTOM:
+            break
     a, c = rng.randint(1, b - 1), rng.randint(1, d - 1)
     if es:
         return (
@@ -160,9 +166,9 @@ def _multiply(rng: random.Random, es: bool) -> str:
 
 
 def _divide(rng: random.Random, es: bool) -> str:
-    while True:  # not "1/2 ÷ 1/2"
-        b, d = rng.randint(2, 5), rng.randint(2, 5)
-        a, c = rng.randint(1, b - 1), rng.randint(1, d - 1)
+    while True:  # not "1/2 ÷ 1/2", and the flipped fraction is not "4 over 1"
+        b, d = rng.randint(2, 5), rng.randint(3, 5)
+        a, c = rng.randint(1, b - 1), rng.randint(2, d - 1)
         if Fraction(a, b) != Fraction(c, d):
             break
     if es:
@@ -176,17 +182,17 @@ def _divide(rng: random.Random, es: bool) -> str:
     )
 
 
-def _reduced_pair(rng: random.Random) -> tuple[int, int]:
+def _scaled_pair(rng: random.Random) -> tuple[int, int, int]:
+    """A fraction in lowest terms and a factor k that keeps the scaled bottom within MAX_BOTTOM."""
     while True:
-        b = rng.randint(2, 6)
+        b, k = rng.randint(2, 6), rng.randint(2, 4)
         a = rng.randint(1, b - 1)
-        if gcd(a, b) == 1:
-            return a, b
+        if gcd(a, b) == 1 and b * k <= MAX_BOTTOM:
+            return a, b, k
 
 
 def _equivalent(rng: random.Random, es: bool) -> str:
-    a, b = _reduced_pair(rng)
-    k = rng.randint(2, 4)
+    a, b, k = _scaled_pair(rng)
     if es:
         return (
             f"Por ejemplo, empezamos con {a}/{b}. Multiplicamos arriba y abajo por el mismo número, {k}: "
@@ -201,8 +207,7 @@ def _equivalent(rng: random.Random, es: bool) -> str:
 
 
 def _simplify(rng: random.Random, es: bool) -> str:
-    a, b = _reduced_pair(rng)
-    k = rng.randint(2, 4)
+    a, b, k = _scaled_pair(rng)
     top, bottom = a * k, b * k
     if es:
         return (

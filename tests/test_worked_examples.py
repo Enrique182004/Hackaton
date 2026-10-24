@@ -151,3 +151,17 @@ def test_examples_stay_middle_school_easy() -> None:
         for seed in range(40):
             numbers = [int(n) for n in re.findall(r"\d+", worked_example(kind, "en", random.Random(seed)))]
             assert max(numbers) <= 60, (kind, seed, numbers)
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+@pytest.mark.parametrize("kind", KINDS)
+def test_the_voice_reads_every_fraction_as_words(kind: str, language: str) -> None:
+    # "five over thirty" or "cuatro sobre uno" sounds like a robot reading notation, not a tutor.
+    from biobench_sar.llm.mathspeak import to_speech
+    from biobench_sar.llm.mathspeak_es import to_speech_es
+
+    speak, over = (to_speech_es, " sobre ") if language == "es" else (to_speech, " over ")
+    for seed in range(40):
+        text = worked_example(kind, language, random.Random(seed))
+        assert all(2 <= int(b) <= 20 for b in re.findall(r"\d+/(\d+)", text)), text
+        assert over not in speak(text), speak(text)

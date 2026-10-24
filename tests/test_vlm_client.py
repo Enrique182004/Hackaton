@@ -442,7 +442,7 @@ def test_learn_offer_idea_with_numbers_is_replaced() -> None:
     task = {"kind": "learn", "topic": "adding fractions", "stage": "offer"}
     spoken = vc.apply_task_rules(model, "help", task).spoken_text
     assert "is how you add fractions" not in spoken
-    assert spoken.startswith("Here is how adding fractions works. For example, ")
+    assert spoken.startswith("Let's look at adding fractions. For example, ")
 
 
 def test_spanish_learn_offer_gets_a_spanish_worked_example() -> None:
@@ -637,7 +637,7 @@ def test_apply_task_rules_learn() -> None:
     assert vc.apply_task_rules(AvatarAction("...", "idle", 1, 2), "help", PLAIN_OFFER).spoken_text == OFFER_QUESTION
     # No idea from the model on a topic with a worked example: code still teaches it.
     blank = vc.apply_task_rules(AvatarAction("...", "idle", 1, 2), "help", LEARN_OFFER).spoken_text
-    assert blank.startswith("Here is how solving fractions works. For example, ") and blank.endswith(OFFER_QUESTION)
+    assert blank.startswith("Let's look at solving fractions. For example, ") and blank.endswith(OFFER_QUESTION)
     example = AvatarAction("Try one half plus one fourth.", "pointing", 1, 2)
     learn_example = {**LEARN_OFFER, "stage": "example"}
     assert vc.apply_task_rules(example, "help", learn_example) == AvatarAction(example.spoken_text, "idle", 1, 2)
