@@ -48,7 +48,7 @@ cat <<'MSG'
 
 Setup complete. Next:
   .venv/bin/python scripts/hardware_check.py
-  SAR_VLM_BACKEND=mock .venv/bin/python -m biobench_sar.app     # no model needed
-  .venv/bin/python -m biobench_sar.app                           # real VLM via Ollama
-Open http://127.0.0.1:5000/ fullscreen on the projector, /precharge on your laptop.
+  SAR_VLM_BACKEND=mock .venv/bin/python -m biobench_sar         # no model needed
+  .venv/bin/python -m biobench_sar                               # real VLM via Ollama
+Open http://127.0.0.1:5050/ fullscreen on the projector, http://127.0.0.1:5050/dashboard on your laptop.
 MSG

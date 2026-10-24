@@ -14,7 +14,7 @@ procedures for Laguna de Bustillos (Leptosol / Feozem runoff, Cuauhtémoc, Chihu
 
 ```bash
 bash scripts/setup_mac.sh --pull-model   # brew deps, Python 3.12 venv, requirements, qwen2.5vl:3b (~3.2 GB)
-SAR_PORT=5050 .venv/bin/python -m biobench_sar.app
+.venv/bin/python -m biobench_sar
 ```
 
 Windows: run `scripts/setup_windows.ps1` in PowerShell.
@@ -26,7 +26,8 @@ Then open:
 | Projector | `http://localhost:5050/` | Fullscreen (`F`) on the projector. Pure black = invisible on the board. |
 | Operator dashboard | `http://localhost:5050/dashboard` | Your laptop. |
 
-Port 5000 is taken by AirPlay on macOS, hence `SAR_PORT=5050`. Grant **Camera** and **Microphone** access
+The bundled scenario documents are loaded into the knowledge base on first run (`SAR_SEED_KNOWLEDGE=0`
+to skip). The default port is 5050 because macOS AirPlay uses 5000. Grant **Camera** and **Microphone** access
 to the terminal that runs the server (System Settings → Privacy & Security), then restart it.
 
 Check the hardware any time with `python scripts/hardware_check.py`.
@@ -62,7 +63,8 @@ Everything is an environment variable (see `biobench_sar/config.py`). The ones y
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SAR_PORT` | `5000` | Server port (use 5050 on macOS) |
+| `SAR_PORT` | `5050` | Server port |
+| `SAR_SEED_KNOWLEDGE` | `1` | Load `biobench_sar/knowledge/` into an empty knowledge base at startup |
 | `SAR_CAMERA_INDEX` | `0` | Which camera |
 | `SAR_PROJECTOR_WIDTH` / `_HEIGHT` | `1920` / `1080` | Projector resolution |
 | `SAR_VLM_BACKEND` | `ollama` | `ollama`, `openai` (any compatible API) or `mock` (no model) |
@@ -79,7 +81,7 @@ Everything is an environment variable (see `biobench_sar/config.py`). The ones y
 uv pip install --python .venv/bin/python -r requirements-dev.txt
 .venv/bin/python -m pytest -q        # unit tests, no hardware or network needed
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
-SAR_VLM_BACKEND=mock SAR_TTS_BACKEND=none SAR_PORT=5050 .venv/bin/python -m biobench_sar.app   # UI without a model
+SAR_VLM_BACKEND=mock SAR_TTS_BACKEND=none .venv/bin/python -m biobench_sar   # UI without a model
 ```
 
 CI runs lint and tests on every pull request. Every change goes through its own branch and PR — see

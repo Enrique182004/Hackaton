@@ -44,7 +44,11 @@ class VectorStore:
             if self._st_model is None:
                 from sentence_transformers import SentenceTransformer
 
-                self._st_model = SentenceTransformer(self._embed_model)
+                try:
+                    # Cached copy first: venues are often offline, and the hub check adds seconds per start.
+                    self._st_model = SentenceTransformer(self._embed_model, local_files_only=True)
+                except Exception:
+                    self._st_model = SentenceTransformer(self._embed_model)
             model = self._st_model
         return model.encode(texts, normalize_embeddings=True).tolist()
 

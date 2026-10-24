@@ -73,7 +73,9 @@ class Settings:
     ink_c: int = field(default_factory=lambda: _env_ink_c("SAR_INK_C", 15))
     ink_max_regions: int = field(default_factory=lambda: _env_pos_int("SAR_INK_MAX_REGIONS", 10))
     host: str = field(default_factory=lambda: os.environ.get("SAR_HOST", "127.0.0.1"))
-    port: int = field(default_factory=lambda: _env_int("SAR_PORT", 5000))
+    # 5050, not Flask's 5000: macOS AirPlay Receiver listens on 5000.
+    port: int = field(default_factory=lambda: _env_int("SAR_PORT", 5050))
+    seed_knowledge: bool = field(default_factory=lambda: os.environ.get("SAR_SEED_KNOWLEDGE", "1") != "0")
 
     @property
     def ink_kwargs(self) -> dict[str, int]:

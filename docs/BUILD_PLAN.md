@@ -9,7 +9,7 @@ so anyone can pick up one area without touching the rest.
 
 Shared files (change only via PR that updates this doc): `biobench_sar/config.py`, `biobench_sar/schemas.py`.
 
-Run everything from the repo root: `python -m biobench_sar.app`, `pytest`.
+Run everything from the repo root: `python -m biobench_sar`, `pytest`.
 
 ---
 
@@ -26,7 +26,7 @@ Run everything from the repo root: `python -m biobench_sar.app`, `pytest`.
 
 ## Phase 2 — Integrate
 1. All unit tests green: `pytest`.
-2. `python -m biobench_sar.app` with `SAR_VLM_BACKEND=mock` — UI loads, typed query moves the avatar.
+2. `python -m biobench_sar` with `SAR_VLM_BACKEND=mock` — UI loads, typed query moves the avatar.
 3. Upload seed docs on `/precharge`, confirm the RAG count grows and queries retrieve them.
 4. Switch to a real VLM (`ollama pull qwen2.5vl:3b`, `SAR_VLM_BACKEND=ollama`).
 

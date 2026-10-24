@@ -53,7 +53,7 @@ Write-Host @"
 
 Setup complete. Next:
   .\.venv\Scripts\python.exe scripts\hardware_check.py
-  `$env:SAR_VLM_BACKEND='mock'; .\.venv\Scripts\python.exe -m biobench_sar.app   # no model needed
-  .\.venv\Scripts\python.exe -m biobench_sar.app                                  # real VLM via Ollama
-Open http://127.0.0.1:5000/ fullscreen (F11) on the projector, /precharge on your laptop.
+  `$env:SAR_VLM_BACKEND='mock'; .\.venv\Scripts\python.exe -m biobench_sar       # no model needed
+  .\.venv\Scripts\python.exe -m biobench_sar                                      # real VLM via Ollama
+Open http://127.0.0.1:5050/ fullscreen (F) on the projector, http://127.0.0.1:5050/dashboard on your laptop.
 "@

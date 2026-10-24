@@ -17,7 +17,7 @@ from flask_socketio import SocketIO
 from werkzeug.utils import secure_filename
 
 from biobench_sar.assistant import Assistant
-from biobench_sar.config import Settings
+from biobench_sar.config import PACKAGE_DIR, Settings
 
 log = logging.getLogger("biobench_sar.app")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
@@ -349,6 +349,36 @@ def _load_initial_calibration(settings: Settings) -> bool:
         return False
 
 
+def seed_knowledge(store: Any, directory: Path) -> int:
+    """Ingest the bundled scenario documents into an empty store so a fresh install can answer right away."""
+    from biobench_sar.rag.ingestor import SUPPORTED_EXTENSIONS, ingest_file
+
+    if store.count() > 0 or not directory.is_dir():
+        return 0
+    added = 0
+    for path in sorted(directory.iterdir()):
+        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            continue
+        try:
+            added += store.add_chunks(ingest_file(path))
+        except Exception:
+            log.exception("could not seed %s", path.name)
+    log.info("seeded knowledge base with %d chunks from %s", added, directory)
+    return added
+
+
+def _port_free(host: str, port: int) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+        except OSError:
+            return False
+    return True
+
+
 def _warm_up(svc: Services) -> None:
     """Load the VLM and Whisper in the background so the first question isn't the slow one."""
     import numpy as np
@@ -385,22 +415,33 @@ def _request_camera_access(camera_index: int) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    for noisy in ("httpx", "httpx2", "httpcore", "sentence_transformers", "werkzeug", "urllib3"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     settings = Settings()
+    if not _port_free(settings.host, settings.port):
+        log.error("Port %d is already in use. Stop the other server or set SAR_PORT to a free port.", settings.port)
+        raise SystemExit(1)
     app, socketio = create_app(settings)
     svc: Services = app.config["SAR_SERVICES"]
     _request_camera_access(settings.camera_index)
     svc.vision.start()
+    if settings.seed_knowledge:
+        threading.Thread(
+            target=seed_knowledge, args=(svc.store, PACKAGE_DIR / "knowledge"), daemon=True, name="seed"
+        ).start()
     threading.Thread(target=_warm_up, args=(svc,), daemon=True, name="warm-up").start()
     try:
         svc.audio.start()
     except Exception:
         log.exception("audio failed to start; use typed queries")
+    base = f"http://{settings.host}:{settings.port}"
     log.info(
-        "Projector: http://%s:%d/   Dashboard: http://%s:%d/dashboard",
-        settings.host,
-        settings.port,
-        settings.host,
-        settings.port,
+        "\n\n  SAR Whiteboard Assistant\n  Projector  %s/          (fullscreen on the projector, press F)\n"
+        "  Dashboard  %s/dashboard\n  Model      %s · %s\n",
+        base,
+        base,
+        settings.vlm_backend,
+        settings.vlm_model,
     )
     try:
         socketio.run(app, host=settings.host, port=settings.port, allow_unsafe_werkzeug=True)
