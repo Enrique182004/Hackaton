@@ -3,7 +3,7 @@
 *In English: [HARDWARE_DAY.md](HARDWARE_DAY.md).*
 
 Esta guía recorre, en orden, la primera sesión con el equipo del salón: una cámara web **Logitech C930e** y
-un proyector **Epson WXGA 3LCD** sobre un carrito, con la lente a la altura del centro del pizarrón. Cada
+un proyector **Epson WXGA 3LCD** sobre un carrito frente a un pizarrón de **1.40 m × 1.11 m**. Cada
 paso dice qué debes ver. Si no lo ves, aplica la solución de ese paso antes de seguir.
 
 Calcula unos 45 minutos y haz la parte A un día antes.
@@ -39,15 +39,26 @@ Calcula unos 45 minutos y haz la parte A un día antes.
 
 ## B. Preparar el salón
 
-7. **Proyector en el carrito**, con la lente a la altura del centro del pizarrón y de frente (sin
-   inclinarlo). En el menú del proyector: aspecto **Normal/Nativo**, **corrección trapezoidal (keystone) en
-   0**, **Quick Corner desactivado**, **iris automático desactivado** y modo de luz **ECO**. Conéctalo a la
-   laptop como **pantalla extendida** a **1280 × 800**.
-   ✅ La configuración de pantallas de la laptop muestra una segunda pantalla de 1280 × 800.
-8. **La cámara web arriba de la lente.** Pon la C930e en un tripié alto, a unas **0.7 veces el ancho de la
-   imagen** del pizarrón y al menos **0.53 veces el ancho de la imagen por encima de la lente**, inclinada
-   hacia abajo para que vea toda la imagen proyectada. Para una imagen de 1.5 m: a 1.05 m del pizarrón y al
-   menos 0.8 m arriba de la lente. Tabla para otros tamaños:
+7. **Proyector en el carrito**, de frente al pizarrón y nivelado. En el menú del proyector: aspecto
+   **Normal/Nativo**, **corrección trapezoidal (keystone) en 0**, **Quick Corner desactivado**, **iris
+   automático desactivado** y modo de luz **ECO**. Conéctalo a la laptop como **pantalla extendida** a
+   **1280 × 800**. Para ver la imagen completa, abre `http://127.0.0.1:5050/calibration.png` en la pantalla
+   del proyector, en pantalla completa (F11; en una Mac, Ctrl+Cmd+F).
+   Nuestro pizarrón mide **1.40 m × 1.11 m**: ajusta el zoom para que la imagen mida unos **1.35 m de ancho**
+   (0.84 m de alto), con unos 13 cm de pizarrón libre arriba y abajo. Luego sube o baja el carrito hasta que
+   la imagen quede centrada. En la mayoría de los proyectores Epson la imagen sale hacia arriba desde la
+   lente, así que la lente queda a unos **20 cm arriba del borde de abajo del pizarrón**, no a media altura.
+   Si el carrito no baja tanto, inclina el frente del proyector unos 10° hacia abajo con su pata (el keystone
+   se queda en 0: la calibración corrige el pequeño trapecio).
+   ✅ La configuración de pantallas de la laptop muestra una segunda pantalla de 1280 × 800, y la imagen cabe
+   en el pizarrón.
+8. **La cámara web**, centrada, a **0.95 m del pizarrón**. Su altura depende de dónde quedó la lente:
+   - Lente cerca de la parte de abajo de la imagen (proyector nivelado): cámara unos **10 cm abajo del borde
+     de abajo del pizarrón**, en un tripié bajo, inclinada hacia arriba para que vea toda la imagen.
+   - Lente a media altura (proyector inclinado): cámara al menos **0.75 m arriba de la lente**, en un tripié
+     alto, inclinada hacia abajo.
+
+   Nunca la pongas justo al lado de la lente: su reflejo caería en medio del pizarrón. Detalles:
    [HARDWARE_SETUP.md, sección 0](HARDWARE_SETUP.md#0-this-classrooms-kit-logitech-c930e--epson-wxga-3lcd)
    (en inglés). Conéctala **directo** a la laptop, sin hub. En la app de cámara de Logitech: **bloquea el
    enfoque**, **apaga RightLight** y pon el **antiparpadeo en 60 Hz**. Abre la tapa de privacidad.
@@ -97,8 +108,9 @@ Calcula unos 45 minutos y haz la parte A un día antes.
       ve toda la imagen o hay demasiada luz en el salón. Corrígelo y vuelve a presionar el botón.
 13. **Reflejos.** La lista del Pizarrón no muestra ningún aviso de reflejo.
     ✅ «No hay reflejos en el pizarrón».
-    - Aviso de reflejo → la lente del proyector se refleja en la cámara. **Sube la cámara web más arriba de
-      la lente**, compruébalo con la prueba de un ojo de
+    - Aviso de reflejo → la lente del proyector se refleja en la cámara. Aleja más la cámara web de la lente
+      hacia arriba o hacia abajo: **más abajo** si está debajo del pizarrón, **más arriba** si está encima de
+      la lente. Compruébalo con la prueba de un ojo de
       [HARDWARE_SETUP.md, sección 1](HARDWARE_SETUP.md#1-projector-and-webcam-placement) (en inglés: párate
       donde va la cámara y mira el pizarrón con un solo ojo a su altura; si ves el reflejo de la lente, la
       cámara también lo ve) y vuelve a alinear.

@@ -46,9 +46,36 @@ Displays*): a second display at 1280 × 800.
   **Auto Iris / dynamic contrast off** (brightness pumping confuses the camera); power or light mode
   **ECO** (less glare). Focus until the calibration checkerboard is crisp.
 - 3LCD has no colour wheel, so there is no rainbow flicker in the camera picture.
-- **Our setup: projector on a cart, lens level with the middle of the board, square-on.** No keystone is
-  needed (leave it at 0). Because the lens is in the middle, its reflection lands in the **middle of the
-  image** for any camera near the projector. Put the webcam **above** the lens instead (details below).
+- **Our setup: projector on a cart, square-on to the board.** Leave keystone at 0. Most Epson table
+  projectors throw the picture *upward* from the lens (the lens sits near the bottom edge of the picture), so
+  where the lens ends up decides where the webcam goes: see **This classroom's board** below. Never put the
+  webcam right beside the lens: its reflection then lands in the **middle of the image**.
+
+**This classroom's board: 1.40 m wide × 1.11 m tall.** The picture is 16:10, so the board's width limits it.
+
+1. **Picture size.** Zoom so the picture is about **1.35 m wide × 0.84 m tall**, centered on the board: its
+   side edges just inside the frame, and about **13 cm of board free above and below**. Write only inside
+   the picture: the assistant reads what the camera sees there. That puts the projector lens about
+   **1.75–2.15 m from the board**, and gives about 1 projector pixel and 1.2 camera pixels per millimetre.
+2. **Picture height.** Keep the projector level and raise or lower the cart until the picture is centered.
+   With the usual Epson lens offset (the lens about 1/11 of the picture height above its bottom edge), the
+   lens then sits about **20 cm above the board's bottom edge**. A level projector with its lens at mid-board
+   would put the top ≈ 20 cm *above* the board. If the cart can't go that low, keep it and tip the
+   projector's front down about **10°** with its foot instead: leave keystone at 0, the calibration absorbs
+   the slight trapezoid, and the lens then counts as level with the middle.
+3. **Webcam**, centered left-right, **0.95 m from the board**, at a height that depends on where the lens
+   ended up:
+
+   | Where the lens is | Webcam height | Aim | Where the reflection lands |
+   | --- | --- | --- | --- |
+   | Near the bottom of the picture (projector level, step 2) | about **10 cm below the board's bottom edge** (a short tripod) | tilted up ≈ 30° | ≥ 12 cm below the picture |
+   | Level with the middle (projector tipped down) | at least **0.75 m above the lens**, ≈ 1.3 m above the board's bottom edge (a tall stand) | tilted down ≈ 35° | ≥ 6 cm above the picture |
+
+   Both keep the whole picture in the camera's view (it spans about 33° of the camera's 52° up-down) and keep
+   the webcam out of the projector's light. The low webcam is simpler: no tall stand, and nothing to tip.
+   Check either one with the one-eye test (section 1) and the dashboard's glare check.
+
+For other boards, the general rule follows.
 
 **Where the webcam goes with the projector on a cart in the middle.** Mount the C930e on a tall tripod
 or light stand, about 0.7 × the image width from the board, and high enough above the lens that the
@@ -144,7 +171,7 @@ webcam low, puts the hotspot **in the middle** of the board.
 (`http://127.0.0.1:5050/calibration.png`, then F11) so the whole image is bright. Stand where the webcam
 will go and look at the board with one eye at the webcam's height. If you can see a bright reflection of
 the projector lens anywhere on the image, so will the camera: move the webcam further out on the lens's
-side until it is gone (with the projector on a cart in the middle, that means higher above the lens, see
+side until it is gone (with this kit's cart, further below the board or further above the lens, see
 section 0). The dashboard's glare check confirms it once the camera is running.
 
 Also:
@@ -254,9 +281,9 @@ The result is saved and reused the next time the server starts.
 
 To get rid of glare, in order of how much it helps:
 
-1. Move the webcam. With **this kit's cart** (lens level with the middle of the board), **raise the webcam
-   higher above the lens** (section 0 table). With a table or ceiling projector, move it further out on the
-   lens's side (section 1).
+1. Move the webcam further from the lens, up or down: with **this kit's cart** (section 0), **lower** if the
+   webcam sits below the board, **higher** if it sits above the lens. With a table or ceiling projector, move
+   it further out on the lens's side (section 1).
 2. Switch the projector to eco mode.
 3. Dim the room lights near the board.
 4. Use a matte board.
@@ -267,7 +294,7 @@ Calibrate again after moving the webcam (section 6).
 
 | What you see | Likely cause | What to do |
 | --- | --- | --- |
-| Bright white blob in the camera picture; writing there is ignored | Projector bulb reflecting into the camera (glare) | Projector on a cart in the middle (this kit): **raise the webcam higher above the lens** (section 0). Otherwise move it further out on the **same side as the projector lens** (section 1: lower than a table projector, higher than a ceiling one, or more than one image width sideways). Then eco mode, matte board, and calibrate again |
+| Bright white blob in the camera picture; writing there is ignored | Projector bulb reflecting into the camera (glare) | This kit's cart: move the webcam **further from the lens** up-down (section 0: lower if it is below the board, higher if it is above the lens). Otherwise move it further out on the **same side as the projector lens** (section 1: lower than a table projector, higher than a ceiling one, or more than one image width sideways). Then eco mode, matte board, and calibrate again |
 | "Checkerboard not detected" | Projector page not full screen; camera cannot see the whole board; glare over part of the checkerboard; someone in the way | Press `F` on the projector page, re-aim the camera, fix glare, step aside, try again |
 | Avatar points next to the drawing, not at it | Camera, projector or board moved since calibration; projector page not full screen | Run **Line up camera and projector** again with the projector page full screen (`F`) |
 | The glowing outline is around the wrong part of the board | Same as above: the outline uses the same line-up | Calibrate again |
