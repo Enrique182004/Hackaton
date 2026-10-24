@@ -49,7 +49,7 @@ export function initCamera() {
   for (const button of document.querySelectorAll(".seg button")) {
     button.addEventListener("click", () => {
       warped = button.dataset.view === "1";
-      for (const b of document.querySelectorAll(".seg button")) b.setAttribute("aria-selected", String(b === button));
+      for (const b of document.querySelectorAll(".seg button")) b.setAttribute("aria-pressed", String(b === button));
       $("ink-overlay").replaceChildren();
     });
   }

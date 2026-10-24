@@ -10,10 +10,28 @@ export function logEvent(name, data) {
   while (list.children.length > MAX_LINES) list.lastChild.remove();
 }
 
+const LABELS = {
+  vlm_model: "AI model",
+  vlm_backend: "AI model runs on",
+  vlm_base_url: "AI model address",
+  embed_model: "File search model",
+  rag_top_k: "File passages per answer",
+  whisper_model: "Speech-to-text model",
+  listen_mode: "Microphone mode",
+  wake_word: "Wake word",
+  tts_backend: "Voice",
+  tts_voice: "Voice name",
+  camera_index: "Camera number",
+  camera_size: "Camera picture size",
+  projector_size: "Projector size",
+  checkerboard: "Checkerboard squares",
+};
+
 export function renderConfig(config) {
   const dl = $("config");
   dl.replaceChildren();
   for (const [key, value] of Object.entries(config)) {
-    dl.append(el("dt", { textContent: key }), el("dd", { textContent: Array.isArray(value) ? value.join(" × ") : String(value) }));
+    const label = LABELS[key] || key.replaceAll("_", " ");
+    dl.append(el("dt", { textContent: label }), el("dd", { textContent: Array.isArray(value) ? value.join(" × ") : String(value) }));
   }
 }

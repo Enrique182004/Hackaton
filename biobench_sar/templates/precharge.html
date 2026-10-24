@@ -3,111 +3,135 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SAR Console · BioBench</title>
+  <title>Whiteboard Assistant</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   {# Never render-blocking: on a captive or offline venue network first paint must not wait on Google. #}
-  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" onload="this.onload=null;this.rel='stylesheet'">
-  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"></noscript>
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Caveat:wght@500;700&family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Caveat:wght@500;700&family=Fraunces:opsz,wght@9..144,500;9..144,700&display=swap"></noscript>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
 </head>
 <body data-projector-width="{{ projector_width }}" data-projector-height="{{ projector_height }}">
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark" aria-hidden="true"></span>
+  <div class="page">
+    <header class="masthead">
       <div>
-        <h1>BioBench <em>SAR</em></h1>
-        <p>Operator console · Acanthamoeba / Laguna de Bustillos</p>
+        <p class="kicker">Lab notebook</p>
+        <h1>Whiteboard Assistant</h1>
+        <p class="lede">Draw on the whiteboard, ask a question, and the assistant answers out loud and points at your drawing.</p>
       </div>
-    </div>
-    <div class="topbar-right">
-      <span class="chip" id="conn-chip" data-tone="warn"><i></i><span>connecting</span></span>
-      <span class="chip chip-state" id="state-chip" data-state="idle"><i></i><span>idle</span></span>
-      <span class="readout" title="Server uptime">up <b id="uptime">–</b></span>
-      <a class="btn btn-ghost" href="/" target="sar-projector" rel="noopener">Open projector ↗</a>
-    </div>
-  </header>
+      <a class="btn btn-quiet" href="/" target="sar-projector" rel="noopener">Open the board view</a>
+    </header>
 
-  <main class="grid">
-    <section class="panel span-8 reveal" style="--i:0" aria-labelledby="cam-h">
-      <header class="panel-head">
-        <h2 id="cam-h">Whiteboard</h2>
-        <div class="seg" role="tablist" aria-label="Camera view">
-          <button role="tab" aria-selected="true" data-view="1">Calibrated</button>
-          <button role="tab" aria-selected="false" data-view="0">Raw camera</button>
-        </div>
-        <label class="toggle"><input type="checkbox" id="ink-toggle" checked> ink regions</label>
-      </header>
-      <div class="viewport" id="viewport">
-        <img id="frame" alt="Live whiteboard camera view">
-        <svg id="ink-overlay" preserveAspectRatio="none" aria-hidden="true"></svg>
-        <div class="viewport-empty" id="frame-empty">
-          <strong>No camera signal</strong>
-          <span>Allow camera access for the terminal running the server, then restart it.</span>
-        </div>
+    <p class="status-line" id="status-line" data-state="idle" role="status" aria-live="polite">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span id="status-text">Connecting…</span>
+    </p>
+
+    <section class="step" aria-labelledby="step1-h">
+      <h2 id="step1-h"><span class="num" aria-hidden="true">1</span> Choose your study files</h2>
+      <p class="hint">The assistant answers using only the files you tick below. Add your notes, protocols or papers.</p>
+
+      <label class="drop" id="drop">
+        <input type="file" id="file-input" multiple accept=".pdf,.txt,.md,.csv,.docx,.pptx,.png,.jpg,.jpeg">
+        <span class="drop-title">Drag files here, or <u>choose files</u></span>
+        <span class="drop-sub">PDF, Word, PowerPoint, CSV, text, Markdown, or photos of notes</span>
+      </label>
+      <p class="note" id="upload-msg" role="status"></p>
+
+      <div class="files-head">
+        <p id="files-summary">No files yet.</p>
+        <button type="button" class="link-btn" id="use-all-btn" hidden>Use all files</button>
       </div>
-      <footer class="panel-foot readouts">
-        <span class="readout">fps <b id="fps">–</b></span>
-        <span class="readout">ink <b id="ink-count">–</b></span>
-        <span class="readout">last answer <b id="latency">–</b></span>
-      </footer>
+      <ul class="files" id="files"></ul>
     </section>
 
-    <section class="panel span-4 reveal" style="--i:1" aria-labelledby="sys-h">
-      <header class="panel-head"><h2 id="sys-h">System</h2></header>
-      <ul class="health" id="health"></ul>
-      <div class="calib">
-        <img src="/calibration.png" alt="Calibration checkerboard" class="calib-thumb">
+    <section class="step" aria-labelledby="step2-h">
+      <h2 id="step2-h"><span class="num" aria-hidden="true">2</span> Set up the board</h2>
+      <p class="hint">Point the camera and the projector at the whiteboard, then check the list.</p>
+
+      <div class="board-grid">
+        <figure class="camera">
+          <div class="viewport" id="viewport" data-live="0">
+            <img id="frame" alt="What the camera sees on the whiteboard">
+            <svg id="ink-overlay" preserveAspectRatio="none" aria-hidden="true"></svg>
+            <div class="viewport-empty">
+              <strong>No camera picture yet</strong>
+              <span>See “Camera” in the list to fix it.</span>
+            </div>
+          </div>
+          <figcaption>What the camera sees. Orange boxes are the drawings the assistant can point at.</figcaption>
+        </figure>
+
         <div>
-          <p class="muted">Projects a checkerboard, finds it in the camera and maps camera pixels to projector pixels.</p>
-          <button class="btn" id="calibrate-btn">Calibrate</button>
-          <p class="note" id="calib-msg" role="status"></p>
+          <ul class="checks" id="checks" aria-label="System checks"></ul>
+          <div class="calibrate">
+            <button type="button" class="btn" id="calibrate-btn">Line up camera and projector</button>
+            <p class="hint small">Shows a checkerboard on the board for a moment so the assistant knows where things are. Do this once after moving the camera or projector.</p>
+            <p class="note" id="calib-msg" role="status"></p>
+          </div>
         </div>
       </div>
     </section>
 
-    <section class="panel span-8 reveal" style="--i:2" aria-labelledby="ask-h">
-      <header class="panel-head"><h2 id="ask-h">Ask the assistant</h2></header>
+    <section class="step" aria-labelledby="step3-h">
+      <h2 id="step3-h"><span class="num" aria-hidden="true">3</span> Ask a question</h2>
+      <p class="hint">Type your question, or press <b>Talk</b> and speak. You can also press <kbd>Space</kbd> on the board view.</p>
+
       <form class="ask" id="ask-form">
-        <input id="ask-input" type="text" autocomplete="off" placeholder="e.g. Is my isolation flowchart missing a sterile step?" aria-label="Question">
+        <label class="sr-only" for="ask-input">Your question</label>
+        <input id="ask-input" type="text" autocomplete="off" placeholder="Is my isolation flowchart missing a sterile step?">
         <button class="btn" type="submit" id="ask-btn">Ask</button>
-        <button class="btn btn-mic" type="button" id="listen-btn" title="Push to talk (records a few seconds)">
-          <span class="mic-dot" aria-hidden="true"></span> Listen
+        <button class="btn btn-talk" type="button" id="listen-btn" data-live="0">
+          <span class="mic" aria-hidden="true"></span> Talk
         </button>
       </form>
       <p class="note" id="ask-msg" role="status"></p>
-      <ol class="timeline" id="timeline" aria-live="polite"></ol>
-      <p class="empty" id="timeline-empty">No questions yet. Ask one above or press Listen.</p>
+      <p class="examples" id="examples">
+        <span class="scribble">try:</span>
+        <button type="button" class="example">Is my flowchart missing a sterile step?</button>
+        <button type="button" class="example">Why does Leptosol runoff make the water cloudy?</button>
+        <button type="button" class="example">Where should I take my water samples?</button>
+      </p>
+
+      <ol class="entries" id="timeline" aria-live="polite"></ol>
+      <p class="empty" id="timeline-empty">Your questions and the assistant’s answers will be written here.</p>
     </section>
 
-    <section class="panel span-4 reveal" style="--i:3" aria-labelledby="kb-h">
-      <header class="panel-head">
-        <h2 id="kb-h">Knowledge</h2>
-        <span class="readout"><b id="kb-total">0</b> chunks</span>
-      </header>
-      <label class="drop" id="drop">
-        <input type="file" id="file-input" multiple accept=".pdf,.txt,.md,.csv,.docx,.pptx,.png,.jpg,.jpeg">
-        <strong>Drop study files</strong>
-        <span>PDF · TXT · MD · CSV · DOCX · PPTX · PNG · JPG</span>
-      </label>
-      <p class="note" id="upload-msg" role="status"></p>
-      <ul class="docs" id="docs"></ul>
-      <form class="search" id="search-form">
-        <input id="search-input" type="search" placeholder="Test retrieval…" aria-label="Test retrieval query">
-      </form>
-      <ol class="hits" id="hits"></ol>
-    </section>
+    <details class="step behind" id="behind">
+      <summary><h2><span class="num" aria-hidden="true">✎</span> Behind the scenes</h2><span class="hint">For checking and fixing things</span></summary>
 
-    <section class="panel span-12 reveal" style="--i:4" aria-labelledby="log-h">
-      <details>
-        <summary class="panel-head"><h2 id="log-h">Event log &amp; configuration</h2></summary>
-        <div class="split">
-          <ol class="log" id="log"></ol>
-          <dl class="config" id="config"></dl>
+      <div class="behind-grid">
+        <div>
+          <h3>Camera view</h3>
+          <div class="seg" role="group" aria-label="Camera view">
+            <button type="button" aria-pressed="true" data-view="1">Lined-up view</button>
+            <button type="button" aria-pressed="false" data-view="0">Raw camera</button>
+          </div>
+          <label class="check-line"><input type="checkbox" id="ink-toggle" checked> Show detected drawings</label>
+          <p class="readout">Drawings found: <b id="ink-count">–</b> · Camera speed: <b id="fps">–</b> · Last answer took <b id="latency">–</b></p>
+
+          <h3>Search your files</h3>
+          <p class="hint small">See what the assistant would read for a question.</p>
+          <form class="search" id="search-form">
+            <label class="sr-only" for="search-input">Search your files</label>
+            <input id="search-input" type="search" placeholder="e.g. autoclave">
+            <button class="btn btn-quiet" type="submit">Search</button>
+          </form>
+          <ol class="hits" id="hits"></ol>
         </div>
-      </details>
-    </section>
-  </main>
+        <div>
+          <h3>Settings</h3>
+          <dl class="config" id="config"></dl>
+          <h3>Activity log</h3>
+          <ol class="log" id="log"></ol>
+        </div>
+      </div>
+    </details>
+
+    <footer class="colophon">
+      <span id="conn-text">Not connected</span> · running for <span id="uptime">–</span>
+    </footer>
+  </div>
 
   <script src="{{ url_for('static', filename='js/vendor/socket.io.min.js') }}"></script>
   <script type="module" src="{{ url_for('static', filename='js/dashboard/main.js') }}"></script>
