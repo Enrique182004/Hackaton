@@ -118,6 +118,16 @@ def check_cameras(only: int | None, save_path: str | None, wanted: tuple[int, in
     return results
 
 
+def mic_status(rms: float, platform: str = sys.platform) -> tuple[str, str]:
+    """(status, what to do): PASS with sound, WARN when quiet (nobody talking), FAIL on digital zeros, which is
+    what a muted microphone, or a macOS app without microphone access, records."""
+    from biobench_sar.core.audio_trigger import DIGITAL_SILENCE_RMS, mic_silence_hint
+
+    if rms < DIGITAL_SILENCE_RMS:
+        return "FAIL", mic_silence_hint(platform)
+    return ("PASS" if rms > 0.001 else "WARN"), ""
+
+
 def check_mic() -> list[Result]:
     try:
         import numpy as np
@@ -140,8 +150,9 @@ def check_mic() -> list[Result]:
         data = b"".join(stream.read(1024, exception_on_overflow=False) for _ in range(int(rate * 2 / 1024)))
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         rms = float(np.sqrt(np.mean(samples**2)))
-        status = "PASS" if rms > 0.001 else "WARN"
-        return [("microphone", status, f"{len(inputs)} input(s) [{names}]; RMS {rms:.4f} over 2 s")]
+        status, hint = mic_status(rms)
+        detail = f"{len(inputs)} input(s) [{names}]; RMS {rms:.4f} over 2 s"
+        return [("microphone", status, f"{detail}: only digital silence, so {hint}" if hint else detail)]
     except Exception as exc:
         return [("microphone", "FAIL", str(exc))]
     finally:
