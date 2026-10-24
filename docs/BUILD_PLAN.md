@@ -160,18 +160,18 @@ Seed docs in `biobench_sar/knowledge/`. The assistant must:
 3. Explain how runoff from Leptosol vs. Feozem soils in Cuauhtémoc, Chihuahua affects turbidity/nutrients at sampling sites.
 4. Celebrate (`celebrating`) when the procedure is complete and correct.
 
-## Status (2026-10-23)
+## Status (2026-10-24)
 | Area | Status | Verified |
 | --- | --- | --- |
 | Shared contracts | ✅ done | `config.py`, `schemas.py` |
-| A Vision | ✅ built | 18 tests; synthetic warp → calibration within 3 px |
-| B RAG | ✅ built | 13 tests; seed docs ingest to 10 chunks, retrieval works |
-| C VLM | ✅ built | 13 tests; real `qwen2.5vl:3b` flagged the missing sterile step in ~26 s |
-| D Voice | ✅ built | 15 tests; macOS `say` plays |
-| E Frontend | ✅ built | projector page + `/precharge` render, live socket events, avatar moves |
-| F Server & ops | ✅ built | 12 tests; mock end-to-end query works in the browser |
-| Phase 2 integrate | ✅ mock + real VLM | full suite: 71 passed |
-| Phase 3 hardware | 🟡 partial | camera + mic blocked by macOS permissions; no projector connected yet |
+| A Vision | ✅ built + hardened | box-level ink segmentation (#14), stale-frame/atomic calibration/tunable thresholds (#22); threshold sweep in `scripts/tune_ink.py` |
+| B RAG | ✅ built + hardened | non-blocking status (#15), content-addressed ids, list/delete documents |
+| C VLM | ✅ built + tuned | ~2 s warm answers, cold first answer 22.5 s → 8 s (#16); missing-step → `error` 5/5 (#18) |
+| D Voice | ✅ built + hardened | wake self-trigger guard (#17), push-to-talk wins over wake loop, silence skip, offline TTS fallback (#20) |
+| E Frontend | ✅ built + polished | projector reconnect/offline handling (#21); operator dashboard `/dashboard` (#23) |
+| F Server & ops | ✅ built + polished | `Assistant` pipeline, new APIs, warm-up (#23, #24); CI tests + lint (#13, #25); scripts (#19) |
+| Phase 2 integrate | ✅ | full suite 188 passed; live loop verified in the browser with `qwen2.5vl:3b` |
+| Phase 3 hardware | 🟡 pending | camera + mic need macOS permissions; projector not yet connected |
 
 ## Open work — pick one up
 Each item is a GitHub issue labelled [`open-work`](https://github.com/Enrique182004/Hackaton/issues?q=is%3Aopen+label%3Aopen-work); assign yourself before starting. Each item is self-contained. Branch `feat/<item>`, keep to the listed files, add tests.
@@ -180,19 +180,19 @@ Each item is a GitHub issue labelled [`open-work`](https://github.com/Enrique182
    `python scripts/hardware_check.py`, confirm camera ≥ 30 FPS and mic RMS > 0. Record results here.
 2. [#3](https://github.com/Enrique182004/Hackaton/issues/3) **Hardware: projector calibration** (A) — connect projector as 2nd display, open `/` fullscreen on it,
    click *Calibrate* on `/precharge`, verify `/api/frame.jpg?warped=1` matches the board. Tune `SAR_CHECKER_*` if detection fails.
-3. [#4](https://github.com/Enrique182004/Hackaton/issues/4) **Ink segmentation per flowchart step** (A, `core/vision_loop.py`) — connected arrows currently merge a whole
+3. [#4](https://github.com/Enrique182004/Hackaton/issues/4) ✅ fixed in #14 — **Ink segmentation per flowchart step** (A, `core/vision_loop.py`) — connected arrows currently merge a whole
    flowchart into one region, so the avatar can't point at a single box. Split boxes from connectors
    (e.g. erode before contouring, or detect rectangles with `approxPolyDP`).
-4. [#5](https://github.com/Enrique182004/Hackaton/issues/5) **Prompt tuning** (C, `llm/vlm_client.py`) — when a step is missing the model answers `pointing`, not `error`;
+4. [#5](https://github.com/Enrique182004/Hackaton/issues/5) ✅ fixed in #18 — **Prompt tuning** (C, `llm/vlm_client.py`) — when a step is missing the model answers `pointing`, not `error`;
    make the system prompt / few-shot examples push `error` + target the gap between steps.
-5. [#6](https://github.com/Enrique182004/Hackaton/issues/6) **Latency** (C/F) — ~26 s per answer on an M4 Air with the 3B model. Try smaller image (downscale to 1024 px),
+5. [#6](https://github.com/Enrique182004/Hackaton/issues/6) ✅ fixed in #16 — **Latency** (C/F) — ~26 s per answer on an M4 Air with the 3B model. Try smaller image (downscale to 1024 px),
    `keep_alive` on Ollama, or an API backend (`SAR_VLM_BACKEND=openai`).
 6. [#7](https://github.com/Enrique182004/Hackaton/issues/7) **Wake-word mode on hardware** (D) — test `SAR_LISTEN_MODE=wake` with the real mic; tune chunk length.
 7. [#8](https://github.com/Enrique182004/Hackaton/issues/8) **Windows demo machine** (F) — run `scripts/setup_windows.ps1` end-to-end on Windows and fix anything that breaks.
 8. [#9](https://github.com/Enrique182004/Hackaton/issues/9) **Scenario test cases 1–4** (all) — run each case from the list above on the real board and record pass/fail.
-9. [#10](https://github.com/Enrique182004/Hackaton/issues/10) **Warm-up at startup** (D/F) — preload Whisper and the Ollama model in a background thread so the first
+9. [#10](https://github.com/Enrique182004/Hackaton/issues/10) ✅ fixed in #23 — **Warm-up at startup** (D/F) — preload Whisper and the Ollama model in a background thread so the first
    question isn't slow.
-10. [#11](https://github.com/Enrique182004/Hackaton/issues/11) **Wake-word self-trigger** (D) — pause the wake loop while the avatar is speaking, so its own voice can't
+10. [#11](https://github.com/Enrique182004/Hackaton/issues/11) ✅ fixed in #17 — **Wake-word self-trigger** (D) — pause the wake loop while the avatar is speaking, so its own voice can't
     re-trigger it.
-11. [#12](https://github.com/Enrique182004/Hackaton/issues/12) **Status poll during big uploads** (B/F) — `/api/status` waits on the store lock while embeddings run;
+11. [#12](https://github.com/Enrique182004/Hackaton/issues/12) ✅ fixed in #15 — **Status poll during big uploads** (B/F) — `/api/status` waits on the store lock while embeddings run;
     cache the chunk count.

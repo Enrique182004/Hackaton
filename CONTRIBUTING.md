@@ -7,6 +7,7 @@
 4. Using an AI agent? Open it in the repo root — it picks up `CLAUDE.md` / `AGENTS.md` automatically.
 
 ## Workflow
+- Before pushing: `.venv/bin/python -m pytest -q` and `.venv/bin/ruff check . && .venv/bin/ruff format --check .` (CI runs both).
 - One module per branch: `git checkout -b feat/vision-loop` (match the spec's file names).
 - Keep PRs to one module (e.g. `core/homography.py`) so they're easy to review.
 - Never commit `.env`, API keys, model weights or `chroma_db/` (already in `.gitignore`).

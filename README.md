@@ -1,19 +1,100 @@
 # Hackaton — SAR Whiteboard Assistant
 
-A Spatial Augmented Reality whiteboard assistant: a webcam and projector pointed at a whiteboard,
-with an animated 2D AI avatar that reads marker drawings and responds by voice and movement,
-grounded in a local RAG knowledge base.
+A Spatial Augmented Reality whiteboard assistant: a webcam and a projector point at a whiteboard, and an
+animated 2D avatar reads your marker drawings, answers by voice, and walks over to point at what it is
+talking about. Answers are grounded in a local knowledge base (RAG) of your study material.
 
-**Spec:** [docs/sar_whiteboard_assistant_prompt.md](docs/sar_whiteboard_assistant_prompt.md). This is the single source of truth for the build.
+Built for the Environmental Biology scenario: verifying *Acanthamoeba* isolation flowcharts and sterile
+procedures for Laguna de Bustillos (Leptosol / Feozem runoff, Cuauhtémoc, Chihuahua).
 
-## For agents
-Start with `AGENTS.md` / `CLAUDE.md`, then read the spec. Humans: see `CONTRIBUTING.md`. Build one module at a time.
+**Spec:** [docs/sar_whiteboard_assistant_prompt.md](docs/sar_whiteboard_assistant_prompt.md) ·
+**Plan, contracts and status:** [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md)
 
-## Files
-- `AGENTS.md`: entry point for any AI agent.
-- `CONTRIBUTING.md`: onboarding and workflow for collaborators.
-- `CLAUDE.md`: project focus, stack, rules, skill routing and gates.
-- `docs/sar_whiteboard_assistant_prompt.md`: full system spec.
-- `SETUP.md`: setup checklist to run before the event.
-- `.claudeignore`: keeps dependencies, builds, secrets and media out of Claude's context.
-- `start-headroom.command`: installs and starts the Headroom token-compression proxy.
+## Quick start (macOS)
+
+```bash
+bash scripts/setup_mac.sh --pull-model   # brew deps, Python 3.12 venv, requirements, qwen2.5vl:3b (~3.2 GB)
+SAR_PORT=5050 .venv/bin/python -m biobench_sar.app
+```
+
+Windows: run `scripts/setup_windows.ps1` in PowerShell.
+
+Then open:
+
+| Page | URL | Where |
+| --- | --- | --- |
+| Projector | `http://localhost:5050/` | Fullscreen (`F`) on the projector. Pure black = invisible on the board. |
+| Operator dashboard | `http://localhost:5050/dashboard` | Your laptop. |
+
+Port 5000 is taken by AirPlay on macOS, hence `SAR_PORT=5050`. Grant **Camera** and **Microphone** access
+to the terminal that runs the server (System Settings → Privacy & Security), then restart it.
+
+Check the hardware any time with `python scripts/hardware_check.py`.
+
+## How it works
+
+```
+ mic ──► Whisper ─┐                                     ┌─► TTS ──► speaker / projector audio
+                  ├─► Assistant ─► RAG (ChromaDB) ─► VLM ┤
+ camera ─► homography ─► ink regions ─┘                 └─► Socket.IO ─► avatar walks + points
+```
+
+1. **Sense** — push-to-talk (Space / *Listen*) or wake word records a question; the camera frame is warped
+   into projector coordinates and marker ink is segmented into regions (one per flowchart box).
+2. **Think** — the question retrieves the top chunks from your documents; the question, board image, ink
+   regions and context go to the VLM, which must answer with strict JSON
+   `{spoken_text, animation_state, target_x, target_y}`.
+3. **Act** — the answer is spoken and the avatar glides to the target with the matching state
+   (`idle`, `walking`, `pointing`, `celebrating`, `error`).
+
+## The dashboard
+
+- **System** — camera fps, calibration, knowledge size, model, microphone and voice at a glance; one-click
+  projector calibration.
+- **Whiteboard** — live calibrated or raw camera view with detected ink regions and the avatar's last target.
+- **Ask** — type or push-to-talk; a timeline of every answer with its state, latency, target and cited sources.
+- **Knowledge** — drag-and-drop PDF/TXT/MD/CSV/DOCX/PPTX/PNG/JPG, see and remove documents, test retrieval.
+- **Event log & configuration** — every socket event and the active settings.
+
+## Configuration
+
+Everything is an environment variable (see `biobench_sar/config.py`). The ones you are most likely to change:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SAR_PORT` | `5000` | Server port (use 5050 on macOS) |
+| `SAR_CAMERA_INDEX` | `0` | Which camera |
+| `SAR_PROJECTOR_WIDTH` / `_HEIGHT` | `1920` / `1080` | Projector resolution |
+| `SAR_VLM_BACKEND` | `ollama` | `ollama`, `openai` (any compatible API) or `mock` (no model) |
+| `SAR_VLM_MODEL` | `qwen2.5vl:3b` | Model name |
+| `SAR_VLM_BASE_URL` / `SAR_VLM_API_KEY` | `http://localhost:11434` / – | Endpoint and key for the backend |
+| `SAR_LISTEN_MODE` | `push` | `push` (Space / button) or `wake` (always listening for the wake word) |
+| `SAR_WAKE_WORD` | `assistant` | Wake word |
+| `SAR_TTS_BACKEND` | `edge` | `edge` (online), `say` (macOS), `pyttsx3` (offline) or `none` |
+| `SAR_INK_MIN_AREA` / `_BLOCK_SIZE` / `_C` | `150` / `31` / `15` | Ink detection thresholds |
+
+## Development
+
+```bash
+uv pip install --python .venv/bin/python -r requirements-dev.txt
+.venv/bin/python -m pytest -q        # unit tests, no hardware or network needed
+.venv/bin/ruff check . && .venv/bin/ruff format --check .
+SAR_VLM_BACKEND=mock SAR_TTS_BACKEND=none SAR_PORT=5050 .venv/bin/python -m biobench_sar.app   # UI without a model
+```
+
+CI runs lint and tests on every pull request. Every change goes through its own branch and PR — see
+[CONTRIBUTING.md](CONTRIBUTING.md). AI agents start at [AGENTS.md](AGENTS.md).
+
+## Repository map
+
+| Path | What |
+| --- | --- |
+| `biobench_sar/app.py` | Flask + Socket.IO routes |
+| `biobench_sar/assistant.py` | Sense → Think → Act pipeline, status, history |
+| `biobench_sar/core/` | camera loop, ink detection, homography calibration, mic / wake word |
+| `biobench_sar/rag/` | document ingestion and ChromaDB store |
+| `biobench_sar/llm/` | VLM client (prompt + JSON schema) and text-to-speech |
+| `biobench_sar/templates`, `static/` | projector page and operator dashboard |
+| `biobench_sar/knowledge/` | seed documents for the scenario |
+| `scripts/` | setup, hardware check, VLM benchmark, ink threshold sweep |
+| `tests/` | pytest suite |
