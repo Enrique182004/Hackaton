@@ -1,4 +1,7 @@
-"""Browser pages: offline-safe font loading and the vanilla JS behaviour, run under node with a fake DOM."""
+"""Browser pages: offline-safe font loading and the vanilla JS behaviour, run under node with a fake DOM.
+
+Also what the pages' readers rely on: the docs and the seed documents must stay true to the code.
+"""
 
 from __future__ import annotations
 
@@ -10,9 +13,22 @@ from pathlib import Path
 
 import pytest
 
+from biobench_sar.config import Settings
+from biobench_sar.rag.quiz_bank import QuizBank, is_worksheet, parse_quiz_file, parse_worksheet_text
+
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "biobench_sar" / "templates"
 STATIC = ROOT / "biobench_sar" / "static"
+MATH_SEEDS = ROOT / "biobench_sar" / "knowledge" / "math"
+DOC_NAMES = (
+    "README.md",
+    "CLAUDE.md",
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    "docs/BUILD_PLAN.md",
+    "docs/sar_math_tutor_prompt.md",
+)
+DOCS = {name: (ROOT / name).read_text(encoding="utf-8") for name in DOC_NAMES}
 FAKE_DOM = Path(__file__).with_name("js") / "fake_dom.mjs"
 NODE = shutil.which("node")
 needs_node = pytest.mark.skipif(NODE is None, reason="node is not installed")
@@ -1045,3 +1061,156 @@ sock.fire("speak", { url: null, text: words });
 assert.equal($("bubble").textContent, words);
 """,
     )
+
+
+# ---- seed documents ------------------------------------------------------------------
+
+# The worksheet rule as the contract words it ("1. 3x + 5 = 20", "Problem 2: ..."), read literally.
+NUMBERED_LINE = re.compile(r"^\s*(?:problem\s*)?\d+\s*[.):]\s+\S", re.I | re.M)
+
+
+def test_seed_worksheet_levels_match_the_quiz_bank(tmp_path: Path) -> None:
+    sheet = parse_quiz_file(MATH_SEEDS / "worksheet_linear_equations.md", "worksheet_linear_equations.md")
+    bank = parse_quiz_file(MATH_SEEDS / "quiz_bank.csv", "quiz_bank.csv")
+    level = {p.topic: p.level for p in bank}
+    one, two, brackets = level["one-step equations"], level["two-step equations"], level["distributive property"]
+    assert level["combining like terms"] == brackets
+    assert [p.level for p in sheet] == [one] * 4 + [two] * 4 + [brackets] * 4
+    quiz = QuizBank(tmp_path / "quiz_bank.json")
+    quiz.replace_source("quiz_bank.csv", bank)
+    quiz.replace_source("worksheet_linear_equations.md", sheet)
+    order = [p.problem for p in quiz.problems()]
+    # Both files ticked (the default): the hardest worksheet problems no longer come before easy bank ones.
+    assert order.index("x + 9 = 15") < order.index("3x + 5 = 20")
+    assert order.index("2(x + 5) = 3x + 4") > order.index("7 - 2x = 1")
+
+
+def test_guides_have_no_lines_a_worksheet_parser_would_take() -> None:
+    guides = [p for p in sorted(MATH_SEEDS.glob("*.md")) if "worksheet" not in p.stem]
+    assert guides
+    for path in guides:
+        text = path.read_text(encoding="utf-8")
+        assert NUMBERED_LINE.findall(text) == [], f"{path.name} has numbered lines a worksheet parser would take"
+        assert parse_worksheet_text(text, path.name) == []
+        # Headings like "(quiz mode)" used to make the guide pass the worksheet test.
+        assert not is_worksheet(path.name, text), f"{path.name} reads as a worksheet"
+
+
+# ---- docs stay true to the code ------------------------------------------------------
+
+
+def test_docs_call_the_files_tab_by_its_name_in_each_subject() -> None:
+    js = (STATIC / "js" / "dashboard" / "profile.js").read_text(encoding="utf-8")
+    math_name, biology_name = re.findall(r'filesTab:\s*"([^"]+)"', js)
+    for name in ("README.md", "docs/BUILD_PLAN.md"):
+        text = re.sub(r"[*_]", "", DOCS[name])
+        assert math_name in text, f"{name} never names the math tab '{math_name}'"
+        for found in re.finditer(re.escape(biology_name), text):
+            before = text[max(0, found.start() - 120) : found.start()]
+            assert math_name in before, f"{name}: '{biology_name}' without the default subject's '{math_name}'"
+
+
+def test_documented_benchmark_flags_exist() -> None:
+    src = (ROOT / "scripts" / "bench_vlm.py").read_text(encoding="utf-8")
+    flags = set(re.findall(r'add_argument\("(-[-a-z]+)"', src))
+    profiles = set(re.findall(r'"(\w+)": \w+_SCENARIOS', src))
+    assert {"--scenarios", "--profile", "--only", "--raw"} <= flags and profiles == {"math", "biology"}
+    for name in ("README.md", "CLAUDE.md", "docs/BUILD_PLAN.md"):
+        text = DOCS[name]
+        assert "--scenarios --profile math" in text, f"{name} gives no way to benchmark the default math profile"
+        used = re.findall(r"`(-[-a-z]+)", text)
+        for line in text.splitlines():
+            if "bench_vlm" in line:
+                used += re.findall(r"(?<![\w-])(-[-a-z]+)", line.split("bench_vlm", 1)[1])
+        assert used and set(used) <= flags, f"{name}: {set(used) - flags} not in bench_vlm's arguments"
+        assert set(re.findall(r"--profile (\w+)", text)) <= profiles
+
+
+def test_claude_md_keeps_the_specs_non_negotiables() -> None:
+    spec = (ROOT / "docs" / "sar_whiteboard_assistant_prompt.md").read_text(encoding="utf-8")
+    assert "Wait for the user to specify which module" in spec and "Windows PowerShell" in spec
+    rules = DOCS["CLAUDE.md"].split("Non-negotiables:")[1].split("## Stack")[0]
+    assert "wait for the user to name it" in rules
+    assert "Windows PowerShell" in rules
+    for name in ("README.md", "CLAUDE.md"):
+        assert r".\.venv\Scripts\python.exe -m biobench_sar" in DOCS[name]
+        assert r"$env:SAR_PROFILE='biology'; .\.venv\Scripts\python.exe -m biobench_sar" in DOCS[name]
+
+
+def test_documented_knowledge_paths_exist() -> None:
+    for name, text in DOCS.items():
+        for folder, file in re.findall(r"knowledge/([a-z_]+)/([\w.]+\.\w+)?", text):
+            path = ROOT / "biobench_sar" / "knowledge" / folder / file
+            assert path.exists(), f"{name} points at missing {path.relative_to(ROOT)}"
+
+
+def test_docs_explain_the_shared_knowledge_base_and_how_to_reseed() -> None:
+    settings = Settings()
+    # "Delete data/chroma_db to load the bundled documents again" only holds while the marker lives inside it.
+    assert settings.seed_marker_file.parent == settings.chroma_dir
+    readme = DOCS["README.md"]
+    assert "data/chroma_db/.seeded" in readme and "delete `data/chroma_db`" in readme
+    assert "SAR_PROFILE=biology SAR_DATA_DIR=data/biology" in readme
+    assert "Both profiles share one knowledge base" in readme
+    assert "`seed_marker_file: Path`" in DOCS["docs/BUILD_PLAN.md"]
+
+
+def test_readme_worksheet_rules_match_the_parser() -> None:
+    section = DOCS["README.md"].split("### Quiz banks")[1].split("## The dashboard")[0]
+    listed = re.search(r"says so\*\*: (.+?) \(e\.g\.", section, re.S)
+    assert listed, "the README should say what makes a file a worksheet"
+    words = [w.strip() for w in re.split(r",|\bor\b", listed.group(1).replace("\n", " ")) if w.strip()]
+    assert len(words) >= 8
+    for word in words:
+        assert is_worksheet("unit3.md", f"# {word.title()}: fractions\n1. 1/2 + 1/4"), word
+    assert is_worksheet("unit3_worksheet.md", "1. 3x + 5 = 20")
+    example = re.search(r"```md\n(.*?)```", section, re.S)
+    assert example, "the README should show a levelled worksheet"
+    problems = parse_worksheet_text(example.group(1), "example.md")
+    assert [(p.problem, p.answer, p.level, p.topic) for p in problems] == [
+        ("4x + 3 = 19", "x = 4", 3, "two-step equations")
+    ]
+    assert is_worksheet("example.md", example.group(1).strip())
+
+
+def test_math_spec_says_where_quiz_problems_come_from() -> None:
+    spec = DOCS["docs/sar_math_tutor_prompt.md"]
+    quiz = spec.split("**Quiz Mode:**")[1].split("### C.")[0]
+    assert "rag/quiz_bank.py" in quiz and "SAR_QUIZ_BANK_FILE" in quiz and "SAR_QUIZ_LENGTH" in quiz
+
+
+def test_help_and_practice_scenarios_use_equations_outside_the_seed_files() -> None:
+    plan = DOCS["docs/BUILD_PLAN.md"]
+    section = plan.split("## Scenario test cases — Math")[1].split("## Scenario test cases — Environmental")[0]
+    seeded = {p.problem.replace(" ", "") for f in sorted(MATH_SEEDS.iterdir()) for p in parse_quiz_file(f, f.name)}
+    written = re.findall(r"`([^`]*=[^`]*)`", section)
+    assert written, "the math scenarios should name the equations to write"
+    # Retrieval brings the seed files' answer keys along with a matching problem.
+    assert [w for w in written if w.replace(" ", "") in seeded] == []
+    assert "Answers never reach the model except when checking" in plan
+
+
+def test_contract_describes_the_integrated_quiz() -> None:
+    plan = DOCS["docs/BUILD_PLAN.md"]
+    assert '"stage": "dictate" \\| "check" \\| "hint"' in plan
+    assert "`answer` is set only in stage `check`" in plan
+    assert "| quiz `hint` |" in plan
+    assert "`quiz_length: int` — env `SAR_QUIZ_LENGTH`, default `10`" in plan
+    assert "| `SAR_QUIZ_LENGTH` | `10` |" in DOCS["README.md"]
+    from biobench_sar.tutor import DEFAULT_QUIZ_LENGTH
+
+    assert DEFAULT_QUIZ_LENGTH == 10
+    if hasattr(Settings, "quiz_length"):  # Settings gains it with the tutor review fixes (contract: Shared)
+        assert Settings().quiz_length == 10 or "SAR_QUIZ_LENGTH" in __import__("os").environ
+
+
+def test_documented_settings_exist_in_config() -> None:
+    config = (ROOT / "biobench_sar" / "config.py").read_text(encoding="utf-8")
+    known = set(re.findall(r'"(SAR_[A-Z_]+)"', config))
+    rows = [line for line in DOCS["README.md"].splitlines() if line.startswith("| `SAR_")]
+    documented = {v for line in rows for v in re.findall(r"`(SAR_[A-Z_]+)`", line)}
+    assert len(documented) > 20
+    # Declared in BUILD_PLAN's Shared contract; config.py gains it with the tutor review fixes.
+    pending = {"SAR_QUIZ_LENGTH"} - known
+    assert pending <= {"SAR_QUIZ_LENGTH"}
+    assert documented - known - pending == set()

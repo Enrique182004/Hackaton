@@ -12,6 +12,7 @@
 - Once: `bash scripts/setup_mac.sh` (or `scripts/setup_windows.ps1`), then
   `.venv/bin/python -m pip install -r requirements-dev.txt` for pytest and ruff.
 - Before pushing: `.venv/bin/python -m pytest -q` and `.venv/bin/ruff check . && .venv/bin/ruff format --check .` (CI runs both).
+  In Windows PowerShell: `.\.venv\Scripts\python.exe -m pytest -q` and `.\.venv\Scripts\ruff.exe check .`.
 - One module per branch: `git checkout -b feat/vision-loop` (match the spec's file names).
 - Keep PRs to one module (e.g. `core/homography.py`) so they're easy to review; every behaviour change needs a test.
 - Never commit `.env`, API keys, model weights or `chroma_db/` (already in `.gitignore`).
