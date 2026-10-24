@@ -33,7 +33,9 @@ cp sar.env.example sar.env
 
 Look for `camera N  PASS  1920x1080 @ ~30 fps` (if it says 1280x720, the C930e is on a USB hub or a
 different index) and `projector  PASS  a display runs at 1280x800`. Fix `SAR_CAMERA_INDEX` in `sar.env` if
-the 1080p camera is not index 1.
+the 1080p camera is not index 1. The projector line is checked on macOS. On Windows the check prints a
+`displays` line instead, which says `skipped` unless the `screeninfo` package is installed, so check the
+projector in Windows' display settings (*Settings → System → Display*: the second display at 1280 × 800).
 
 **Epson WXGA 3LCD projector**
 
@@ -86,7 +88,7 @@ square-on to it.
 | 1.5 m | ≈ 1.05 m | ≈ 1.05 px per mm |
 | 2.0 m | ≈ 1.4 m | ≈ 0.8 px per mm |
 
-At about 1 pixel per millimetre, write numbers **at least 4 cm tall**, make decimal points a solid dot
+At about 1 pixel per millimetre, write numbers **at least 5 cm tall**, make decimal points a solid dot
 **about 5 mm wide** (the size of a pea), and draw minus signs **as long as a digit is wide**. Exponents can be
 smaller, but not less than half the height of the number they belong to.
 
@@ -142,7 +144,8 @@ webcam low, puts the hotspot **in the middle** of the board.
 (`http://127.0.0.1:5050/calibration.png`, then F11) so the whole image is bright. Stand where the webcam
 will go and look at the board with one eye at the webcam's height. If you can see a bright reflection of
 the projector lens anywhere on the image, so will the camera: move the webcam further out on the lens's
-side until it is gone. The dashboard's glare check confirms it once the camera is running.
+side until it is gone (with the projector on a cart in the middle, that means higher above the lens, see
+section 0). The dashboard's glare check confirms it once the camera is running.
 
 Also:
 
@@ -243,21 +246,33 @@ The result is saved and reused the next time the server starts.
 - **Camera picture:** on the **Board** tab (or **More tools → Camera view → Raw camera**), look for a
   bright white blob with no detail. Draw a line through it: if the line fades or vanishes in the
   picture, that spot is glare.
-- **Glare warning:** the dashboard's Board tab will warn you when glare washes out part of the board.
-  A small hotspot is a heads-up. If more than about 1 % of the board is washed out, the warning is
-  marked serious: fix it before you present. (The warning appears once the glare check is switched on
-  in the server. Until then, use the two checks above.)
+- **Glare warning:** the Board tab's checklist warns you when glare washes out part of the board
+  (*A small bright spot on the board*, or *Glare on the board: move the camera*). A small hotspot is a
+  heads-up. If more than about 1 % of the board is washed out, the warning is marked serious: fix it
+  before you present. The check looks for the bulb's flat white reflection, so Pip and the coloured
+  highlight don't trigger it.
 
-To get rid of glare, in order of how much it helps: move the webcam further out on the projector lens's side (section 1), switch
-the projector to eco mode, dim the room lights near the board, use a matte board.
+To get rid of glare, in order of how much it helps:
+
+1. Move the webcam. With **this kit's cart** (lens level with the middle of the board), **raise the webcam
+   higher above the lens** (section 0 table). With a table or ceiling projector, move it further out on the
+   lens's side (section 1).
+2. Switch the projector to eco mode.
+3. Dim the room lights near the board.
+4. Use a matte board.
+
+Calibrate again after moving the webcam (section 6).
 
 ## 8. Troubleshooting
 
 | What you see | Likely cause | What to do |
 | --- | --- | --- |
-| Bright white blob in the camera picture; writing there is ignored | Projector bulb reflecting into the camera (glare) | Move the webcam further out on the **same side as the projector lens** (section 1: lower than a table projector, higher than a ceiling one, or more than one image width sideways); eco mode; matte board |
+| Bright white blob in the camera picture; writing there is ignored | Projector bulb reflecting into the camera (glare) | Projector on a cart in the middle (this kit): **raise the webcam higher above the lens** (section 0). Otherwise move it further out on the **same side as the projector lens** (section 1: lower than a table projector, higher than a ceiling one, or more than one image width sideways). Then eco mode, matte board, and calibrate again |
 | "Checkerboard not detected" | Projector page not full screen; camera cannot see the whole board; glare over part of the checkerboard; someone in the way | Press `F` on the projector page, re-aim the camera, fix glare, step aside, try again |
-| Avatar points next to the drawing, not at it | Camera, projector or board moved since calibration | Run **Line up camera and projector** again |
+| Avatar points next to the drawing, not at it | Camera, projector or board moved since calibration; projector page not full screen | Run **Line up camera and projector** again with the projector page full screen (`F`) |
+| The glowing outline is around the wrong part of the board | Same as above: the outline uses the same line-up | Calibrate again |
+| `displays ... skipped` in the hardware check (Windows) | The display check needs the optional `screeninfo` package | Check Windows' display settings by eye: a second display at 1280 × 800 |
+| `tesseract FAIL` in the hardware check (Windows) | The Tesseract installer doesn't add itself to `PATH` | Add `C:\Program Files\Tesseract-OCR` to your user `PATH`, open a new PowerShell window and run the check again (only photo uploads need it) |
 | Decimals, minus signs or exponents misread | Camera at 720p; thin or light marker; symbols too small | 1920×1080 camera; black marker; bigger, clearer symbols (section 4) |
 | No orange boxes around drawings | Faint, dry or light-coloured marker; uneven light | Fresh black or blue marker; even lighting |
 | Board looks pure white and the ink looks faded everywhere | Camera over-exposed | Dim the lights near the board; lower exposure in the camera's own app |
