@@ -3,7 +3,7 @@
 *En español: [HARDWARE_DAY.es.md](HARDWARE_DAY.es.md).*
 
 This is one ordered run-through for the first session with the real kit: a **Logitech C930e** webcam and an
-**Epson WXGA 3LCD** projector on a cart, with its lens level with the middle of the whiteboard. Each step
+**Epson WXGA 3LCD** projector on a cart in front of a **1.40 m × 1.11 m** whiteboard. Each step
 says what you should see. If you don't see it, use the fix in that step before moving on.
 
 Budget about 45 minutes, and do part A the day before.
@@ -37,14 +37,25 @@ Budget about 45 minutes, and do part A the day before.
 
 ## B. Set up the room
 
-7. **Projector on the cart**, lens level with the middle of the board and square-on to it (no tilt).
-   In the projector menu: aspect **Normal/Native**, **keystone 0**, **Quick Corner off**, **Auto Iris off**,
-   **ECO** light mode. Connect it to the laptop as an **extended display** at **1280 × 800**.
-   ✅ The laptop's display settings show a second display at 1280 × 800.
-8. **Webcam above the lens.** Put the C930e on a tall tripod about **0.7 × the image width** from the
-   board and at least **0.53 × the image width above the lens**, tilted down so the whole projected
-   image is in view. For a 1.5 m image, that is about 1.05 m from the board and at least 0.8 m above the lens.
-   Table for other sizes: [HARDWARE_SETUP.md, section 0](HARDWARE_SETUP.md#0-this-classrooms-kit-logitech-c930e--epson-wxga-3lcd).
+7. **Projector on the cart**, square-on to the board and level. In the projector menu: aspect
+   **Normal/Native**, **keystone 0**, **Quick Corner off**, **Auto Iris off**, **ECO** light mode. Connect it
+   to the laptop as an **extended display** at **1280 × 800**. To see the whole picture, open
+   `http://127.0.0.1:5050/calibration.png` on the projector display, full screen (F11; on a Mac,
+   Ctrl+Cmd+F).
+   Our board is **1.40 m × 1.11 m**: zoom so the picture is about **1.35 m wide** (0.84 m tall), with about
+   13 cm of board free above and below. Then raise or lower the cart until the picture is centered. With
+   most Epson projectors the picture rises from the lens, so the lens ends up about **20 cm above the board's
+   bottom edge**, not at mid-board. If the cart can't go that low, tip the projector's front down about 10°
+   with its foot (keystone stays 0: calibration handles the slight trapezoid).
+   ✅ The laptop's display settings show a second display at 1280 × 800, and the picture fits on the board.
+8. **Webcam**, centered, **0.95 m from the board**. Its height depends on where the lens ended up:
+   - Lens near the bottom of the picture (projector level): webcam about **10 cm below the board's bottom
+     edge** on a short tripod, tilted up so the whole picture is in view.
+   - Lens at mid-board (projector tipped down): webcam at least **0.75 m above the lens** on a tall stand,
+     tilted down.
+
+   Never put it right beside the lens: its reflection would land in the middle of the board. Details:
+   [HARDWARE_SETUP.md, section 0](HARDWARE_SETUP.md#0-this-classrooms-kit-logitech-c930e--epson-wxga-3lcd).
    Plug it **directly** into the laptop (no hub). In Logitech's camera app: **lock focus**, **RightLight
    off**, **anti-flicker 60 Hz**. Open the privacy shutter.
 9. **Board and markers.** Use a clean, matte board and a black or dark-blue marker. Write numbers at least
@@ -89,8 +100,9 @@ Budget about 45 minutes, and do part A the day before.
       whole image, or the room is too bright. Fix it and press the button again.
 13. **Glare.** The Board checklist shows no glare warning.
     ✅ "No glare on the board".
-    - Glare warning → the projector lens is reflecting into the camera. **Raise the webcam higher above
-      the lens**, check with the one-eye test from
+    - Glare warning → the projector lens is reflecting into the camera. Move the webcam further from the
+      lens up-down: **lower** if it sits below the board, **higher** if it sits above the lens. Check with the
+      one-eye test from
       [HARDWARE_SETUP.md, section 1](HARDWARE_SETUP.md#1-projector-and-webcam-placement), then calibrate again.
 14. **Ink.** Write `3x + 5 = 20` large on the board.
     ✅ On the Board tab, an orange box appears around it within a second or two (More tools → "Drawings: 1").

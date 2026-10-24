@@ -1645,7 +1645,7 @@ assert.deepEqual(badge(), ["ready", "ok"]);
 renderStatus({ ...base, calibrated: false, glare: { fraction: 0.03, severe: true, hotspots: [[10, 20, 400, 300]] } });
 assert.equal(lines()[1].dataset.tone, "bad");
 assert.match(glare(), /^✗ Glare on the board: move the camera Projector light bounces off the board/);
-assert.match(glare(), /Raise the webcam higher above the projector lens/);
+assert.match(glare(), /Move the webcam further from the projector lens, up or down/);
 assert.match(glare(), /“Checking for glare” in the hardware guide \\(docs\\/HARDWARE_SETUP\\.md\\)\\.$/);
 assert.deepEqual(badge(), ["glare on the board", "bad"]);
 renderStatus({ ...base, calibrated: false, glare: { fraction: 0, severe: false, hotspots: [] } });
