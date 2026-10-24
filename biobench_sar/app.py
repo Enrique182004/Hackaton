@@ -511,8 +511,10 @@ def seed_knowledge(
     """Ingest a profile's bundled documents (directory = knowledge/<profile>) so a fresh install can answer.
 
     With a marker file each profile is seeded once: a student who removed every file must not get the demo
-    documents back on the next start. Without one, only an empty store is seeded. `on_done` gets the seeded
-    file names.
+    documents back on the next start. The marker is only written once every file went in, so a file that failed
+    is tried again on the next start. Without a marker, only an empty store is seeded. A seed file is skipped
+    when the store already has a file of that name (the student's own quiz_bank.csv is never merged into or
+    overwritten). `on_done` gets the seeded file names.
     """
     from biobench_sar.rag.ingestor import SUPPORTED_EXTENSIONS, ingest_file
     from biobench_sar.rag.quiz_bank import parse_quiz_file
@@ -524,15 +526,25 @@ def seed_knowledge(
             return 0
     elif store.count() > 0:
         return 0
-    added = 0
+    try:
+        present = {d["source"] for d in store.list_sources()}
+    except Exception:
+        log.exception("could not list the stored files; seeding every file")
+        present = set()
+    added = failed = skipped = 0
     seeded: list[str] = []
     for path in sorted(directory.iterdir()):
         if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            continue
+        if path.name in present:
+            log.info("not seeding %s: a file of that name is already stored", path.name)
+            skipped += 1
             continue
         try:
             count = store.add_chunks(ingest_file(path))
         except Exception:
             log.exception("could not seed %s", path.name)
+            failed += 1
             continue
         added += count
         if count:
@@ -540,7 +552,7 @@ def seed_knowledge(
             if quiz_bank is not None:
                 quiz_bank.replace_source(path.name, parse_quiz_file(path, path.name))
     log.info("seeded knowledge base with %d chunks from %s", added, directory)
-    if added and marker is not None:
+    if marker is not None and not failed and (added or skipped):
         try:
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text("\n".join(sorted({*_seeded_profiles(marker), directory.name})) + "\n", encoding="utf-8")
