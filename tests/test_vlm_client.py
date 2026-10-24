@@ -367,7 +367,9 @@ def test_quiz_check_prompt() -> None:
         "next_problem": "2x - 4 = 10",
     }
     text = vc.quiz_task_text(task)
-    assert "Quiz stage: check. Problem 1 of 5: 3x + 5 = 20" in text and "Next problem: 2x - 4 = 10" in text
+    assert "Quiz stage: check. Problem 1 of 5: 3x + 5 = 20" in text
+    # Shown the next problem, the model copied it as the student's answer: code reads it out after a correct check.
+    assert "2x - 4 = 10" not in text and "Next problem" not in text and "do not read out any problem" in text
     assert "board_answer" in text and "never the answer" in text
     # A numeric answer is graded in code; shown to the model, it gets copied into board_answer.
     assert "x = 5" not in text and "Expected answer" not in text
@@ -1266,7 +1268,8 @@ def test_spanish_user_prompt_labels() -> None:
     ):
         assert label in prompt
     quiz = build_prompt("¿Está bien?", [], [], SIZE, profile="math", mode="quiz", task=ES_QUIZ, language="es")
-    assert "Etapa del quiz: revisar. Problema 1 de 5: 3x + 5 = 20" in quiz and "Siguiente problema: 2x - 4 = 10" in quiz
+    assert "Etapa del quiz: revisar. Problema 1 de 5: 3x + 5 = 20" in quiz
+    assert "2x - 4 = 10" not in quiz and "Siguiente problema" not in quiz, "never shown: it was copied as the answer"
     assert "x = 5" not in quiz, "a numeric answer is checked in code, never shown"
     learn = vc.learn_task_text({"kind": "learn", "topic": "fracciones", "stage": "offer"}, "es")
     assert learn.startswith("Etapa de aprender: ofrecer. Tema: fracciones") and vc.OFFER_QUESTION_ES in learn
