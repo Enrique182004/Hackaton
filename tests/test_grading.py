@@ -693,6 +693,30 @@ def test_explanations_after_an_answer_are_cut(text: str, expected: set[tuple[str
     assert _plain(parse_answers(text)) == {(letter, Fraction(str(value))) for letter, value in expected}
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("x = 5 (3(5) + 5 = 20)", {("x", 5)}),
+        ("x = 3 (7 - 2(3) = 1)", {("x", 3)}),
+        ("x = 5 [3(5) + 5 = 20]", {("x", 5)}),
+        ("x = 5 3(5) + 5 = 20", {("x", 5)}),
+        ("x=5 3(5)+5=20", {("x", 5)}),
+        ("x = 3 7 - 2(3) = 1", {("x", 3)}),
+        ("x = -3 5(-3) + 4 = -11", {("x", -3)}),
+        ("x = 1/2 2(1/2) + 1 = 2", {("x", Fraction(1, 2))}),
+        # kept: a mixed number, a chain, a product, letters in brackets
+        ("x = 2 1/2 = 5/2", {("x", Fraction(5, 2))}),
+        ("x = 15 - 5 = 10", {("x", 10)}),
+        ("x = 2 (3 + 1) = 8", {("x", 8)}),
+        ("(x = 7, y = 3)", {("x", 7), ("y", 3)}),
+    ],
+)
+def test_a_plain_math_check_in_brackets_or_beside_the_answer_is_cut(
+    text: str, expected: set[tuple[str, object]]
+) -> None:
+    assert _plain(parse_answers(text)) == {(letter, Fraction(str(value))) for letter, value in expected}
+
+
 def test_an_answer_key_with_a_check_grades_its_value() -> None:
     key = "x = 5 (check: 3(5) + 5 = 20)"
     assert grade("x = 5", key) is True and grade("x = 20", key) is False

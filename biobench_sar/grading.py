@@ -585,7 +585,7 @@ def _values(text: str) -> list[Value] | None:
 
 # ---- answers ---------------------------------------------------------------------------------------------------
 
-_PAIR = re.compile(r"\(\s*([^(),;]+?)\s*[,;]\s*([^(),;]+?)\s*\)")
+_PAIR = re.compile(r"\(\s*([^(),;=]+?)\s*[,;]\s*([^(),;=]+?)\s*\)")  # "(2, 3)"; "(x = 7, y = 3)" holds answers
 # "and" / "or" / "o" / "y" / "," between answers; a "y" next to "=" is the letter y ("x = 5, y = 2", "3 = y").
 _CLAUSES = re.compile(
     r"\s*(?:,(?!\d)|;|\n|&|\bor\b|\band\b|\bthen\b|\bso\b|\bo\b|\bluego\b|\bentonces\b|(?<!=)(?<!= )\by\b(?!\s*=)"
@@ -618,9 +618,12 @@ _EXPLANATION = re.compile(
 )
 # Brackets that open on a word hold a check or a note: "x = 5 (check: 3(5) + 5 = 20)", "x = 6 (subtract nine)".
 _ASIDE = re.compile(r"[(\[]\s*(?!sqrt\b)(?=[a-z]{2,})")
-# "x = 5 x = -3", "x = 7 y = 3": answers next to each other with only a space between them; "3 = x 7 - 2(3) = 1": an
-# answer and its check.
-_GAP = re.compile(r"(=[^=;,\n]*?[\d)])\s+(?=[a-z]\s*=)|(=\s*[a-z])\s+(?=[\d√][^=;,\n]*=)")
+# "x = 5 x = -3", "x = 7 y = 3": answers next to each other with only a space between them; "3 = x 7 - 2(3) = 1" and
+# "x = 5 3(5) + 5 = 20": an answer and its check (not "x = 2 1/2 = 5/2", "x = 15 - 5 = 10", "x = 2 (3 + 1) = 8").
+_GAP = re.compile(
+    r"(=[^=;,\n]*?[\d)])\s+(?=[a-z]\s*=)|(=\s*[a-z])\s+(?=[\d√][^=;,\n]*=)"
+    r"|(=\s*-?\d+(?:\.\d+)?(?:\s*/\s*\d+)?)\s+(?=[\d√][^=;,\n]*?[-+*÷(][^=;,\n]*=)"
+)
 # A line that starts with "=" goes on from the one above it: "1/2 + 1/3" over "= 3/6 + 2/6" over "= 5/6".
 _GOES_ON = re.compile(r"\s*[;\n]\s*(?==)")
 # Subscripts of a root: "x₁ = 3, x₂ = 4" (and "x_1") are two values of x.
@@ -649,18 +652,32 @@ def _result_run(side: str) -> tuple[str, str]:
     return re.sub(r"√\s*$", "", run), after
 
 
+def _bracket_end(text: str, start: int) -> int:
+    """Where the bracket opened at `start` closes (after it); an unclosed bracket runs to the end."""
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] in "([":
+            depth += 1
+        elif text[i] in ")]":
+            depth -= 1
+        if depth == 0:
+            return i + 1
+    return len(text)
+
+
 def _without_asides(text: str) -> str:
     while (found := _ASIDE.search(text)) is not None:
-        depth, end = 0, len(text)  # an unclosed bracket runs to the end
-        for i in range(found.start(), len(text)):
-            if text[i] in "([":
-                depth += 1
-            elif text[i] in ")]":
-                depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-        text = f"{text[: found.start()]} ; {text[end:]}"
+        text = f"{text[: found.start()]} ; {text[_bracket_end(text, found.start()) :]}"
+    # A check of plain math in brackets after an answer: "x = 5 (3(5) + 5 = 20)", not "(x = 7, y = 3)".
+    start = 0
+    while (opened := text.find("(", start)) >= 0:
+        end = _bracket_end(text, opened)
+        inside = text[opened + 1 : end - 1]
+        if "=" in inside and not re.search(r"[a-z]", inside) and re.search(r"[\d)]\s*$", text[:opened]):
+            text = f"{text[:opened]} ; {text[end:]}"
+            start = opened
+        else:
+            start = opened + 1
     return text
 
 
@@ -671,7 +688,7 @@ def _answer_text(text: Any) -> str:
     text = _SUBSCRIPT.sub("", text) if isinstance(text, str) else text
     chained = re.sub(r"^\s*=\s*", "", _GOES_ON.sub(" ", to_math(text)))  # "= 5/6" alone: the bottom of a chain
     math_text = _EXPLANATION.sub(" ; ", _without_asides(chained))
-    return _GAP.sub(lambda found: f"{found.group(1) or found.group(2)} ; ", math_text)
+    return _GAP.sub(lambda found: f"{next(g for g in found.groups() if g)} ; ", math_text)
 
 
 def _assignment(clause: str) -> tuple[str, list[Value]] | None:

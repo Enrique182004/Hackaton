@@ -985,6 +985,15 @@ def test_quiz_check_of_a_vertical_chain_grades_its_bottom_line(read: str, verdic
     assert wrong.verdict == "wrong"  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize("read", ["x = 5 (3(5) + 5 = 20)", "x = 5 3(5) + 5 = 20", "x=5 3(5)+5=20"])
+def test_quiz_check_of_an_answer_with_its_check_beside_it_grades_the_answer(read: str) -> None:
+    for language in ("en", "es"):
+        assert vc.check_quiz_answer(HINT, QUIZ_CHECK, read, language=language).verdict == "correct"  # type: ignore[attr-defined]
+    seven = {**QUIZ_CHECK, "problem": "7 - 2x = 1", "answer": "x = 3"}
+    assert vc.check_quiz_answer(HINT, seven, "x = 3 (7 - 2(3) = 1)").verdict == "correct"  # type: ignore[attr-defined]
+    assert vc.check_quiz_answer(HINT, seven, "x = 3 7 - 2(3) = 1").verdict == "correct"  # type: ignore[attr-defined]
+
+
 def test_a_check_under_a_worded_problem_asks_again_for_the_answer_line() -> None:
     # Live, problem "3x + 5 = 20. Find x.": the first read was the check line in 2/2 runs, graded as a miss.
     task = {**QUIZ_CHECK, "problem": "3x + 5 = 20. Find x."}
