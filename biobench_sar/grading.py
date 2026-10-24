@@ -12,8 +12,8 @@ Nothing here raises on bad input: unreadable text gives an empty set or None. Th
 model's reply or an uploaded file can never run code. Nothing here takes long either (it runs on the assistant
 thread, and a big-int power holds the GIL): the size of a power or a root and the degree of an equation are bounded
 before they are worked out (MAX_BITS, MAX_POWER_DEGREE, MAX_DEGREE), and only what solves fast is solved (linear
-systems, one letter up to a quadratic or what factors into them). Without sympy, plain numbers and one-letter linear problems
-still work (quiz_bank.solve_problem); square roots, quadratics and systems then give None.
+systems, one letter up to a quadratic or what factors into them). Without sympy, plain numbers and one-letter linear
+problems still work (quiz_bank.solve_problem); square roots, quadratics and systems then give None.
 """
 
 from __future__ import annotations
@@ -702,7 +702,8 @@ def _unworked(run: str) -> bool:
 
 def _worked_value(clause: str) -> list[Value] | None:
     """[5/6] for "1/2 + 1/3 = 5/6" (arithmetic and the value it comes to); [] when it is not worked out to one value
-    ("1/2 + 1/3 = 2/6 + 3/6", "12 ÷ 4 = ?"); None when it is no plain arithmetic (a letter in it: a problem or a step)."""
+    ("1/2 + 1/3 = 2/6 + 3/6", "12 ÷ 4 = ?"); None when it is no plain arithmetic (a letter in it, on either side: a
+    problem, a step or "3 = x")."""
     *steps, last = _LEADING_WORDS.sub("", clause).split("=")
     if not steps or any(_expression(s.strip()) is None for s in steps):
         return None
