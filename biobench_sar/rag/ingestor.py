@@ -193,13 +193,15 @@ def tesseract_candidates(platform: str | None = None, environ: Mapping[str, str]
 def find_tesseract(
     *,
     configured: str = "tesseract",
-    which: Callable[[str], str | None] = shutil.which,
-    is_file: Callable[[str], bool] = os.path.isfile,
+    which: Callable[[str], str | None] | None = None,
+    is_file: Callable[[str], bool] | None = None,
     platform: str | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> str | None:
     """The tesseract program to run: `configured` (pytesseract's tesseract_cmd) when it is a full path that exists,
     else the one on PATH, else the first install folder that has it; None when it isn't installed."""
+    which = shutil.which if which is None else which
+    is_file = os.path.isfile if is_file is None else is_file
     if configured != "tesseract" and is_file(configured):
         return configured
     on_path = which("tesseract")
