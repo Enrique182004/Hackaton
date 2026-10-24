@@ -2,11 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>SAR Whiteboard Assistant</title>
+  <title data-i18n="proj.title">Whiteboard Assistant – projector</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body data-projector-width="{{ projector_width }}" data-projector-height="{{ projector_height }}">
+  {# The ink the latest answer is about: a glowing outline around it, drawn by main.js. #}
+  <div id="highlight" class="hidden" aria-hidden="true"></div>
   <div id="avatar" class="state-idle" aria-hidden="true">
     <div id="bubble" class="hidden"></div>
   </div>
@@ -14,21 +16,25 @@
   <div id="status" data-state="idle">
     <span class="ring"></span>
     <span class="dots"><i></i><i></i><i></i></span>
-    <span id="status-label">idle</span>
+    <span id="status-label" data-i18n="conn.connecting">Connecting…</span>
   </div>
   <div id="transcript" class="hidden"></div>
+  <div id="quiz-card" class="hidden">
+    <span id="quiz-card-count"></span>
+    <span id="quiz-card-problem"></span>
+  </div>
 
   <div id="text-overlay" class="hidden">
-    <input id="text-input" type="text" placeholder="Type a question, Enter to send, Esc to cancel" autocomplete="off">
+    <input id="text-input" type="text" placeholder="Type a question, Enter to send, Esc to cancel" data-i18n-placeholder="proj.typePlaceholder" autocomplete="off">
   </div>
 
   <div id="debug" class="hidden">
-    <div id="debug-conn">socket: connecting</div>
-    <pre id="debug-event">(no events yet)</pre>
+    <div id="debug-conn" data-i18n="proj.debug.connecting">socket: connecting</div>
+    <pre id="debug-event" data-i18n="proj.debug.noEvents">(no events yet)</pre>
   </div>
   <div id="crosshair" class="hidden"></div>
 
   <script src="{{ url_for('static', filename='js/vendor/socket.io.min.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +10,7 @@ import cv2
 import numpy as np
 
 _MARGIN_FRAC = 0.06
+log = logging.getLogger(__name__)
 
 
 def _board_geometry(width: int, height: int, cols: int, rows: int) -> tuple[float, float, float]:
@@ -25,8 +28,8 @@ def generate_checkerboard(width: int, height: int, cols: int = 9, rows: int = 6)
     for r in range(rows + 1):
         for c in range(cols + 1):
             if (r + c) % 2 == 0:
-                x0, y0 = int(round(ox + c * square)), int(round(oy + r * square))
-                x1, y1 = int(round(ox + (c + 1) * square)), int(round(oy + (r + 1) * square))
+                x0, y0 = round(ox + c * square), round(oy + r * square)
+                x1, y1 = round(ox + (c + 1) * square), round(oy + (r + 1) * square)
                 img[y0:y1, x0:x1] = 0
     return img
 
@@ -81,10 +84,16 @@ class Calibration:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"matrix": self.matrix.tolist(), "projector_size": list(self.projector_size)}
-        path.write_text(json.dumps(payload))
+        tmp = path.with_name(path.name + ".tmp")
+        try:
+            tmp.write_text(json.dumps(payload))
+            os.replace(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
 
     @classmethod
-    def load(cls, path: Path) -> "Calibration | None":
+    def load(cls, path: Path, expected_projector_size: tuple[int, int] | None = None) -> Calibration | None:
         try:
             data = json.loads(Path(path).read_text())
             matrix = np.array(data["matrix"], dtype=np.float64)
@@ -93,10 +102,18 @@ class Calibration:
             return None
         if matrix.shape != (3, 3):
             return None
+        if expected_projector_size is not None and (width, height) != tuple(expected_projector_size):
+            log.warning(
+                "ignoring calibration %s: saved projector size %s != expected %s",
+                path,
+                (width, height),
+                tuple(expected_projector_size),
+            )
+            return None
         return cls(matrix, (width, height))
 
     @classmethod
-    def identity(cls, camera_size: tuple[int, int], projector_size: tuple[int, int]) -> "Calibration":
+    def identity(cls, camera_size: tuple[int, int], projector_size: tuple[int, int]) -> Calibration:
         matrix = np.diag([projector_size[0] / camera_size[0], projector_size[1] / camera_size[1], 1.0])
         return cls(matrix, projector_size)
 

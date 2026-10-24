@@ -15,36 +15,66 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0000
   z-index: 10;
   filter: drop-shadow(0 0 10px rgba(127, 252, 255, 0.7));
 }
+#avatar.state-celebrating { filter: drop-shadow(0 0 14px rgba(255, 255, 255, 0.85)) drop-shadow(0 0 28px rgba(127, 252, 255, 0.9)); }
+#avatar.state-error { filter: drop-shadow(0 0 14px rgba(255, 179, 71, 0.95)) drop-shadow(0 0 26px rgba(255, 107, 74, 0.6)); }
 #avatar.state-idle { background-position: calc(var(--frame) * 0) 0; animation: bob 3s ease-in-out infinite; }
 #avatar.state-walking { background-position: calc(var(--frame) * -1) 0; animation: bounce 0.5s ease-in-out infinite; }
 #avatar.state-pointing { background-position: calc(var(--frame) * -2) 0; animation: nudge 1.2s ease-in-out infinite; }
-#avatar.state-celebrating { background-position: calc(var(--frame) * -3) 0; animation: hop 0.6s ease-in-out infinite; }
-#avatar.state-error { background-position: calc(var(--frame) * -4) 0; animation: shake 0.35s linear 3; }
+#avatar.state-celebrating { background-position: calc(var(--frame) * -3) 0; animation: hop 0.6s ease-in-out infinite, glow-celebrate 1.2s ease-in-out infinite; }
+#avatar.state-error { background-position: calc(var(--frame) * -4) 0; animation: shake 0.3s linear 4, glow-error 1.1s ease-in-out infinite; }
 
 /* Animations use `translate`/`rotate` (not `transform`) so they never fight the left/top transition. */
 @keyframes bob { 0%,100% { translate: 0 0; } 50% { translate: 0 -6px; } }
 @keyframes bounce { 0%,100% { translate: 0 0; } 50% { translate: 0 -10px; } }
 @keyframes nudge { 0%,100% { translate: 0 0; } 50% { translate: 6px 0; } }
 @keyframes hop { 0%,100% { translate: 0 0; rotate: -3deg; } 50% { translate: 0 -18px; rotate: 3deg; } }
-@keyframes shake { 0%,100% { translate: 0 0; } 25% { translate: -5px 0; } 75% { translate: 5px 0; } }
+@keyframes shake { 0%,100% { translate: 0 0; } 25% { translate: -10px 0; } 75% { translate: 10px 0; } }
+@keyframes glow-celebrate {
+  0%,100% { filter: drop-shadow(0 0 8px rgba(255, 255, 255, 0.5)) drop-shadow(0 0 16px rgba(127, 252, 255, 0.6)); }
+  50% { filter: drop-shadow(0 0 16px rgba(255, 255, 255, 1)) drop-shadow(0 0 36px rgba(127, 252, 255, 1)); }
+}
+@keyframes glow-error {
+  0%,100% { filter: drop-shadow(0 0 8px rgba(255, 179, 71, 0.6)) drop-shadow(0 0 16px rgba(255, 107, 74, 0.35)); }
+  50% { filter: drop-shadow(0 0 16px rgba(255, 179, 71, 1)) drop-shadow(0 0 30px rgba(255, 107, 74, 0.8)); }
+}
 
 #bubble {
-  position: absolute; left: 50%; bottom: 100%; transform: translateX(-50%);
-  width: max-content; max-width: 420px; padding: 8px 14px; margin-bottom: 4px;
-  font-size: 26px; line-height: 1.25; font-weight: 600; text-align: center;
+  position: absolute; left: 0; bottom: 100%; /* horizontal offset is set by fitBubble() */
+  width: max-content; max-width: clamp(200px, 34vw, 680px); padding: 0.3em 0.55em; margin-bottom: 4px;
+  font-size: clamp(16px, 1.9vw, 40px); line-height: 1.25; overflow-wrap: anywhere; font-weight: 600; text-align: center;
   color: var(--white); border: 3px solid var(--cyan); border-radius: 18px;
   text-shadow: 0 0 8px var(--cyan);
   box-shadow: 0 0 12px var(--cyan), inset 0 0 8px rgba(127, 252, 255, 0.5);
   background: transparent;
 }
 #avatar.bubble-below #bubble { bottom: auto; top: 100%; margin: 4px 0 0; }
-#avatar.bubble-left #bubble { left: auto; right: 0; transform: none; }
-#avatar.bubble-right #bubble { left: 0; transform: none; }
 #avatar.state-error #bubble { border-color: var(--amber); text-shadow: 0 0 8px var(--amber);
   box-shadow: 0 0 12px var(--amber), inset 0 0 8px rgba(255, 179, 71, 0.5); }
+#avatar.state-celebrating #bubble { border-color: var(--white); animation: bubble-glow 1.2s ease-in-out infinite; }
+@keyframes bubble-glow {
+  0%,100% { box-shadow: 0 0 8px var(--cyan), inset 0 0 6px rgba(127, 252, 255, 0.4); }
+  50% { box-shadow: 0 0 22px var(--cyan), inset 0 0 12px rgba(127, 252, 255, 0.8); }
+}
+
+/* The writing the answer is about: a glowing outline around it (main.js keeps a gap between the two). Outer glow
+   only, never a fill: the inside stays black, so the projector adds no light over the ink and the camera still
+   reads it. Pulses for about 2 s, then holds until main.js fades it. */
+#highlight { position: fixed; z-index: 8; pointer-events: none; --hl: var(--cyan); --hl-glow: rgba(127, 252, 255, 0.75);
+  border: 3px solid var(--hl); border-radius: 16px; background: transparent; box-shadow: 0 0 12px var(--hl-glow);
+  transition: opacity 0.8s ease-out; }
+#highlight[data-tone="error"] { --hl: var(--amber); --hl-glow: rgba(255, 179, 71, 0.8); }
+#highlight[data-tone="celebrate"] { --hl: var(--white); --hl-glow: rgba(127, 252, 255, 0.9); }
+#highlight.pulse { animation: hl-pulse 0.66s ease-in-out 3; }
+#highlight.fading { opacity: 0; }
+@keyframes hl-pulse {
+  0%,100% { box-shadow: 0 0 8px var(--hl-glow); }
+  50% { box-shadow: 0 0 22px var(--hl-glow), 0 0 40px var(--hl-glow); }
+}
 
 #status { position: fixed; right: 16px; bottom: 14px; display: flex; align-items: center; gap: 8px;
   font-size: 16px; color: var(--cyan); z-index: 20; text-shadow: 0 0 6px var(--cyan); }
+#status[data-state="offline"] { color: var(--amber); text-shadow: 0 0 6px var(--amber); }
+#status[data-state="offline"] .ring { border-color: var(--amber); border-style: dashed; }
 #status .ring { width: 16px; height: 16px; border-radius: 50%; border: 3px solid var(--cyan); }
 #status .dots { display: none; gap: 3px; }
 #status .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); animation: dot 1s infinite ease-in-out; }
@@ -61,6 +91,19 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0000
   font-size: 22px; color: var(--white); text-shadow: 0 0 8px var(--cyan); z-index: 20; text-align: center; }
 #transcript::before { content: "\201C"; } #transcript::after { content: "\201D"; }
 
+/* Current quiz problem, written the normal way (3x + 5 = 20). It sits inside the camera's view for the whole
+   quiz, so it is small, thin and has no glow: bright projected text shows up as ink in the camera picture.
+   Below the avatar, so the avatar stays visible when it points at work in this corner. */
+#quiz-card { position: fixed; left: 16px; top: 14px; max-width: 26vw; padding: 0.15em 0.5em; z-index: 5;
+  color: rgba(255, 255, 255, 0.75); background: transparent; border: 1px solid rgba(127, 252, 255, 0.5);
+  border-radius: 10px; }
+#quiz-card-count { display: block; font-size: clamp(11px, 0.85vw, 18px); color: rgba(127, 252, 255, 0.75); }
+#quiz-card-problem { display: block; font-size: clamp(16px, 1.7vw, 34px); font-weight: 600; line-height: 1.2;
+  overflow-wrap: anywhere; }
+#quiz-card-problem:empty { display: none; }
+/* Out of the picture while the student asks and the assistant reads the board (main.js CAPTURE_STATES). */
+#quiz-card.capturing { visibility: hidden; }
+
 #text-overlay { position: fixed; left: 0; right: 0; top: 40%; display: flex; justify-content: center; z-index: 60; }
 #text-input { width: min(70vw, 900px); font-size: 28px; padding: 12px 18px; color: var(--white);
   background: transparent; border: 4px solid var(--cyan); border-radius: 12px; outline: none;
@@ -76,3 +119,14 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0000
 #crosshair::after { top: 50%; left: 0; height: 2px; width: 100%; }
 
 #calibration-img { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; object-fit: fill; z-index: 100; background: #000; }
+
+/* Offline: black is invisible when projected, so frame the whole projection area in amber. */
+body.offline::after { content: ""; position: fixed; inset: 0; border: 6px dashed var(--amber); pointer-events: none;
+  z-index: 90; box-shadow: inset 0 0 24px rgba(255, 179, 71, 0.6); }
+
+@media (prefers-reduced-motion: reduce) {
+  #avatar { animation: none !important; transition-duration: 0.01s; }
+  #avatar.state-celebrating #bubble { animation: none; }
+  #highlight { animation: none !important; transition-duration: 0.01s; }
+  #status .ring, #status .dots i { animation: none !important; }
+}

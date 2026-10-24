@@ -1,0 +1,746 @@
+// Every word the dashboard and the projector page show, in English and in Mexican Spanish (tú, classroom words).
+// A value may hold {name} slots for t(), and <kbd>/<u> where the template's own text has them. A key may hold
+// {profile}: the template's data-i18n keys pick the subject's wording that way.
+
+const EN = {
+  // ---- page chrome
+  "page.title": "Whiteboard Assistant",
+  "app.name": "Whiteboard Assistant",
+  "app.kicker": "lab notebook",
+  "app.openProjector": "Open projector page ↗",
+  "lang.group": "Language",
+  "lang.en": "English",
+  "lang.es": "Español",
+  "lang.auto": "Auto",
+  "lang.auto.title": "Answer in the language the question is asked in",
+  "lang.failed": "Couldn't change the language. Check the assistant is still running (restart the assistant if it closed), then try again.",
+  "conn.connecting": "Connecting…",
+  "conn.connected": "Connected",
+  "conn.polling": "Connected (updates every few seconds)",
+  "conn.offline": "Not connected",
+  "conn.unreachable": "Can't reach the assistant. Check it is still running (restart the assistant if it closed); this page reconnects by itself.",
+  "footer.running": "running for",
+  "dur.s": "{s}s",
+  "dur.ms": "{m}m {s}s",
+  "dur.hm": "{h}h {m}m",
+  "hint.offline": "Check the assistant is still running (restart the assistant if it closed), then try again.",
+
+  // ---- step tabs
+  "tabs.label": "Steps",
+  "tab.files.math": "Worksheets & notes",
+  "tab.files.biology": "Study files",
+  "tab.board": "Board",
+  "tab.ask": "Ask",
+  "tab.more": "More tools",
+  "tab.more.sub": "for fixing things",
+
+  // ---- status line and the Ask badge
+  "state.idle": "Ready. Ask a question below, or on the board.",
+  "state.listening": "Listening… ask your question now. It stops by itself after about 5 seconds.",
+  "state.transcribing": "Writing down what you said…",
+  "state.thinking": "Thinking about your question…",
+  "state.speaking": "Answering on the board…",
+  "state.busy": "Still working on the last question, so please wait a moment.",
+  "badge.ready": "ready",
+  "badge.offline": "not connected",
+  "badge.ask.listening": "listening…",
+  "badge.ask.transcribing": "writing it down…",
+  "badge.ask.thinking": "thinking…",
+  "badge.ask.speaking": "answering…",
+
+  // ---- step 1: files
+  "files.hint.math": "Add your worksheets and notes. Before answering, the assistant looks in the files you tick, and quiz problems come from them too. Untick a file to leave it out.",
+  "files.hint.biology": "Add your notes, protocols or papers. Before answering, the assistant looks in the files you tick. Untick a file to leave it out.",
+  "files.drop": "Drag files here, or <u>choose files</u>",
+  "files.dropSub.math": "PDF · Word · CSV quiz banks · text · photos of worksheets",
+  "files.dropSub.biology": "PDF · Word · PowerPoint · CSV · text · photos of notes",
+  "files.none": "No files yet.",
+  "files.useAll": "Use all files",
+  "files.noFiles.math": "No worksheets or notes yet. The assistant answers from what it already knows and makes up quiz problems.",
+  "files.noFiles.biology": "No files yet. The assistant answers from what it already knows.",
+  "files.noneTicked.math": "No files ticked. The assistant won't look at your worksheets or notes.",
+  "files.noneTicked.biology": "No files ticked. The assistant won't look at your notes.",
+  "files.usingAll.one": "The assistant uses all {n} file when answering.",
+  "files.usingAll.other": "The assistant uses all {n} files when answering.",
+  "files.usingSome": "The assistant uses {active} of {total} files when answering.",
+  "files.badge.add.math": "add worksheets",
+  "files.badge.add.biology": "add your notes",
+  "files.badge.noneTicked": "none ticked",
+  "files.badge.all": "{n} in use",
+  "files.badge.some": "{active} of {total} in use",
+  "files.badge.answers.one": "1 file has answers",
+  "files.badge.answers.other": "{n} files have answers",
+  "files.kind.pdf": "PDF document",
+  "files.kind.docx": "Word document",
+  "files.kind.pptx": "Slides",
+  "files.kind.csv": "Spreadsheet (CSV)",
+  "files.kind.md": "Notes",
+  "files.kind.txt": "Text file",
+  "files.kind.photo": "Photo (text read from the image)",
+  "files.kind.other": "File",
+  "files.sections.one": "{n} section",
+  "files.sections.other": "{n} sections",
+  "files.meta": "{kind} · {sections}",
+  "files.remove": "Remove",
+  "files.removeLabel": "Remove {name}",
+  "files.confirmRemove": "Remove “{name}”? The assistant will stop using it.",
+  "files.removed": "Removed {name}.",
+  "files.removeFailed": "Couldn't remove {name}. {hint}",
+  "files.selectionFailed": "Couldn't save which files are ticked. {hint}",
+  "files.reading.one": "Reading {n} file… the first time can take up to a minute.",
+  "files.reading.other": "Reading {n} files… the first time can take up to a minute.",
+  "files.added.one": "Added {names}.",
+  "files.added.other": "Added {names}.",
+  "files.unread.one": "Couldn't read {list}.",
+  "files.unread.other": "Couldn't read {list}.",
+  "files.fail.unsupported": "{name} (that type of file can't be read)",
+  "files.fail.scan": "{name} (it looks like a scan with no text, so type it up or upload a clearer photo)",
+  "files.fail.other": "{name} (try saving it again as a PDF or text file)",
+  "files.tooBig": "That upload is too big (50 MB at most).",
+  "files.uploadFailed": "Upload failed. {hint}",
+  "files.hasAnswers": "This file still has its answers. Upload it again so the assistant can't see them.",
+  "search.none": "Nothing in your ticked files matches that.",
+  "search.failed": "Search didn't work. {hint}",
+
+  // ---- step 2: board
+  "board.frameAlt": "What the camera sees on the whiteboard",
+  "board.noPicture": "No camera picture yet",
+  "board.noPictureTip": "Follow the camera tip in the checklist next to this picture.",
+  "board.caption": "Orange boxes are drawings the assistant can point at.",
+  "board.checks": "System checks",
+  "board.calibrate": "Line up camera and projector",
+  "board.calibrateHint": "Before you press this, open the projector page on the projector and press <kbd>F</kbd> for full screen. A checkerboard flashes on the board for a few seconds, so keep the camera still. Do this again whenever the camera or projector moves.",
+  "board.fps": "{n} frames/s",
+  "board.latency": "{n} s",
+  "badge.board.noCamera": "camera not found",
+  "badge.board.glare": "glare on the board",
+  "badge.board.notLinedUp": "not lined up yet",
+  "badge.board.ready": "ready",
+  "check.ok": "OK",
+  "check.attention": "Needs attention",
+  "check.camera.ok": "Camera is working",
+  "check.camera.bad": "Camera not found",
+  "check.camera.fix": "Check the camera is plugged in and not open in another app (Zoom, Teams, FaceTime). On a Mac, turn on the assistant (or Terminal, if you start it from there) in System Settings → Privacy & Security → Camera. On Windows, turn on “Let desktop apps access your camera” in Settings → Privacy & security → Camera. Then restart the assistant.",
+  "check.glare.ok": "No glare on the board",
+  "check.glare.small": "A small bright spot on the board",
+  "check.glare.smallHow": "Writing inside it may be missed. If it grows, see “Checking for glare” in the hardware guide (docs/HARDWARE_SETUP.md).",
+  "check.glare.severe": "Glare on the board: move the camera",
+  "check.glare.severeHow": "Projector light bounces off the board into the camera, and writing in that spot is ignored. Move the webcam further out on the same side as the projector lens, switch the projector to eco mode, or dim the lights near the board. See “Checking for glare” in the hardware guide (docs/HARDWARE_SETUP.md).",
+  "check.calib.ok": "Camera and projector are lined up",
+  "check.calib.warn": "Not lined up yet",
+  "check.calib.fix": "Press “Line up camera and projector” below.",
+  "check.files.loaded": "Your files are loaded",
+  "check.files.missing.math": "No worksheets or notes yet",
+  "check.files.missing.biology": "No study files yet",
+  "check.files.addSome": "Add some in step 1.",
+  "check.files.noneTicked.math": "No worksheets or notes ticked",
+  "check.files.noneTicked.biology": "No study files ticked",
+  "check.files.tickOne": "Tick at least one file in step 1, or answers won't use them.",
+  "check.files.using.one": "Using {active} of {total} file",
+  "check.files.using.other": "Using {active} of {total} files",
+  "check.model.demo": "Demo mode: answers are pretend",
+  "check.model.demoFix": "Ask whoever set up the assistant to restart it with the real AI model turned on.",
+  "check.model.ok": "AI model chosen: {model}",
+  "check.model.hint": "If an answer says it couldn't reach the AI model, start Ollama and ask again.",
+  "check.mic.ok": "Microphone ready",
+  "check.mic.bad": "No microphone found",
+  "check.mic.fix": "You can still type your questions.",
+  "check.voice.off": "Answers are shown but not read aloud",
+  "check.voice.ok": "Answers are read aloud on the projector page (click it once to allow sound)",
+  "calib.showing": "Showing the checkerboard on the board… keep the camera still.",
+  "calib.ok": "Lined up! The assistant now knows where the board is.",
+  "calib.notSaved": "Lined up, but it couldn't be saved, so do this again after restarting the assistant.",
+  "calib.noCamera": "The camera isn't working yet, so it can't line up. Fix the camera first (see the checklist).",
+  "calib.busy": "Already lining up, one moment…",
+  "calib.notDetected": "Couldn't see the checkerboard. Check the projector page is open on the projector in full screen (press F there), the camera sees the whole board and the room isn't too bright, then try again.",
+  "calib.failed": "Couldn't line up. Check the projector page is open on the projector in full screen and the assistant is still running, then try again.",
+
+  // ---- step 3: ask
+  "modes.label": "How should the assistant help?",
+  "mode.help.title": "Help me step by step",
+  "mode.help.sub": "I'll explain only the next step, never the answer.",
+  "mode.practice.title": "Give me a similar problem",
+  "mode.practice.sub": "I'll make up a new one just like yours.",
+  "mode.quiz.title": "Quiz me",
+  "mode.quiz.sub": "I'll read out problems and check your answers.",
+  "mode.help": "step-by-step help",
+  "mode.practice": "similar problem",
+  "mode.quiz": "quiz",
+  "quiz.start": "Start quiz",
+  "quiz.stop": "Stop quiz",
+  "ask.label": "Your question",
+  "ask.placeholder.math": "Ask about the math on your board, or what you want to learn…",
+  "ask.placeholder.biology": "Ask about your drawing or your notes…",
+  "ask.send": "Ask",
+  "ask.talk": "Talk",
+  "ask.empty": "Answers will appear here and on the projector. On the projector page, click once so it can play sound, then press <kbd>F</kbd> for full screen, <kbd>Space</kbd> to talk, or <kbd>T</kbd> to type a question.",
+  "ask.try": "try:",
+  "ask.sent": "Sent! Watch the board for the answer.",
+  "ask.stillAnswering": "Still answering the last question. Try again in a moment.",
+  "ask.sendFailed": "Couldn't send your question. {hint}",
+  "examples.math.1": "I want to learn how to solve fractions",
+  "examples.math.2": "Help me with the next step",
+  "examples.math.3": "Quiz me on equations",
+  "examples.biology.1": "Is my flowchart missing a sterile step?",
+  "examples.biology.2": "Why does Leptosol runoff make the water cloudy?",
+  "examples.biology.3": "Where should I take my water samples?",
+  "work.math": "your work",
+  "work.biology": "your drawing",
+  "turn.you": "You asked",
+  "turn.assistant": "Assistant",
+  "turn.thinking": "Thinking…",
+  "note.learning": "learning something new",
+  "note.failed": "something went wrong, so this isn't a real answer",
+  "note.quizWrong": "that answer isn't right yet",
+  "note.mistakeIn": "found a mistake in {work}",
+  "note.mistake": "found a mistake",
+  "note.pointed": "pointed at {work}",
+  "note.correct": "all correct!",
+  "note.read": "read {sources}",
+  "note.noFiles": "didn't use your files",
+  "note.noBoard": "couldn't see the board",
+  "note.took": "took {n} s",
+  "mic.starting": "Getting the microphone ready…",
+  "mic.didntStart": "The microphone didn't start. Try Talk again, or type your question.",
+  "mic.none": "No microphone found. Plug one in and restart the app, or type your question.",
+  "mic.already": "Already listening.",
+  "mic.broken": "The microphone isn't working right now. Try Talk again, or type your question.",
+  "tutor.chosen.help": "Now write your problem on the board and ask for the next step.",
+  "tutor.chosen.practice": "Now write a problem on the board and ask for one like it.",
+  "tutor.chosen.quiz": "Press Start quiz, or just say or type “I'm ready”.",
+  "tutor.quizSource": "Problems come from the worksheets you tick in step 1, or the assistant makes some up.",
+  "tutor.progress": "Problem {n} of {total} · {score} right on the first try",
+  "tutor.last": "Last quiz: {score} right on the first try. Press Start quiz to go again.",
+  "tutor.learning": "Learning: {topic}",
+  "tutor.badge.quiz": "quiz · {n} of {total}",
+  "tutor.running": "A quiz is already running. Write your answer on the board.",
+  "tutor.started": "Quiz started! Say or type “I'm ready” and the assistant will read out the first problem.",
+  "tutor.stopped": "Quiz stopped.",
+  "tutor.fail.mode": "Couldn't change how the assistant helps. {hint}",
+  "tutor.fail.start": "Couldn't start the quiz. {hint}",
+  "tutor.fail.stop": "Couldn't stop the quiz. {hint}",
+  "tutor.confirmStop": "Waiting for yes/no to end the quiz",
+
+  // ---- more tools
+  "more.cameraView": "Camera view",
+  "more.linedUp": "Lined-up",
+  "more.raw": "Raw camera",
+  "more.showInk": "Show detected drawings",
+  "more.drawings": "Drawings:",
+  "more.camera": "Camera:",
+  "more.lastAnswer": "Last answer:",
+  "more.search": "Search your files",
+  "more.searchButton": "Search",
+  "search.placeholder.math": "e.g. fractions",
+  "search.placeholder.biology": "e.g. autoclave",
+  "more.settings": "Settings",
+  "more.log": "Activity log",
+  "config.profile": "Subject",
+  "config.language": "Answer language",
+  "config.current_language": "Answering in right now",
+  "config.vlm_model": "AI model",
+  "config.vlm_backend": "AI model runs on",
+  "config.vlm_base_url": "AI model address",
+  "config.embed_model": "File search model",
+  "config.rag_top_k": "File passages per answer",
+  "config.whisper_model": "Speech-to-text model",
+  "config.listen_mode": "Microphone mode",
+  "config.wake_word": "Wake word",
+  "config.tts_backend": "Voice",
+  "config.tts_voice": "Voice name",
+  "config.camera_index": "Camera number",
+  "config.camera_size": "Camera picture size",
+  "config.projector_size": "Projector size",
+  "config.checkerboard": "Checkerboard inner corners",
+  "value.profile.math": "Math",
+  "value.profile.biology": "Biology",
+  "value.language.auto": "Auto (the language the question is asked in)",
+  "value.language.en": "English",
+  "value.language.es": "Spanish",
+  "value.listen_mode.push": "Press Talk (or Space on the projector page)",
+  "value.listen_mode.wake": "Always listening: say “{word}” first",
+  "value.tts_backend.edge": "Online voice (needs internet)",
+  "value.tts_backend.pyttsx3": "Computer voice (works offline)",
+  "value.tts_backend.say": "Mac voice (works offline)",
+  "value.tts_backend.none": "Off (answers are only written)",
+
+  // ---- more tools: phones and tablets (LAN mode, on the laptop only)
+  "phone.title": "Use a phone or tablet",
+  "phone.hint": "On the same Wi-Fi, scan the code with the phone's camera, or type the address and then the PIN.",
+  "phone.qrLabel": "QR code that opens the dashboard on a phone",
+  "phone.pin": "PIN",
+  "phone.noNetwork": "This laptop isn't on a network. Join the classroom Wi-Fi.",
+  "phone.otherUrls": "Other addresses: {urls}",
+  "phone.count.none": "No phones connected",
+  "phone.count.one": "{n} phone or tablet connected",
+  "phone.count.other": "{n} phones or tablets connected",
+  "phone.locked.one": "Too many wrong PINs: nobody can join for 1 minute.",
+  "phone.locked.other": "Too many wrong PINs: nobody can join for {n} minutes.",
+  "phone.rotate": "New PIN",
+  "phone.disconnect": "Disconnect all phones",
+  "phone.rotateHint": "New PIN signs every phone out. Every restart makes a new PIN too.",
+  "phone.confirmRotate": "Make a new PIN? Every phone is signed out and has to join again.",
+  "phone.confirmDisconnect": "Disconnect every phone? The PIN stays the same.",
+  "phone.rotated": "New PIN made. Every phone was signed out.",
+  "phone.disconnected": "Every phone was disconnected.",
+  "phone.rotateFailed": "Couldn't make a new PIN. {hint}",
+  "phone.disconnectFailed": "Couldn't disconnect the phones. {hint}",
+
+  // ---- join page (a phone typing the PIN)
+  "join.title": "Join the Whiteboard Assistant",
+  "join.heading": "Join the Whiteboard Assistant",
+  "join.hint": "Type the 6-digit PIN shown on the teacher's laptop, under More tools.",
+  "join.label": "PIN",
+  "join.submit": "Join",
+  "join.error": "That PIN didn't work. Check it on the laptop and try again.",
+  "join.locked": "Too many wrong PINs. Wait a few minutes, then try again.",
+  "join.lockedMinutes.one": "Too many wrong PINs. Try again in 1 minute.",
+  "join.lockedMinutes.other": "Too many wrong PINs. Try again in {n} minutes.",
+  "join.lockedSeconds.one": "Too many wrong PINs. Try again in 1 second.",
+  "join.lockedSeconds.other": "Too many wrong PINs. Try again in {n} seconds.",
+  "join.ready": "You can try again now.",
+  "join.help": "On the same Wi-Fi as the laptop? Scanning the QR code on the laptop joins without typing.",
+
+  // ---- projector page
+  "proj.title": "Whiteboard Assistant – projector",
+  "proj.idle": "Ready – press Space to talk",
+  "proj.listening": "Listening…",
+  "proj.transcribing": "Writing it down…",
+  "proj.thinking": "Thinking…",
+  "proj.speaking": "Answering…",
+  "proj.busy": "Still busy – wait a moment",
+  "proj.offline": "Not connected",
+  "proj.notSent": "Not connected – question not sent",
+  "proj.quiz": "Quiz · problem {n} of {total}",
+  "proj.typePlaceholder": "Type a question, Enter to send, Esc to cancel",
+  "proj.debug.connecting": "socket: connecting",
+  "proj.debug.connected": "socket: connected",
+  "proj.debug.disconnected": "socket: disconnected",
+  "proj.debug.error": "socket: error: {message}",
+  "proj.debug.noClient": "socket: socket.io client not loaded",
+  "proj.debug.noEvents": "(no events yet)",
+};
+
+const ES = {
+  "page.title": "Asistente del pizarrón",
+  "app.name": "Asistente del pizarrón",
+  "app.kicker": "bitácora",
+  "app.openProjector": "Abrir la página del proyector ↗",
+  "lang.group": "Idioma",
+  "lang.en": "English",
+  "lang.es": "Español",
+  "lang.auto": "Auto",
+  "lang.auto.title": "Contesta en el mismo idioma en que le preguntan",
+  "lang.failed": "No se pudo cambiar el idioma. Revisa que el asistente siga funcionando (si se cerró, vuelve a iniciar el asistente) y vuelve a intentarlo.",
+  "conn.connecting": "Conectando…",
+  "conn.connected": "Conectado",
+  "conn.polling": "Conectado (se actualiza cada pocos segundos)",
+  "conn.offline": "Sin conexión",
+  "conn.unreachable": "No hay conexión con el asistente. Revisa que siga funcionando (si se cerró, vuelve a iniciar el asistente); esta página se vuelve a conectar sola.",
+  "footer.running": "encendido desde hace",
+  "dur.s": "{s} s",
+  "dur.ms": "{m} min {s} s",
+  "dur.hm": "{h} h {m} min",
+  "hint.offline": "Revisa que el asistente siga funcionando (si se cerró, vuelve a iniciar el asistente) y vuelve a intentarlo.",
+
+  "tabs.label": "Pasos",
+  "tab.files.math": "Ejercicios y apuntes",
+  "tab.files.biology": "Archivos de estudio",
+  "tab.board": "Pizarrón",
+  "tab.ask": "Preguntar",
+  "tab.more": "Más herramientas",
+  "tab.more.sub": "para cuando algo falla",
+
+  "state.idle": "Listo. Haz una pregunta aquí abajo o en el pizarrón.",
+  "state.listening": "Escuchando… haz tu pregunta ahora. El micrófono se apaga solo en unos 5 segundos.",
+  "state.transcribing": "Escribiendo lo que dijiste…",
+  "state.thinking": "Pensando en tu pregunta…",
+  "state.speaking": "Contestando en el pizarrón…",
+  "state.busy": "Todavía está con la pregunta anterior, así que espera un momento.",
+  "badge.ready": "listo",
+  "badge.offline": "sin conexión",
+  "badge.ask.listening": "escuchando…",
+  "badge.ask.transcribing": "escribiendo…",
+  "badge.ask.thinking": "pensando…",
+  "badge.ask.speaking": "contestando…",
+
+  "files.hint.math": "Agrega tus hojas de ejercicios y tus apuntes. Antes de contestar, el asistente busca en los archivos que marques, y de ahí también saca los problemas del quiz. Desmarca un archivo para dejarlo fuera.",
+  "files.hint.biology": "Agrega tus apuntes, protocolos o artículos. Antes de contestar, el asistente busca en los archivos que marques. Desmarca un archivo para dejarlo fuera.",
+  "files.drop": "Arrastra tus archivos aquí o <u>elige archivos</u>",
+  "files.dropSub.math": "PDF · Word · bancos de preguntas en CSV · texto · fotos de hojas de ejercicios",
+  "files.dropSub.biology": "PDF · Word · PowerPoint · CSV · texto · fotos de apuntes",
+  "files.none": "Todavía no hay archivos.",
+  "files.useAll": "Usar todos los archivos",
+  "files.noFiles.math": "Todavía no hay hojas de ejercicios ni apuntes. El asistente contesta con lo que ya sabe e inventa los problemas del quiz.",
+  "files.noFiles.biology": "Todavía no hay archivos. El asistente contesta con lo que ya sabe.",
+  "files.noneTicked.math": "No hay archivos marcados. El asistente no va a ver tus hojas de ejercicios ni tus apuntes.",
+  "files.noneTicked.biology": "No hay archivos marcados. El asistente no va a ver tus apuntes.",
+  "files.usingAll.one": "El asistente usa tu único archivo al contestar.",
+  "files.usingAll.other": "El asistente usa los {n} archivos al contestar.",
+  "files.usingSome": "El asistente usa {active} de {total} archivos al contestar.",
+  "files.badge.add.math": "agrega ejercicios",
+  "files.badge.add.biology": "agrega tus apuntes",
+  "files.badge.noneTicked": "ninguno marcado",
+  "files.badge.all": "{n} en uso",
+  "files.badge.some": "{active} de {total} en uso",
+  "files.badge.answers.one": "1 archivo con respuestas",
+  "files.badge.answers.other": "{n} archivos con respuestas",
+  "files.kind.pdf": "Documento PDF",
+  "files.kind.docx": "Documento de Word",
+  "files.kind.pptx": "Presentación",
+  "files.kind.csv": "Hoja de cálculo (CSV)",
+  "files.kind.md": "Apuntes",
+  "files.kind.txt": "Archivo de texto",
+  "files.kind.photo": "Foto (se leyó el texto de la imagen)",
+  "files.kind.other": "Archivo",
+  "files.sections.one": "{n} sección",
+  "files.sections.other": "{n} secciones",
+  "files.meta": "{kind} · {sections}",
+  "files.remove": "Quitar",
+  "files.removeLabel": "Quitar {name}",
+  "files.confirmRemove": "¿Quitar “{name}”? El asistente ya no lo va a usar.",
+  "files.removed": "Se quitó {name}.",
+  "files.removeFailed": "No se pudo quitar {name}. {hint}",
+  "files.selectionFailed": "No se pudo guardar qué archivos están marcados. {hint}",
+  "files.reading.one": "Leyendo {n} archivo… la primera vez puede tardar hasta un minuto.",
+  "files.reading.other": "Leyendo {n} archivos… la primera vez puede tardar hasta un minuto.",
+  "files.added.one": "Se agregó {names}.",
+  "files.added.other": "Se agregaron {names}.",
+  "files.unread.one": "No se pudo leer {list}.",
+  "files.unread.other": "No se pudieron leer {list}.",
+  "files.fail.unsupported": "{name} (ese tipo de archivo no se puede leer)",
+  "files.fail.scan": "{name} (parece un escaneo sin texto; escríbelo en la computadora o sube una foto más clara)",
+  "files.fail.other": "{name} (intenta guardarlo otra vez como PDF o como archivo de texto)",
+  "files.tooBig": "Eso pesa demasiado para subirlo (50 MB como máximo).",
+  "files.uploadFailed": "No se pudo subir. {hint}",
+  "files.hasAnswers": "Este archivo todavía tiene sus respuestas. Vuelve a subirlo para que el asistente no las pueda ver.",
+  "search.none": "Nada en tus archivos marcados coincide con eso.",
+  "search.failed": "La búsqueda no funcionó. {hint}",
+
+  "board.frameAlt": "Lo que ve la cámara en el pizarrón",
+  "board.noPicture": "Todavía no hay imagen de la cámara",
+  "board.noPictureTip": "Sigue el consejo sobre la cámara en la lista que está junto a esta imagen.",
+  "board.caption": "Los recuadros naranjas son dibujos que el asistente puede señalar.",
+  "board.checks": "Revisión del sistema",
+  "board.calibrate": "Alinear cámara y proyector",
+  "board.calibrateHint": "Antes de presionarlo, abre la página del proyector en el proyector y presiona <kbd>F</kbd> para verla en pantalla completa. En el pizarrón aparece un tablero de ajedrez unos segundos, así que no muevas la cámara. Vuelve a hacerlo cada vez que se mueva la cámara o el proyector.",
+  "board.fps": "{n} imágenes/s",
+  "board.latency": "{n} s",
+  "badge.board.noCamera": "no hay cámara",
+  "badge.board.glare": "reflejo en el pizarrón",
+  "badge.board.notLinedUp": "falta alinear",
+  "badge.board.ready": "listo",
+  "check.ok": "Bien",
+  "check.attention": "Necesita atención",
+  "check.camera.ok": "La cámara funciona",
+  "check.camera.bad": "No se encontró la cámara",
+  "check.camera.fix": "Revisa que la cámara esté conectada y que no esté abierta en otra app (Zoom, Teams, FaceTime). En una Mac, activa el asistente (o Terminal, si lo inicias desde ahí) en Configuración del Sistema → Privacidad y seguridad → Cámara. En Windows, activa “Permitir que las aplicaciones de escritorio accedan a la cámara” en Configuración → Privacidad y seguridad → Cámara. Luego vuelve a iniciar el asistente.",
+  "check.glare.ok": "No hay reflejos en el pizarrón",
+  "check.glare.small": "Hay un pequeño punto brillante en el pizarrón",
+  "check.glare.smallHow": "Lo que escribas ahí puede no verse. Si crece, lee la sección “Checking for glare” de la guía del equipo (docs/HARDWARE_SETUP.md, en inglés).",
+  "check.glare.severe": "Reflejo en el pizarrón: mueve la cámara",
+  "check.glare.severeHow": "La luz del proyector rebota en el pizarrón y le llega a la cámara, y lo que se escriba en ese punto no se toma en cuenta. Mueve la cámara más hacia afuera, del mismo lado que la lente del proyector; pon el proyector en modo eco o apaga las luces cerca del pizarrón. Lee la sección “Checking for glare” de la guía del equipo (docs/HARDWARE_SETUP.md, en inglés).",
+  "check.calib.ok": "La cámara y el proyector están alineados",
+  "check.calib.warn": "Todavía no están alineados",
+  "check.calib.fix": "Presiona “Alinear cámara y proyector” aquí abajo.",
+  "check.files.loaded": "Tus archivos están cargados",
+  "check.files.missing.math": "Todavía no hay hojas de ejercicios ni apuntes",
+  "check.files.missing.biology": "Todavía no hay archivos de estudio",
+  "check.files.addSome": "Agrega algunos en el paso 1.",
+  "check.files.noneTicked.math": "No hay hojas de ejercicios ni apuntes marcados",
+  "check.files.noneTicked.biology": "No hay archivos de estudio marcados",
+  "check.files.tickOne": "Marca al menos un archivo en el paso 1; si no, las respuestas no los van a usar.",
+  "check.files.using.one": "Usando {active} de {total} archivo",
+  "check.files.using.other": "Usando {active} de {total} archivos",
+  "check.model.demo": "Modo de demostración: las respuestas son de mentira",
+  "check.model.demoFix": "Pídele a quien instaló el asistente que lo vuelva a iniciar con el modelo de IA de verdad.",
+  "check.model.ok": "Modelo de IA elegido: {model}",
+  "check.model.hint": "Si una respuesta dice que no pudo conectarse con el modelo de IA, abre Ollama y vuelve a preguntar.",
+  "check.mic.ok": "Micrófono listo",
+  "check.mic.bad": "No se encontró un micrófono",
+  "check.mic.fix": "Todavía puedes escribir tus preguntas.",
+  "check.voice.off": "Las respuestas se muestran, pero no se leen en voz alta",
+  "check.voice.ok": "Las respuestas se leen en voz alta en la página del proyector (haz clic una vez en ella para que pueda sonar)",
+  "calib.showing": "Mostrando el tablero de ajedrez en el pizarrón… no muevas la cámara.",
+  "calib.ok": "¡Listo, quedó alineado! El asistente ya sabe dónde está el pizarrón.",
+  "calib.notSaved": "Quedó alineado, pero no se pudo guardar; vuelve a hacerlo después de reiniciar el asistente.",
+  "calib.noCamera": "La cámara todavía no funciona, así que no se puede alinear. Primero arregla la cámara (mira la lista).",
+  "calib.busy": "Ya se está alineando, espera un momento…",
+  "calib.notDetected": "No se vio el tablero de ajedrez. Revisa que la página del proyector esté abierta en el proyector en pantalla completa (presiona F ahí), que la cámara vea todo el pizarrón y que no haya demasiada luz en el salón, y vuelve a intentarlo.",
+  "calib.failed": "No se pudo alinear. Revisa que la página del proyector esté abierta en el proyector en pantalla completa y que el asistente siga funcionando, y vuelve a intentarlo.",
+
+  "modes.label": "¿Cómo quieres que te ayude el asistente?",
+  "mode.help.title": "Ayúdame paso a paso",
+  "mode.help.sub": "Te explico solo el siguiente paso, nunca la respuesta.",
+  "mode.practice.title": "Dame un problema parecido",
+  "mode.practice.sub": "Invento uno nuevo muy parecido al tuyo.",
+  "mode.quiz.title": "Hazme un quiz",
+  "mode.quiz.sub": "Te leo problemas y reviso tus respuestas.",
+  "mode.help": "ayuda paso a paso",
+  "mode.practice": "problema parecido",
+  "mode.quiz": "quiz",
+  "quiz.start": "Empezar quiz",
+  "quiz.stop": "Terminar quiz",
+  "ask.label": "Tu pregunta",
+  "ask.placeholder.math": "Pregunta sobre lo que escribiste en el pizarrón o sobre lo que quieres aprender…",
+  "ask.placeholder.biology": "Pregunta sobre tu dibujo o tus apuntes…",
+  "ask.send": "Preguntar",
+  "ask.talk": "Hablar",
+  "ask.empty": "Las respuestas van a aparecer aquí y en el proyector. En la página del proyector, haz clic una vez para que pueda sonar; luego presiona <kbd>F</kbd> para pantalla completa, <kbd>Espacio</kbd> para hablar o <kbd>T</kbd> para escribir una pregunta.",
+  "ask.try": "por ejemplo:",
+  "ask.sent": "¡Enviada! Mira el pizarrón para ver la respuesta.",
+  "ask.stillAnswering": "Todavía está contestando la pregunta anterior. Vuelve a intentarlo en un momento.",
+  "ask.sendFailed": "No se pudo enviar tu pregunta. {hint}",
+  "examples.math.1": "Quiero aprender a resolver fracciones",
+  "examples.math.2": "Ayúdame con el siguiente paso",
+  "examples.math.3": "Hazme un quiz de ecuaciones",
+  "examples.biology.1": "¿A mi diagrama de flujo le falta un paso estéril?",
+  "examples.biology.2": "¿Por qué el agua que escurre del Leptosol enturbia la laguna?",
+  "examples.biology.3": "¿Dónde debo tomar mis muestras de agua?",
+  "work.math": "tu trabajo",
+  "work.biology": "tu dibujo",
+  "turn.you": "Preguntaste",
+  "turn.assistant": "Asistente",
+  "turn.thinking": "Pensando…",
+  "note.learning": "aprendiendo algo nuevo",
+  "note.failed": "algo salió mal, así que esta no es una respuesta de verdad",
+  "note.quizWrong": "esa respuesta todavía no está bien",
+  "note.mistakeIn": "encontró un error en {work}",
+  "note.mistake": "encontró un error",
+  "note.pointed": "señaló {work}",
+  "note.correct": "¡todo bien!",
+  "note.read": "leyó {sources}",
+  "note.noFiles": "no usó tus archivos",
+  "note.noBoard": "no pudo ver el pizarrón",
+  "note.took": "tardó {n} s",
+  "mic.starting": "Preparando el micrófono…",
+  "mic.didntStart": "El micrófono no se encendió. Vuelve a presionar Hablar o escribe tu pregunta.",
+  "mic.none": "No se encontró un micrófono. Conecta uno y vuelve a iniciar la app, o escribe tu pregunta.",
+  "mic.already": "Ya está escuchando.",
+  "mic.broken": "El micrófono no funciona en este momento. Vuelve a presionar Hablar o escribe tu pregunta.",
+  "tutor.chosen.help": "Ahora escribe tu problema en el pizarrón y pide el siguiente paso.",
+  "tutor.chosen.practice": "Ahora escribe un problema en el pizarrón y pide uno parecido.",
+  "tutor.chosen.quiz": "Presiona Empezar quiz, o nada más di o escribe “¡Listo!”.",
+  "tutor.quizSource": "Los problemas salen de las hojas de ejercicios que marques en el paso 1, o el asistente inventa algunos.",
+  "tutor.progress": "Problema {n} de {total} · {score} bien a la primera",
+  "tutor.last": "Último quiz: {score} bien a la primera. Presiona Empezar quiz para hacer otro.",
+  "tutor.learning": "Aprendiendo: {topic}",
+  "tutor.badge.quiz": "quiz · {n} de {total}",
+  "tutor.running": "Ya hay un quiz en marcha. Escribe tu respuesta en el pizarrón.",
+  "tutor.started": "¡Empezó el quiz! Di o escribe “¡Listo!” y el asistente te va a leer el primer problema.",
+  "tutor.stopped": "Se terminó el quiz.",
+  "tutor.fail.mode": "No se pudo cambiar cómo te ayuda el asistente. {hint}",
+  "tutor.fail.start": "No se pudo empezar el quiz. {hint}",
+  "tutor.fail.stop": "No se pudo terminar el quiz. {hint}",
+  "tutor.confirmStop": "Esperando un «sí» o un «no» para terminar el quiz",
+
+  "more.cameraView": "Vista de la cámara",
+  "more.linedUp": "Alineada",
+  "more.raw": "Cámara sin ajustar",
+  "more.showInk": "Mostrar los dibujos detectados",
+  "more.drawings": "Dibujos:",
+  "more.camera": "Cámara:",
+  "more.lastAnswer": "Última respuesta:",
+  "more.search": "Buscar en tus archivos",
+  "more.searchButton": "Buscar",
+  "search.placeholder.math": "p. ej. fracciones",
+  "search.placeholder.biology": "p. ej. autoclave",
+  "more.settings": "Configuración",
+  "more.log": "Registro de actividad",
+  "config.profile": "Materia",
+  "config.language": "Idioma de las respuestas",
+  "config.current_language": "Contestando ahora en",
+  "config.vlm_model": "Modelo de IA",
+  "config.vlm_backend": "El modelo de IA corre en",
+  "config.vlm_base_url": "Dirección del modelo de IA",
+  "config.embed_model": "Modelo para buscar en tus archivos",
+  "config.rag_top_k": "Partes de archivos por respuesta",
+  "config.whisper_model": "Modelo de voz a texto",
+  "config.listen_mode": "Modo del micrófono",
+  "config.wake_word": "Palabra para activarlo",
+  "config.tts_backend": "Voz",
+  "config.tts_voice": "Nombre de la voz",
+  "config.camera_index": "Número de cámara",
+  "config.camera_size": "Tamaño de la imagen de la cámara",
+  "config.projector_size": "Tamaño del proyector",
+  "config.checkerboard": "Esquinas internas del tablero de ajedrez",
+  "value.profile.math": "Matemáticas",
+  "value.profile.biology": "Biología",
+  "value.language.auto": "Automático (el mismo idioma en que le preguntan)",
+  "value.language.en": "Inglés",
+  "value.language.es": "Español",
+  "value.listen_mode.push": "Presiona Hablar (o Espacio en la página del proyector)",
+  "value.listen_mode.wake": "Siempre escuchando: primero di “{word}”",
+  "value.tts_backend.edge": "Voz en línea (necesita internet)",
+  "value.tts_backend.pyttsx3": "Voz de la computadora (funciona sin internet)",
+  "value.tts_backend.say": "Voz de la Mac (funciona sin internet)",
+  "value.tts_backend.none": "Apagada (las respuestas solo se escriben)",
+
+  "phone.title": "Usar un celular o una tableta",
+  "phone.hint": "En la misma red Wi-Fi, escanea el código con la cámara del celular, o escribe la dirección y luego el PIN.",
+  "phone.qrLabel": "Código QR que abre el panel en un celular",
+  "phone.pin": "Código PIN",
+  "phone.noNetwork": "Esta laptop no está conectada a una red. Conéctala al Wi-Fi del salón.",
+  "phone.otherUrls": "Otras direcciones: {urls}",
+  "phone.count.none": "No hay celulares ni tabletas conectados",
+  "phone.count.one": "{n} dispositivo conectado",
+  "phone.count.other": "{n} dispositivos conectados",
+  "phone.locked.one": "Demasiados PIN incorrectos: nadie puede entrar durante 1 minuto.",
+  "phone.locked.other": "Demasiados PIN incorrectos: nadie puede entrar durante {n} minutos.",
+  "phone.rotate": "PIN nuevo",
+  "phone.disconnect": "Desconectar todos los celulares",
+  "phone.rotateHint": "Un PIN nuevo desconecta todos los celulares. Cada vez que se reinicia el asistente también hay un PIN nuevo.",
+  "phone.confirmRotate": "¿Hacer un PIN nuevo? Todos los celulares se desconectan y tienen que volver a entrar.",
+  "phone.confirmDisconnect": "¿Desconectar todos los celulares? El PIN sigue siendo el mismo.",
+  "phone.rotated": "Listo, hay un PIN nuevo. Se desconectaron todos los celulares.",
+  "phone.disconnected": "Se desconectaron todos los celulares.",
+  "phone.rotateFailed": "No se pudo hacer un PIN nuevo. {hint}",
+  "phone.disconnectFailed": "No se pudieron desconectar los celulares. {hint}",
+
+  "join.title": "Entrar al Asistente del pizarrón",
+  "join.heading": "Entrar al Asistente del pizarrón",
+  "join.hint": "Escribe el PIN de 6 dígitos que aparece en la laptop del maestro, en Más herramientas.",
+  "join.label": "Código PIN",
+  "join.submit": "Entrar",
+  "join.error": "Ese PIN no funcionó. Revísalo en la laptop y vuelve a intentarlo.",
+  "join.locked": "Demasiados PIN incorrectos. Espera unos minutos y vuelve a intentarlo.",
+  "join.lockedMinutes.one": "Demasiados PIN incorrectos. Vuelve a intentarlo en 1 minuto.",
+  "join.lockedMinutes.other": "Demasiados PIN incorrectos. Vuelve a intentarlo en {n} minutos.",
+  "join.lockedSeconds.one": "Demasiados PIN incorrectos. Vuelve a intentarlo en 1 segundo.",
+  "join.lockedSeconds.other": "Demasiados PIN incorrectos. Vuelve a intentarlo en {n} segundos.",
+  "join.ready": "Ya puedes volver a intentarlo.",
+  "join.help": "¿Estás en el mismo Wi-Fi que la laptop? Si escaneas el código QR de la laptop, entras sin escribir nada.",
+
+  "proj.title": "Asistente del pizarrón – proyector",
+  "proj.idle": "Listo – presiona Espacio para hablar",
+  "proj.listening": "Escuchando…",
+  "proj.transcribing": "Escribiendo…",
+  "proj.thinking": "Pensando…",
+  "proj.speaking": "Contestando…",
+  "proj.busy": "Ocupado – espera un momento",
+  "proj.offline": "Sin conexión",
+  "proj.notSent": "Sin conexión – no se envió la pregunta",
+  "proj.quiz": "Quiz · problema {n} de {total}",
+  "proj.typePlaceholder": "Escribe una pregunta: Enter para enviar, Esc para cancelar",
+  "proj.debug.connecting": "conexión: conectando",
+  "proj.debug.connected": "conexión: conectada",
+  "proj.debug.disconnected": "conexión: desconectada",
+  "proj.debug.error": "conexión: error: {message}",
+  "proj.debug.noClient": "conexión: no se cargó el cliente de socket.io",
+  "proj.debug.noEvents": "(todavía no hay eventos)",
+};
+
+export const STRINGS = Object.freeze({ en: Object.freeze(EN), es: Object.freeze(ES) });
+export const LANGUAGES = Object.freeze(["en", "es"]);
+
+let current = "en";
+let applied = false;
+const context = { profile: "math" };
+// Nodes whose text JS writes: re-rendered on every language or subject change.
+const bound = new Map();
+const listeners = [];
+
+export function language() {
+  return current;
+}
+
+export function has(key) {
+  return Object.hasOwn(EN, key);
+}
+
+// An unknown key comes back as itself, so a typo shows on screen (and in the tests) instead of a blank.
+export function t(key, vars = {}) {
+  const text = STRINGS[current][key] ?? EN[key];
+  if (text === undefined) return key;
+  return text.replace(/\{(\w+)\}/g, (slot, name) => (Object.hasOwn(vars, name) ? String(vars[name]) : slot));
+}
+
+// English and Spanish both use "one" only for exactly 1 (0 archivos, 0 files).
+export function plural(key, n, vars = {}) {
+  return t(`${key}.${n === 1 ? "one" : "other"}`, { n, ...vars });
+}
+
+// The language the pages should show for a /api/language body: a fixed setting, or the latest reply's language.
+export function languageFor(body) {
+  if (!body) return null;
+  if (LANGUAGES.includes(body.setting)) return body.setting;
+  return LANGUAGES.includes(body.current) ? body.current : null;
+}
+
+function resolve(key) {
+  return key.replace(/\{(\w+)\}/g, (slot, name) => context[name] ?? slot);
+}
+
+const MARKUP = /<(kbd|u)>([^<]*)<\/\1>/g;
+
+// Only <kbd> and <u> from this file's own strings become elements; nothing is ever parsed as HTML.
+export function renderRich(node, text) {
+  if (!text.includes("<")) {
+    node.textContent = text;
+    return;
+  }
+  const parts = [];
+  let last = 0;
+  for (const found of text.matchAll(MARKUP)) {
+    if (found.index > last) parts.push(text.slice(last, found.index));
+    const tag = document.createElement(found[1]);
+    tag.textContent = found[2];
+    parts.push(tag);
+    last = found.index + found[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  node.replaceChildren(...parts);
+}
+
+const ATTRIBUTES = [
+  ["[data-i18n-placeholder]", "i18nPlaceholder", "placeholder"],
+  ["[data-i18n-title]", "i18nTitle", "title"],
+  ["[data-i18n-alt]", "i18nAlt", "alt"],
+  ["[data-i18n-aria-label]", "i18nAriaLabel", "aria-label"],
+];
+
+export function translatePage() {
+  for (const node of document.querySelectorAll("[data-i18n]")) renderRich(node, t(resolve(node.dataset.i18n)));
+  for (const [selector, data, attr] of ATTRIBUTES) {
+    for (const node of document.querySelectorAll(selector)) {
+      const value = t(resolve(node.dataset[data]));
+      if (attr in node) node[attr] = value;
+      else node.setAttribute(attr, value);
+    }
+  }
+  for (const [node, render] of bound) node.textContent = render();
+}
+
+// JS takes a node over from the template: its data-i18n text no longer applies. A function is re-run on every
+// language change, so a note or badge already on screen switches language with the rest of the page.
+export function bindText(node, text) {
+  delete node.dataset.i18n;
+  if (typeof text === "function") {
+    bound.set(node, text);
+    node.textContent = text();
+  } else {
+    bound.delete(node);
+    node.textContent = text ?? "";
+  }
+}
+
+export function onLanguageChange(fn) {
+  listeners.push(fn);
+}
+
+// Returns whether anything changed; the first call always renders, so the template's text comes from here too.
+export function setLanguage(next) {
+  const value = LANGUAGES.includes(next) ? next : "en";
+  if (applied && value === current) return false;
+  applied = true;
+  current = value;
+  document.documentElement.lang = value;
+  translatePage();
+  for (const fn of listeners) fn(value);
+  return true;
+}
+
+export function setContext(patch) {
+  Object.assign(context, patch);
+  translatePage();
+}

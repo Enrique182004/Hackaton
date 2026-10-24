@@ -2,56 +2,200 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>SAR Assistant - Precharge</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/precharge.css') }}">
+  <title data-i18n="page.title">Whiteboard Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  {# Never render-blocking: on a captive or offline venue network first paint must not wait on Google. #}
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Caveat:wght@500;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Caveat:wght@500;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap"></noscript>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+  {% if lan_enabled %}
+  {# Phone mode only: Add to Home Screen, and the service worker that dashboard/phone.js registers. #}
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
+  <meta name="theme-color" content="#23497d">
+  <link rel="icon" href="{{ url_for('static', filename='icons/icon.svg') }}" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
+  <meta name="apple-mobile-web-app-title" content="Whiteboard">
+  {% endif %}
 </head>
-<body>
-  <header><h1>SAR Whiteboard Assistant</h1><span id="conn" class="pill">socket: connecting</span></header>
-  <main>
-    <section class="card">
-      <h2>Knowledge upload</h2>
-      <div id="drop" tabindex="0">
-        <p>Drop files here or click to choose</p>
-        <small>.pdf .txt .md .csv .docx .pptx .png .jpg .jpeg</small>
-        <input id="file-input" type="file" multiple hidden accept=".pdf,.txt,.md,.csv,.docx,.pptx,.png,.jpg,.jpeg">
+<body data-projector-width="{{ projector_width }}" data-projector-height="{{ projector_height }}" data-lan="{{ '1' if lan_enabled else '0' }}">
+  <div class="page">
+    <header class="masthead">
+      <h1><span data-i18n="app.name">Whiteboard Assistant</span> <span class="kicker" data-i18n="app.kicker">lab notebook</span></h1>
+      <p class="status-line" id="status-line" data-state="idle" role="status" aria-live="polite">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="status-text" data-i18n="conn.connecting">Connecting…</span>
+      </p>
+      {# Hidden until /api/language answers; the language names stay in their own language. #}
+      <div class="lang" id="lang-switch" role="group" aria-label="Language" data-i18n-aria-label="lang.group" hidden>
+        <button type="button" id="lang-en" lang="en" aria-pressed="false" data-i18n="lang.en">English</button>
+        <button type="button" id="lang-es" lang="es" aria-pressed="false" data-i18n="lang.es">Español</button>
+        <button type="button" id="lang-auto" aria-pressed="false" title="Answer in the language the question is asked in" data-i18n-title="lang.auto.title" data-i18n="lang.auto">Auto</button>
       </div>
-      <ul id="upload-results"></ul>
-      <p id="upload-total"></p>
-    </section>
+      <p class="note lang-note" id="lang-msg" role="status"></p>
+      <a class="btn btn-quiet btn-small" href="/" target="sar-projector" rel="noopener" data-i18n="app.openProjector">Open projector page ↗</a>
+    </header>
 
-    <section class="card">
-      <h2>Status</h2>
-      <dl id="status-list"><dt>server</dt><dd>unknown</dd></dl>
-    </section>
+    <nav class="steps" role="tablist" aria-label="Steps" data-i18n-aria-label="tabs.label">
+      <button class="step-tab" role="tab" id="tab-files" aria-controls="panel-files" aria-selected="false" data-step="files">
+        <span class="num" aria-hidden="true">1</span>
+        <span class="step-text"><b id="files-tab-name" data-i18n="tab.files.{profile}">Worksheets &amp; notes</b><small id="badge-files">–</small></span>
+      </button>
+      <button class="step-tab" role="tab" id="tab-board" aria-controls="panel-board" aria-selected="false" data-step="board">
+        <span class="num" aria-hidden="true">2</span>
+        <span class="step-text"><b data-i18n="tab.board">Board</b><small id="badge-board">–</small></span>
+      </button>
+      <button class="step-tab" role="tab" id="tab-ask" aria-controls="panel-ask" aria-selected="true" data-step="ask">
+        <span class="num" aria-hidden="true">3</span>
+        <span class="step-text"><b data-i18n="tab.ask">Ask</b><small id="badge-ask">–</small></span>
+      </button>
+      <button class="step-tab step-tab-more" role="tab" id="tab-more" aria-controls="panel-more" aria-selected="false" data-step="more">
+        <span class="num" aria-hidden="true">✎</span>
+        <span class="step-text"><b data-i18n="tab.more">More tools</b><small data-i18n="tab.more.sub">for fixing things</small></span>
+      </button>
+    </nav>
 
-    <section class="card">
-      <h2>Controls</h2>
-      <div class="row">
-        <button id="btn-calibrate">Calibrate</button>
-        <button id="btn-listen">Listen</button>
-      </div>
-      <p id="control-result" class="muted"></p>
-      <form id="ask-form" class="row">
-        <input id="ask-text" type="text" placeholder="Ask the assistant..." autocomplete="off">
-        <button type="submit">Ask</button>
-      </form>
-    </section>
+    <main>
+      <section class="panel" role="tabpanel" id="panel-files" aria-labelledby="tab-files" hidden>
+        {# Math wording (the default subject); i18n.js swaps in the subject and language once the server says. #}
+        <p class="hint" id="files-hint" data-i18n="files.hint.{profile}">Add your worksheets and notes. Before answering, the assistant looks in the files you tick, and quiz problems come from them too. Untick a file to leave it out.</p>
+        <label class="drop" id="drop">
+          <input type="file" id="file-input" multiple accept=".pdf,.txt,.md,.csv,.docx,.pptx,.png,.jpg,.jpeg">
+          <span class="drop-title" data-i18n="files.drop">Drag files here, or <u>choose files</u></span>
+          <span class="drop-sub" id="drop-sub" data-i18n="files.dropSub.{profile}">PDF · Word · CSV quiz banks · text · photos of worksheets</span>
+        </label>
+        <p class="note" id="upload-msg" role="status"></p>
+        <div class="files-head">
+          <p id="files-summary" data-i18n="files.none">No files yet.</p>
+          <button type="button" class="link-btn" id="use-all-btn" data-i18n="files.useAll" hidden>Use all files</button>
+        </div>
+        <ul class="files" id="files"></ul>
+      </section>
 
-    <section class="card wide">
-      <h2>Camera preview</h2>
-      <div class="previews">
-        <figure><img id="frame-raw" alt="raw camera frame"><figcaption>Raw</figcaption></figure>
-        <figure><img id="frame-warped" alt="warped camera frame"><figcaption>Warped</figcaption></figure>
-      </div>
-    </section>
+      <section class="panel" role="tabpanel" id="panel-board" aria-labelledby="tab-board" hidden>
+        <div class="board-grid">
+          <figure class="camera">
+            <div class="viewport" id="viewport" data-live="0">
+              <img id="frame" alt="What the camera sees on the whiteboard" data-i18n-alt="board.frameAlt">
+              <svg id="ink-overlay" preserveAspectRatio="none" aria-hidden="true"></svg>
+              <div class="viewport-empty">
+                <strong data-i18n="board.noPicture">No camera picture yet</strong>
+                <span data-i18n="board.noPictureTip">Follow the camera tip in the checklist next to this picture.</span>
+              </div>
+            </div>
+            <figcaption data-i18n="board.caption">Orange boxes are drawings the assistant can point at.</figcaption>
+          </figure>
+          <div class="board-side">
+            <ul class="checks" id="checks" aria-label="System checks" data-i18n-aria-label="board.checks"></ul>
+            <div class="calibrate">
+              <button type="button" class="btn" id="calibrate-btn" data-i18n="board.calibrate">Line up camera and projector</button>
+              <p class="hint small" data-i18n="board.calibrateHint">Before you press this, open the projector page on the projector and press <kbd>F</kbd> for full screen. A checkerboard flashes on the board for a few seconds, so keep the camera still. Do this again whenever the camera or projector moves.</p>
+              <p class="note" id="calib-msg" role="status"></p>
+            </div>
+          </div>
+        </div>
+      </section>
 
-    <section class="card wide">
-      <h2>Event log</h2>
-      <pre id="log"></pre>
-    </section>
-  </main>
+      <section class="panel" role="tabpanel" id="panel-ask" aria-labelledby="tab-ask">
+        {# Hidden until /api/tutor answers, and for subjects without tutor modes. #}
+        <div class="modes" id="modes" role="group" aria-label="How should the assistant help?" data-i18n-aria-label="modes.label" hidden>
+          <button type="button" class="mode" id="mode-help" aria-pressed="true">
+            <b data-i18n="mode.help.title">Help me step by step</b><small data-i18n="mode.help.sub">I'll explain only the next step, never the answer.</small>
+          </button>
+          <button type="button" class="mode" id="mode-practice" aria-pressed="false">
+            <b data-i18n="mode.practice.title">Give me a similar problem</b><small data-i18n="mode.practice.sub">I'll make up a new one just like yours.</small>
+          </button>
+          <button type="button" class="mode" id="mode-quiz" aria-pressed="false">
+            <b data-i18n="mode.quiz.title">Quiz me</b><small data-i18n="mode.quiz.sub">I'll read out problems and check your answers.</small>
+          </button>
+        </div>
+        <div class="quiz-bar" id="quiz-bar" hidden>
+          <p class="quiz-progress" id="quiz-progress"></p>
+          <p class="quiz-problem" id="quiz-problem" hidden></p>
+          {# The student said "stop" during the quiz: the assistant asked whether to end it and waits for the answer. #}
+          <p class="quiz-confirm" id="quiz-confirm" role="status" data-i18n="tutor.confirmStop" hidden>Waiting for yes/no to end the quiz</p>
+          <button type="button" class="btn btn-small" id="quiz-start-btn" data-i18n="quiz.start">Start quiz</button>
+          <button type="button" class="btn btn-quiet btn-small" id="quiz-stop-btn" data-i18n="quiz.stop" hidden>Stop quiz</button>
+        </div>
+        <form class="ask" id="ask-form">
+          <label class="sr-only" for="ask-input" data-i18n="ask.label">Your question</label>
+          <input id="ask-input" type="text" autocomplete="off" placeholder="Ask about the math on your board, or what you want to learn…" data-i18n-placeholder="ask.placeholder.{profile}">
+          <button class="btn" type="submit" id="ask-btn" data-i18n="ask.send">Ask</button>
+          <button class="btn btn-talk" type="button" id="listen-btn" data-live="0">
+            <span class="mic" aria-hidden="true"></span> <span data-i18n="ask.talk">Talk</span>
+          </button>
+        </form>
+        <p class="note" id="ask-msg" role="status"></p>
+        <div class="ask-extras">
+          {# Filled by ask.js with the examples for the current subject. #}
+          <p class="examples" id="examples"></p>
+          <p class="learn-line" id="learn-line" hidden></p>
+        </div>
+        <ol class="entries" id="timeline" aria-live="polite"></ol>
+        <p class="empty" id="timeline-empty" data-i18n="ask.empty">Answers will appear here and on the projector. On the projector page, click once so it can play sound, then press <kbd>F</kbd> for full screen, <kbd>Space</kbd> to talk, or <kbd>T</kbd> to type a question.</p>
+      </section>
+
+      <section class="panel" role="tabpanel" id="panel-more" aria-labelledby="tab-more" hidden>
+        <div class="more-grid">
+          {% if lan_enabled %}
+          {# Phone mode: dashboard/phone.js shows this only on the laptop itself (GET /api/lan answers only there). #}
+          <section class="more-col phone-card" id="phone-card" aria-labelledby="phone-title" hidden>
+            <h3 id="phone-title" data-i18n="phone.title">Use a phone or tablet</h3>
+            <p class="hint small" data-i18n="phone.hint">On the same Wi-Fi, scan the code with the phone's camera, or type the address and then the PIN.</p>
+            <div class="phone-join">
+              <div class="qr" id="phone-qr" role="img" aria-label="QR code that opens the dashboard on a phone" data-i18n-aria-label="phone.qrLabel"></div>
+              <div class="phone-code">
+                <p class="phone-pin-label" data-i18n="phone.pin">PIN</p>
+                <p class="phone-pin" id="phone-pin">–</p>
+              </div>
+            </div>
+            <p class="phone-url" id="phone-url"></p>
+            <p class="phone-other" id="phone-other" hidden></p>
+            <p class="phone-count" id="phone-count"></p>
+            <p class="note" id="phone-msg" role="status"></p>
+            <div class="phone-actions">
+              <button type="button" class="btn btn-small" id="phone-rotate-btn" data-i18n="phone.rotate">New PIN</button>
+              <button type="button" class="btn btn-quiet btn-small" id="phone-disconnect-btn" data-i18n="phone.disconnect">Disconnect all phones</button>
+            </div>
+            <p class="hint small" data-i18n="phone.rotateHint">New PIN signs every phone out. Every restart makes a new PIN too.</p>
+          </section>
+          {% endif %}
+          <div class="more-col">
+            <h3 data-i18n="more.cameraView">Camera view</h3>
+            <div class="seg" role="group" aria-label="Camera view" data-i18n-aria-label="more.cameraView">
+              <button type="button" aria-pressed="true" data-view="1" data-i18n="more.linedUp">Lined-up</button>
+              <button type="button" aria-pressed="false" data-view="0" data-i18n="more.raw">Raw camera</button>
+            </div>
+            <label class="check-line"><input type="checkbox" id="ink-toggle" checked> <span data-i18n="more.showInk">Show detected drawings</span></label>
+            <p class="readout"><span data-i18n="more.drawings">Drawings:</span> <b id="ink-count">–</b> · <span data-i18n="more.camera">Camera:</span> <b id="fps">–</b> · <span data-i18n="more.lastAnswer">Last answer:</span> <b id="latency">–</b></p>
+            <h3 data-i18n="more.search">Search your files</h3>
+            <form class="search" id="search-form">
+              <label class="sr-only" for="search-input" data-i18n="more.search">Search your files</label>
+              <input id="search-input" type="search" placeholder="e.g. fractions" data-i18n-placeholder="search.placeholder.{profile}">
+              <button class="btn btn-quiet btn-small" type="submit" data-i18n="more.searchButton">Search</button>
+            </form>
+            <ol class="hits" id="hits"></ol>
+          </div>
+          <div class="more-col">
+            <h3 data-i18n="more.settings">Settings</h3>
+            <dl class="config" id="config"></dl>
+            <h3 data-i18n="more.log">Activity log</h3>
+            <ol class="log" id="log"></ol>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="colophon">
+      <span id="conn-text" data-i18n="conn.connecting">Connecting…</span> · <span data-i18n="footer.running">running for</span> <span id="uptime">–</span>
+    </footer>
+  </div>
+
   <script src="{{ url_for('static', filename='js/vendor/socket.io.min.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/precharge.js') }}"></script>
+  {% if lan_enabled %}
+  <script src="{{ url_for('static', filename='vendor/qrcode.min.js') }}"></script>
+  {% endif %}
+  <script type="module" src="{{ url_for('static', filename='js/dashboard/main.js') }}"></script>
 </body>
 </html>

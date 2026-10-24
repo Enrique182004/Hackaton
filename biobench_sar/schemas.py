@@ -65,7 +65,7 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
 
 def _clamp_int(value: Any, low: int, high: int, fallback: int) -> int:
     try:
-        number = int(round(float(value)))
+        number = round(float(value))
     except (TypeError, ValueError):
         return fallback
     return max(low, min(high, number))
