@@ -97,6 +97,15 @@ def test_extract_after_wake() -> None:
     assert t.extract_after_wake("assistant") == ""
 
 
+def test_spanish_wake_word() -> None:
+    t = AudioTrigger(lambda q: None, wake_word="assistant", recorder=lambda s: AUDIO, transcriber=lambda a: "")
+    assert t.extract_after_wake("Oye, asistente, ¿qué es esto?") == "qué es esto"
+    assert t.extract_after_wake("¡Asistente!") == ""
+    assert t.extract_after_wake("los asistentes llegaron") is None
+    custom = AudioTrigger(lambda q: None, wake_word="biobench", recorder=lambda s: AUDIO, transcriber=lambda a: "")
+    assert custom.extract_after_wake("asistente explica") is None  # aliases belong to the default word only
+
+
 def _wake(texts: list[str], record_calls: list[float]) -> tuple[AudioTrigger, list[str], threading.Event]:
     queries: list[str] = []
     done = threading.Event()
@@ -126,6 +135,15 @@ def test_wake_inline_query() -> None:
     t.stop()
     assert queries == ["what is mitosis"]
     assert set(calls) == {3.0}
+
+
+def test_wake_inline_query_in_spanish() -> None:
+    calls: list[float] = []
+    t, queries, done = _wake(["Asistente, ¿qué es la mitosis?"], calls)
+    t.start()
+    _wait(done)
+    t.stop()
+    assert queries == ["qué es la mitosis"]
 
 
 def test_wake_followup_recording() -> None:

@@ -19,6 +19,8 @@ DIGITAL_SILENCE_RMS = 1e-4
 # Trimming a wake chunk by wall clock lags the audio a little; keep some of what came just before the click.
 PUSH_PREROLL_SECONDS = 0.5
 LANGUAGES = ("en", "es")
+# Spanish speakers say the wake word in Spanish.
+WAKE_ALIASES = {"assistant": ("asistente",)}
 
 
 def _normalize_language(code: str | None) -> str:
@@ -271,10 +273,11 @@ class AudioTrigger:
             log.exception("on_query callback failed")
 
     def extract_after_wake(self, text: str) -> str | None:
-        m = re.search(rf"\b{re.escape(self.wake_word)}\b", text, re.IGNORECASE)
+        words = (self.wake_word, *WAKE_ALIASES.get(self.wake_word.lower(), ()))
+        m = re.search(rf"\b(?:{'|'.join(map(re.escape, words))})\b", text, re.IGNORECASE)
         if not m:
             return None
-        return text[m.end() :].strip(" \t\n,.:;!?-")
+        return text[m.end() :].strip(" \t\n,.:;!?¿¡-")
 
     def _wake_loop(self) -> None:
         try:
