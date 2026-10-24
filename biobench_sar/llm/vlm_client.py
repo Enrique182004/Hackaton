@@ -570,6 +570,14 @@ def expected_answers(task: Mapping[str, Any] | None) -> grading.Answers:
     return grading.parse_answers(_clean(t.get("answer"))) or _solved(_clean(t.get("problem")))
 
 
+def given_answers(read: str | None, task: Mapping[str, Any] | None) -> grading.Answers:
+    """The student's answer as read off the board, for the task's problem: a check under it ("3(5) + 5 = 20" for
+    x = 5) is no answer, also for a problem written with words ("Despeja x: 3x + 5 = 20") or a word problem whose
+    answer has a letter (grading.parse_answers with the expected answer)."""
+    t = task or {}
+    return grading.parse_answers(read, _clean(t.get("problem")), expected_answers(t))
+
+
 def quiz_task_text(task: Mapping[str, Any] | None, language: str = "en") -> str:
     t = task or {}
     if normalize_reply_language(language) == "es":
@@ -1047,7 +1055,7 @@ def wrong_answer_text(task: Mapping[str, Any] | None, language: str = "en", read
     """What code says to a wrong answer: "Not quite." and one hint for the problem's first step (grading.hint_for),
     "only part of the answer" when some values are missing, else the generic WRONG_TEXT."""
     t = task or {}
-    if read and grading.incomplete(grading.parse_answers(read, _clean(t.get("problem"))), expected_answers(t)):
+    if read and grading.incomplete(given_answers(read, t), expected_answers(t)):
         return text_for(language, "incomplete")
     hint = grading.hint_for(_clean(t.get("problem")), normalize_reply_language(language))
     return f"{text_for(language, 'not_quite')} {hint}" if hint else text_for(language, "wrong")
@@ -1079,7 +1087,7 @@ def check_quiz_answer(
         return ungraded("reread")
     problem = _clean(t.get("problem"))
     # A check line under the answer ("3(5) + 5 = 20" for x = 5) is no answer: alone it is not graded ("ask again").
-    given = grading.parse_answers(read, problem)
+    given = given_answers(read, t)
     if read is not None and (grading.unfinished(read) or (given and grading.same_problem(read, problem))):
         # The problem copied back ("1/2 + 1/3", worked out in code it is its own answer) or worked only part of the
         # way ("2/6 + 3/6"): no final answer yet, so no point and no miss.
@@ -1386,7 +1394,8 @@ def _retry_note(
         if copies_problem(read, _clean(t.get("next_problem")), language):
             return notes["misread"]
         # Only the check under the answer ("3(5) + 5 = 20"), the bottom line: never graded, so read the answer too.
-        return notes["check_line"] if read and grading.only_checks(read, _clean(t.get("problem"))) else None
+        only_checks = read and grading.only_checks(read, _clean(t.get("problem")), expected_answers(t))
+        return notes["check_line"] if only_checks else None
     if kind == "quiz" and quiz_stage(task) != "hint":
         return None
     spoken = action.spoken_text
@@ -1667,7 +1676,7 @@ class VLMClient:
         read = getattr(action, "board_answer", None) or ""
         notes = RETRY_NOTES[normalize_reply_language(language)]
         note = notes["wrong_answer"].format(answer=read.replace('"', "'"))
-        if grading.incomplete(grading.parse_answers(read, _clean(t.get("problem"))), expected_answers(t)):
+        if grading.incomplete(given_answers(read, t), expected_answers(t)):
             note += " " + notes["incomplete"]
         step = grading.hint_for(_clean(t.get("problem")), normalize_reply_language(language))
         if step:

@@ -153,6 +153,24 @@ def test_worksheet_answers_with_their_check_grade_the_value() -> None:
     assert [grade(w, p.answer) for w, p in zip(wrong, problems, strict=True)] == [False] * 4
 
 
+def test_worded_worksheet_problems_never_grade_a_check_as_the_answer() -> None:
+    """Stored as written ("Despeja x: ..."), a keyed problem's check under the answer is no answer, never a miss."""
+    from biobench_sar.grading import compare, parse_answers
+
+    text = (
+        "Hoja\n1. Despeja x: 3x + 5 = 20\nRespuesta: x = 5\n2. 2x - 7 = 9. Find x.\nAnswer: x = 8\n"
+        "3. Encuentra el valor de x: 5x + 4 = -11\nRespuesta: x = -3\n4. Resuelve la ecuación 7 - 2x = 1\n"
+        "Respuesta: x = 3\n"
+    )
+    problems = parse_worksheet_text(text, "w.md")
+    assert len(problems) == 4 and problems[0].problem == "Despeja x: 3x + 5 = 20"
+    checks = ["3(5) + 5 = 20", "2(8) - 7 = 9", "5(-3) + 4 = -11", "7 - 2(3) = 1"]
+    for problem, check in zip(problems, checks, strict=True):
+        key = parse_answers(problem.answer)
+        assert parse_answers(check, problem.problem, key) == frozenset(), problem.problem
+        assert compare(parse_answers(f"{problem.answer} ; {check}", problem.problem, key), key) is True
+
+
 def test_spanish_worksheet() -> None:
     text = "# Hoja de ejercicios\nProblema 1: 2x + 1 = 9\nRespuesta: x = 4\n"
     assert [(p.problem, p.answer) for p in parse_worksheet_text(text, "e.md")] == [("2x + 1 = 9", "x = 4")]

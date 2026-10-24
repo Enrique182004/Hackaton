@@ -934,6 +934,42 @@ def test_quiz_check_of_a_substitution_check_on_the_bottom_line_is_never_wrong(
 
 
 @pytest.mark.parametrize(
+    ("problem", "answer", "check"),
+    [
+        ("Despeja x: 3x + 5 = 20", "x = 5", "3(5) + 5 = 20"),
+        ("2x - 7 = 9. Find x.", "x = 8", "2(8) - 7 = 9"),
+        ("Encuentra el valor de x: 5x + 4 = -11", "x = -3", "5(-3) + 4 = -11"),
+        ("Resuelve la ecuación 7 - 2x = 1", "x = 3", "7 - 2(3) = 1"),
+        ("A farmer has some hens. Three times the hens plus 5 is 20. How many?", "h = 5", "3(5) + 5 = 20"),
+        ("A farmer has some hens. Three times the hens plus 5 is 20. How many?", "5", "3(5) + 5 = 20"),
+    ],
+)
+def test_quiz_check_of_a_substitution_check_under_a_worded_problem_is_never_wrong(
+    problem: str, answer: str, check: str
+) -> None:
+    task = {**QUIZ_CHECK, "problem": problem, "answer": answer}
+    for language in ("en", "es"):
+        for model in (PRAISE, HINT):
+            alone = vc.check_quiz_answer(model, task, check, language=language)
+            assert alone.verdict is None and alone.animation_state == "idle", (problem, language)  # type: ignore[attr-defined]
+            assert alone.spoken_text == vc.TEXTS[language]["reread"] and not getattr(alone, "hint_needed", False)
+        both = vc.check_quiz_answer(PRAISE, task, f"{answer} ; {check}", language=language)
+        assert both.verdict == "correct", (problem, language)  # type: ignore[attr-defined]
+
+
+def test_a_check_under_a_worded_problem_asks_again_for_the_answer_line() -> None:
+    # Live, problem "3x + 5 = 20. Find x.": the first read was the check line in 2/2 runs, graded as a miss.
+    task = {**QUIZ_CHECK, "problem": "3x + 5 = 20. Find x."}
+    c = _math_client()
+    replies = _check_replies("3(5) + 5 = 20", "x = 5 ; 3(5) + 5 = 20", spoken="Not quite.", state="error")
+    with patch.object(c.session, "post", side_effect=replies) as post:
+        action = c.evaluate("Check my answer.", JPEG, [], REGIONS, SIZE, mode="quiz", task=task)
+    assert post.call_count == 2
+    assert vc.RETRY_NOTES["en"]["check_line"] in post.call_args.kwargs["json"]["messages"][1]["content"]
+    assert action.verdict == "correct"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
     ("problem", "read", "verdict"),
     [
         ("7 - 2x = 1", "3 = x", "correct"),

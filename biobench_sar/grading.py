@@ -44,6 +44,8 @@ MAX_BITS = 1024
 MAX_POWER_DEGREE = 2 * MAX_EXPONENT
 TOLERANCE = 1e-9
 _NONE: Answers = frozenset()
+# What a quiz problem is, for telling a check from the answer (_problem_kind).
+_Kind = tuple[bool, Any] | None
 
 
 @functools.lru_cache(maxsize=1)
@@ -715,35 +717,60 @@ def _worked_value(clause: str) -> list[Value] | None:
     return _values(run) or []
 
 
-def _problem_kind(problem: Any) -> tuple[bool, Value | None] | None:
-    """(True, None) for a problem with a letter ("3x + 5 = 20"), (False, its value) for arithmetic ("1/2 + 1/3");
-    None without a problem or for one code can't read (a word problem)."""
+def _problem_kind(problem: Any, expected: Answers | None = None) -> _Kind:
+    """(True, None) for a problem with a letter ("3x + 5 = 20", also with words around it: "Despeja x: 3x + 5 = 20",
+    "2x - 7 = 9. Find x."), (False, its value) for arithmetic ("1/2 + 1/3"). For a problem code can't read (a word
+    problem), the `expected` answer tells: (True, None) when it has a letter ("x = 5"), (False, None) when it is a
+    bare value ("12"). None without a problem, or when neither tells."""
     if problem is None:
         return None
     parts = _equations(problem)
-    if not parts:
-        return None
-    if any(re.search(r"[a-z]", part.replace("sqrt", "")) for part in parts):
+    if parts and any(re.search(r"[a-z]", part.replace("sqrt", "")) for part in parts):
         return True, None
-    value = _expression(parts[0]) if len(parts) == 1 and "=" not in parts[0] else None
-    return (False, value) if value is not None and _number(value) is not None else None
+    value = _expression(parts[0]) if parts and len(parts) == 1 and "=" not in parts[0] else None
+    if value is not None and _number(value) is not None:
+        return False, value
+    if parts is None and _worded_equation(problem):
+        return True, None
+    if expected:
+        return any(letter for letter, _ in expected), None
+    return None
 
 
-def _is_check(clause: str, problem: tuple[bool, Value | None] | None) -> bool:
+def _worded_equation(problem: Any) -> bool:
+    """Whether a problem written with words holds an equation with a letter: "Despeja x: 3x + 5 = 20", "2x - 7 = 9.
+    Find x.", "Halla x en 3x + 5 = 20", "Resuelve la ecuación 7 - 2x = 1", "Solve for x in the equation 2x + 3 = 11"."""
+    text = to_math(_INSTRUCTION.sub("", _plain(problem).strip()))
+    for piece in _SENTENCE_BREAK.split(text):
+        math_text = _WORDS_AFTER.sub("", _WORDS_BEFORE.sub("", piece.strip())).strip()
+        parts = (_equations(math_text) if "=" in math_text else None) or []
+        lettered = any(re.search(r"[a-z]", part.replace("sqrt", "")) for part in parts)
+        if lettered and all(_sides(part) is not None for part in parts):
+            return True
+    return False
+
+
+def _is_check(clause: str, problem: _Kind, expected: Answers | None = None) -> bool:
     """Whether a line of arithmetic with no letter is a check or scratch work, not the answer: every such line for a
     problem with a letter ("3(5) + 5 = 20", "15 + 5 = 20", "3(4) + 5 = 17" for 3x + 5 = 20), and for arithmetic one
     that does not start from the problem's value ("3 × 4 = 12" for 12 ÷ 4). "1/2 + 1/3 = 5/6" and "3/6 + 2/6 = 5/6"
-    are the problem 1/2 + 1/3 worked out: the answer."""
+    are the problem 1/2 + 1/3 worked out: the answer. For a problem code can't read, a true line ("3(5) + 5 = 20")
+    is a check unless it comes to the `expected` value ("3 × 4 = 12" for a rectangle's area of 12); a false one
+    ("1/2 + 1/3 = 2/5") is an answer."""
     if problem is None:
         return False
     sides = [_expression(side.strip()) for side in _LEADING_WORDS.sub("", clause).split("=")]
     if len(sides) < 2 or any(side is None for side in sides):
         return False  # a letter in it (a step) or not worked out ("12 ÷ 4 = ?")
     letters, value = problem
-    return letters or not _close(sides[0], value)
+    if letters:
+        return True
+    if value is not None:
+        return not _close(sides[0], value)
+    return _close(sides[0], sides[-1]) and not any(_close(sides[-1], v) for _, v in expected or ())
 
 
-def parse_answers(text: Any, problem: Any = None) -> Answers:
+def parse_answers(text: Any, problem: Any = None, expected: Answers | None = None) -> Answers:
     """A written or spoken answer as a set of (letter, value): "x = 5 or x = -3" -> {("x", 5), ("x", -3)},
     "x = 5, y = 2" -> {("x", 5), ("y", 2)}, "5" -> {("", 5)}, "(2, 3)" -> {("#1", 2), ("#2", 3)}, "1/2 + 1/3 = 5/6" ->
     {("", 5/6)}. Answers on separate lines all count; a check or a reason after one ("x = 4 because 2 times 4 is 8")
@@ -752,8 +779,9 @@ def parse_answers(text: Any, problem: Any = None) -> Answers:
 
     Given the `problem` it answers, a line of arithmetic with no letter is a check, never the answer ("x = 5 ;
     3(5) + 5 = 20" is x = 5, "3(5) + 5 = 20" alone is nothing), unless it is that arithmetic problem worked out
-    ("1/2 + 1/3 = 5/6" for 1/2 + 1/3)."""
-    kind = _problem_kind(problem)
+    ("1/2 + 1/3 = 5/6" for 1/2 + 1/3). The `expected` answer tells what a problem code can't read asks for: a letter's
+    value ("x = 5": every such line is a check) or a value (a true line counts only when it comes to it)."""
+    kind = _problem_kind(problem, expected)
     math_text = _answer_text(text)
     if not math_text.strip(" ;"):
         return _NONE
@@ -782,7 +810,7 @@ def parse_answers(text: Any, problem: Any = None) -> Answers:
             answers |= {(letter, v) for v in assigned[1]}
             continue
         if "=" in clause:
-            if _is_check(clause, kind):
+            if _is_check(clause, kind, expected):
                 continue
             value = _worked_value(clause)
             steps = steps or value is None  # the problem or a step ("3x + 5 = 20", "3x = 15")
@@ -800,10 +828,10 @@ def parse_answers(text: Any, problem: Any = None) -> Answers:
     return frozenset(answers)
 
 
-def only_checks(text: Any, problem: Any) -> bool:
+def only_checks(text: Any, problem: Any, expected: Answers | None = None) -> bool:
     """Whether `text` holds a check of the answer and no answer: "3(5) + 5 = 20" (or "15 + 5 = 20") for 3x + 5 = 20,
-    the bottom line under "x = 5"."""
-    return bool(parse_answers(text)) and not parse_answers(text, problem)
+    the bottom line under "x = 5" (`expected` as for parse_answers)."""
+    return bool(parse_answers(text)) and not parse_answers(text, problem, expected)
 
 
 def unfinished(text: Any) -> bool:
@@ -923,6 +951,11 @@ _INSTRUCTION = re.compile(
     r"encuentra|halla|cuanto\s+es)\b(?:\s+(?:for|para)\s+[a-z]\b)?\s*[:,]?\s*"
 )
 _EQUATIONS = re.compile(r"\s*(?:,(?!\d)|;|\n|&|\band\b|(?<=[\w)])\s+y\s+(?=[\w(√-]))\s*")
+# Around the math of a worded problem: its sentences ("2x - 7 = 9. Find x."), what comes before the math
+# ("despeja x:", "halla x en", "la ecuacion") and words after it ("3x + 5 = 20 para x").
+_SENTENCE_BREAK = re.compile(r"[.?!](?:\s+|$)|:")
+_WORDS_BEFORE = re.compile(r"^(?:(?:(?!sqrt\b)[a-z]{2,}|[a-z](?=\s+[a-z]{2,}))\s+)+")
+_WORDS_AFTER = re.compile(r"\s+(?!sqrt\b)[a-z]{2,}\b.*$")
 
 
 def _equations(problem: Any) -> list[str] | None:

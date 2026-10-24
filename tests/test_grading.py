@@ -560,6 +560,45 @@ def test_the_arithmetic_problem_worked_out_is_still_its_answer() -> None:
     assert _plain(parse_answers("3 × 4 = 12", word)) == {("", 12)}, "a word problem's arithmetic is its answer"
 
 
+WORDED_CHECKS = [
+    ("Despeja x: 3x + 5 = 20", "x = 5", "3(5) + 5 = 20"),
+    ("2x - 7 = 9. Find x.", "x = 8", "2(8) - 7 = 9"),
+    ("Encuentra el valor de x: 5x + 4 = -11", "x = -3", "5(-3) + 4 = -11"),
+    ("Resuelve la ecuación 7 - 2x = 1", "x = 3", "7 - 2(3) = 1"),
+    ("3x + 5 = 20. Find x.", "x = 5", "3(5) + 5 = 20"),
+    ("Halla x en 3x + 5 = 20", "x = 5", "15 + 5 = 20"),
+    ("Solve for x in the equation 2x + 3 = 11", "x = 4", "2(4) + 3 = 11"),
+    ("A number doubled plus 3 is 11. What is the number?", "n = 4", "2(4) + 3 = 11"),  # a word problem, key with n
+]
+
+
+@pytest.mark.parametrize(("problem", "answer", "check"), WORDED_CHECKS)
+def test_a_check_under_a_worded_problem_with_an_answer_key_is_never_the_answer(
+    problem: str, answer: str, check: str
+) -> None:
+    # Worksheet problems are stored as written; tutor-core never graded these checks, round one graded them wrong.
+    expected = parse_answers(answer)
+    assert parse_answers(check, problem, expected) == frozenset(), "alone, the check is no answer"
+    assert grading.only_checks(check, problem, expected), "so the check asks again for the answer line"
+    assert parse_answers(f"{answer} ; {check}", problem, expected) == expected
+    assert parse_answers(f"x = 99 ; {check}", problem, expected) == parse_answers("x = 99"), "a wrong answer counts"
+
+
+def test_the_letter_of_a_worded_problem_is_found_without_its_answer_key() -> None:
+    for problem, _, check in WORDED_CHECKS[:-1]:
+        assert parse_answers(check, problem) == frozenset(), problem
+    assert grading.only_checks("3(5) + 5 = 20", "Despeja x: 3x + 5 = 20", parse_answers("5")), "a bare key too"
+
+
+def test_arithmetic_under_a_word_problem_counts_only_when_it_comes_to_the_answer() -> None:
+    area = "A rectangle is 3 cm wide and 4 cm long. Find its area."
+    assert _plain(parse_answers("3 × 4 = 12", area, parse_answers("12"))) == {("", 12)}
+    assert parse_answers("3 + 4 = 7", area, parse_answers("12")) == frozenset(), "true, not the answer: a check"
+    pizza = "Ana eats half a pizza and then a third of one. How much did she eat?"
+    assert _plain(parse_answers("1/2 + 1/3 = 2/5", pizza, parse_answers("5/6"))) == {("", Fraction(2, 5))}, "false"
+    assert _plain(parse_answers("5/6", pizza, parse_answers("5/6"))) == {("", Fraction(5, 6))}
+
+
 def test_same_problem() -> None:
     assert grading.same_problem("1/2+1/3", "1/2 + 1/3")
     assert grading.same_problem("6/8", "Simplify 6/8") and grading.same_problem("12 ÷ 4", "12 ÷ 4 = ?")
