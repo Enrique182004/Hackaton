@@ -232,8 +232,8 @@ def _overlap(a: Box, b: Box) -> float:
 def drop_ui_ink(ink: list[Any], rects: Iterable[Box]) -> list[Any]:
     """Ink regions not mostly under projected UI: one that a UI rect covers by more than UI_OVERLAP of its area is
     the projector's light (the bubble's text, the avatar), not the student's writing. The page reports the outline
-    around highlighted ink as four bands from its glow in to that ink's edge, so the outline's light is masked and
-    the writing inside it never is."""
+    around highlighted ink as four bands over its border and glow that stop short of the ink it frames, so the
+    outline's light is masked and the writing inside it never is."""
     boxes = list(rects)
     if not boxes:
         return ink
