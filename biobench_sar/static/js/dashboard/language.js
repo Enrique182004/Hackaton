@@ -36,9 +36,7 @@ export function renderLanguage(body) {
   $("lang-switch").hidden = false;
   for (const s of SETTINGS) $(`lang-${s}`).setAttribute("aria-pressed", String(s === body.setting));
   const lang = languageFor(body);
-  if (!lang) return;
-  setLanguage(lang);
-  remember(lang);
+  if (lang && setLanguage(lang)) remember(lang);
 }
 
 export async function refreshLanguage() {

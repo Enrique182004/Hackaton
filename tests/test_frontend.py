@@ -1204,6 +1204,7 @@ def test_template_english_is_the_dictionary_english(template: str) -> None:
     assert len(elements) == src.count('data-i18n="')
     for tag, key, inner in elements:
         assert f"<{tag}" not in inner, f"nested <{tag}> inside data-i18n={key}"
+        assert " id=" not in inner, f"data-i18n={key} would wipe out an element the scripts use"
         assert " ".join(html.unescape(inner).split()) == en[key.replace("{profile}", "math")], key
     for tag in re.findall(r"<\w+\b[^>]*\bdata-i18n-[a-z-]+=[^>]*>", src):
         for attr, key in re.findall(r'\bdata-i18n-([a-z-]+)="([^"]+)"', tag):
@@ -1439,7 +1440,7 @@ assert.equal($("status-text").textContent,
   "Escuchando… haz tu pregunta ahora. El micrófono se apaga solo en unos 5 segundos.");
 assert.equal($("ask-msg").textContent, "¡Enviada! Mira el pizarrón para ver la respuesta.");
 assert.equal($("upload-msg").textContent,
-  "Se agregó a.pdf. No se pudo leer scan.pdf (parece un escaneo sin texto; pásalo a mano o sube una foto más clara).");
+  "Se agregó a.pdf. No se pudo leer scan.pdf (parece un escaneo sin texto; escríbelo en la computadora o sube una foto más clara).");
 assert.equal($("files-summary").textContent, "El asistente usa 1 de 2 archivos al contestar.");
 assert.equal($("badge-board").textContent, "reflejo en el pizarrón");
 assert.equal($("quiz-progress").textContent, "Problema 2 de 8 · 1 bien a la primera");
@@ -1526,7 +1527,7 @@ assert.equal($("debug-conn").textContent, "conexión: conectada");
 sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: QUIZ });
 assert.equal($("quiz-card-count").textContent, "Quiz · problema 2 de 8");
 sock.fire("status", { state: "thinking", detail: "busy" });
-assert.equal(label(), "Todavía ocupado – espera un momento");
+assert.equal(label(), "Ocupado – espera un momento");
 // The answer is shown as the model wrote it, whatever the page's language.
 sock.fire("avatar_update", { animation_state: "idle", spoken_text: "x is 5", display_text: "x = 5" });
 assert.equal($("bubble").textContent, "x = 5");
