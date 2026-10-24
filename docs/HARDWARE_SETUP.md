@@ -5,7 +5,7 @@ small symbols included. Budget about 15 minutes the first time.
 
 ## Checklist
 
-- [ ] Webcam placed so the reflection of the projector lens falls **off** the projected image (section 1), checked with the one-eye test.
+- [ ] Webcam placed so the reflection of the projector lens falls **off** the projected image (section 1). Projector on a cart in the middle → webcam on a tall tripod **above** the lens (section 0 table), checked with the one-eye test.
 - [ ] Matte (anti-glare) whiteboard, clean, no ghost writing.
 - [ ] Even room light, no sunlight or spotlight on the board.
 - [ ] Black or dark blue marker, not too thin.
@@ -44,10 +44,28 @@ the 1080p camera is not index 1.
   **Auto Iris / dynamic contrast off** (brightness pumping confuses the camera); power or light mode
   **ECO** (less glare). Focus until the calibration checkerboard is crisp.
 - 3LCD has no colour wheel, so there is no rainbow flicker in the camera picture.
-- **Ultra-short-throw model mounted above the board** (Epson BrightLink style): the lens's reflection
-  lands near the top edge next to the lens, so the webcam can stand in front of the board, a little
-  below the centre. **Standard-throw model on a table or cart:** follow section 1 (webcam on the same
-  side as the lens, further out: lower than the lens).
+- **Our setup: projector on a cart, lens level with the middle of the board, square-on.** No keystone is
+  needed (leave it at 0). Because the lens is in the middle, its reflection lands in the **middle of the
+  image** for any camera near the projector. Put the webcam **above** the lens instead (details below).
+
+**Where the webcam goes with the projector on a cart in the middle.** Mount the C930e on a tall tripod
+or light stand, about 0.7 × the image width from the board, and high enough above the lens that the
+reflection moves past the top edge of the image: **at least ≈ 0.53 × the image width above the lens**.
+Tilt it down (about 35°) so the whole image is in the picture.
+
+| Projected image width | Webcam distance from the board | Webcam height above the lens | Lens at 1.3 m → webcam at |
+| --- | --- | --- | --- |
+| 1.2 m | ≈ 0.85 m | ≥ 0.65 m | ≈ 1.95 m |
+| 1.5 m | ≈ 1.05 m | ≥ 0.80 m | ≈ 2.1 m |
+| 2.0 m | ≈ 1.4 m | ≥ 1.05 m | ≈ 2.35 m |
+
+These assume the Epson's usual throw (projector ≈ 1.3–1.6 × the image width from the board) and include a
+10% margin. Why it works: the reflection sits between the webcam and the lens (section 1), about two
+thirds of the way towards the webcam at these distances, so lifting the webcam lifts the reflection off
+the top of the image. At this height the webcam is also outside the projector's light cone (no shadow on
+the board), and students writing at the board block it less than a low tripod would. Avoid putting the
+webcam beside the projector on the cart: that puts the reflection in the middle of the board.
+Finish with the one-eye test (section 1) at the webcam's position.
 
 **Logitech C930e webcam**
 
