@@ -1429,7 +1429,7 @@ def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -
         *("EQCN", "EQWN", "QCN", "QWN", "HS", "EHS"),
         *("QQC", "QQW", "QQP", "QSC", "QSW", "EQQW"),
         *("QQ2", "EQQ2", "QFN", "QFC"),
-        *("QK", "QT", "QXR", "HR", "EHR", "QS2", "EQS2"),
+        *("QK", "QT", "QXR", "HR", "EHR", "QS2", "EQS2", "QKW", "EQKW", "QKN"),
     }
     assert all(b.MATH_SCENARIOS[k].language == "es" for k in ("ELO", "ELE", "EH", "EHA", "EQD", "EQC", "EQW"))
     assert set(b.BIO_SCENARIOS) == {"A", "B", "AB", "BA"}
@@ -2421,6 +2421,15 @@ def test_bench_landing_review_scenarios(monkeypatch: pytest.MonkeyPatch) -> None
         _, regions = b.MATH_SCENARIOS[key].board()
         assert len(regions) == 4, "two equations, then one value per line"
     assert b.MATH_SCENARIOS["EQS2"].language == "es" and b.MATH_SCENARIOS["EHR"].language == "es"
+    for key in ("QKW", "EQKW"):
+        worded = b.MATH_SCENARIOS[key]
+        assert worded.expected == "celebrating" and worded.task["problem"] != b.EQUATION
+        assert grading.only_checks("3(5) + 5 = 20", worded.task["problem"], vc.expected_answers(worded.task))
+        assert "graded the check line wrong" in (worded.check("Not quite. Subtract 5 from both sides first.") or "")
+    no_answer = b.MATH_SCENARIOS["QKN"]
+    assert no_answer.expected == "idle" and len(no_answer.board()[1]) == 2
+    assert no_answer.check("Correct, great job!") == "praised an answer code cannot read"
+    assert no_answer.check(vc.TEXTS["en"]["reread"]) is None
 
 
 def test_bench_boards_of_four_lines_keep_every_line_on_the_board(monkeypatch: pytest.MonkeyPatch) -> None:

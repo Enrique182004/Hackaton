@@ -22,7 +22,9 @@ never graded ("I can't see your final answer yet"); QFC: 1/2 + 1/3 = 5/6 worked 
 Landing review R1-R5: QK the right answer with the check 3(5) + 5 = 20 under it (graded right: a read of only the
 check is asked again for the answer line; never "Not quite"), QT a power tower as the answer (fast, never praised),
 QXR "3 = x" under "6 = 2x" (graded right), HR/EHR help on the student's own wrong sum 1/2 + 1/3 = 2/5 (five sixths
-never said), QS2/EQS2 a system one value per line (graded right).
+never said), QS2/EQS2 a system one value per line (graded right). Second review: QKW/EQKW the check under the
+answer to a worksheet problem stored with its words ("3x + 5 = 20. Find x.", "Despeja x: ..."; never "Not
+quite"), QKN only the check and no answer line (never graded, never praised: no answer is made up).
 
 --flow runs the whole pipeline (Assistant + this model, a synthetic board, a temporary quiz bank): a quiz with a wrong
 then right answer on 3x + 5 = 20, a wrong then right quadratic (one root per line), then "stop the quiz" -> the
@@ -31,7 +33,7 @@ confirmation -> "yes" -> stopped with the score. --flow es runs it in Spanish ("
 Example (the final-wiring live check): --scenarios --profile math --runs 2 --only ELO,ELE,EH,EHA,EQD,EQC,EQW,CR
 Code grading: --scenarios --profile math --runs 2 --only QC,QW,QQC,QQW,QQP,QSC,QSW,H,HA,EQC,EQW,EQQW
 Answer lines and unfinished work: --scenarios --profile math --runs 2 --only QQ2,EQQ2,QFN,QFC,QN
-Landing review: --scenarios --profile math --runs 2 --only QK,QT,QXR,HR,EHR,QS2,EQS2
+Landing review: --scenarios --profile math --runs 2 --only QK,QT,QXR,HR,EHR,QS2,EQS2,QKW,EQKW,QKN
 Pipeline: --flow en --runs 2 and --flow es --runs 2
 Answer-leak check: --scenarios --profile math --runs 3 --only EQCN,EQWN and --runs 2 --only H,EH,HS,EHS
 """
@@ -984,6 +986,7 @@ GRADED_SCENARIOS = {
 LAST_CHECK = {**QUIZ_TASK, "number": 5, "total": 5, "next_problem": None}
 TOWER = "x = ((((9)^6)^6)^6)^6"
 SUM_BOARD = "1/2 + 1/3 = 2/5"
+WORDED, WORDED_ES = f"{EQUATION}. Find x.", f"Despeja x: {EQUATION}"
 
 
 def _never_wrong(spoken: str) -> str | None:
@@ -1048,6 +1051,38 @@ LANDING_SCENARIOS = {
         context=[],
         check=_all(_never_says_the_sum, spanish),
         language="es",
+    ),
+    # Second review: a worksheet problem stored with its words, and a board with the check and no answer line.
+    "QKW": Scenario(
+        f"quiz check '{WORDED}', right, with the check 3(5) + 5 = 20 under it",
+        "Check my answer.",
+        lambda: make_board([EQUATION, "x = 5", "3(5) + 5 = 20"]),
+        "celebrating",
+        mode="quiz",
+        task={**LAST_CHECK, "problem": WORDED},
+        context=[],
+        check=_never_wrong,
+    ),
+    "EQKW": Scenario(
+        f"ES quiz check '{WORDED_ES}', right, with the check 3(5) + 5 = 20 under it",
+        "Revisa mi respuesta.",
+        lambda: make_board([EQUATION, "x = 5", "3(5) + 5 = 20"]),
+        "celebrating",
+        mode="quiz",
+        task={**LAST_CHECK, "problem": WORDED_ES},
+        context=[],
+        check=_all(_never_wrong, spanish),
+        language="es",
+    ),
+    "QKN": Scenario(
+        f"quiz check {EQUATION}, only the check 3(5) + 5 = 20 under it, no answer line: never graded",
+        "Check my answer.",
+        lambda: make_board([EQUATION, "3(5) + 5 = 20"]),
+        "idle",
+        mode="quiz",
+        task=LAST_CHECK,
+        context=[],
+        check=_all(_never_wrong, _not_praised),
     ),
     "QS2": Scenario(
         f"quiz check the system {SYSTEM}, right, one value per line: x = 7 / y = 3",
