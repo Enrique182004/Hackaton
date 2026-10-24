@@ -236,7 +236,9 @@ def draw_board(lines: list[str], size: tuple[int, int] = SIZE) -> tuple[np.ndarr
     """Marker-style lines of math on a white board of `size`, one ink region per line, in projector coordinates."""
     img = np.full((size[1], size[0], 3), 255, np.uint8)
     font = cv2.FONT_HERSHEY_SIMPLEX
-    scale, thick, step = 3.0 * size[0] / SIZE[0], max(3, round(8 * size[0] / SIZE[0])), round(260 * size[1] / SIZE[1])
+    scale, thick = 3.0 * size[0] / SIZE[0], max(3, round(8 * size[0] / SIZE[0]))
+    # 260 px apart, closer when that runs off the board: four lines once put the last baseline on the bottom edge.
+    step = round(min(260, (0.93 * SIZE[1] - 300) / max(len(lines) - 1, 1)) * size[1] / SIZE[1])
     regions: list[InkRegion] = []
     for i, line in enumerate(lines):
         (w, h), base = cv2.getTextSize(line, font, scale, thick)

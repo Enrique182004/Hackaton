@@ -2373,6 +2373,20 @@ def test_bench_landing_review_scenarios(monkeypatch: pytest.MonkeyPatch) -> None
     assert b.MATH_SCENARIOS["EQS2"].language == "es" and b.MATH_SCENARIOS["EHR"].language == "es"
 
 
+def test_bench_boards_of_four_lines_keep_every_line_on_the_board(monkeypatch: pytest.MonkeyPatch) -> None:
+    # QS2/EQS2 have four lines: the 4th ("y = 3") had its baseline on the image's bottom edge.
+    b = _bench(monkeypatch)
+    for size in ((1920, 1080), (1280, 800)):
+        for count in (4, 5):
+            img, regions = b.draw_board(["x + y = 10"] * count, size)
+            assert all(r["y"] + r["h"] <= 0.96 * size[1] for r in regions), (size, count)
+            tops = [r["y"] for r in regions]
+            assert all(r["y"] + r["h"] < top for r, top in zip(regions, tops[1:], strict=False)), "no overlap"
+            assert img.shape[:2] == (size[1], size[0])
+    three = [r["y"] for r in b.draw_board(["a", "b", "c"])[1]]
+    assert three[1] - three[0] == 260, "three lines or fewer keep their spacing"
+
+
 @pytest.mark.parametrize("language", ["en", "es"])
 def test_bench_flow_runs_the_whole_pipeline(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], language: str
