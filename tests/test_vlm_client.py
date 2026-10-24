@@ -1145,12 +1145,13 @@ def test_bench_script_runs_from_any_directory(tmp_path: Path) -> None:
 
 def test_bench_math_heuristics(monkeypatch: pytest.MonkeyPatch) -> None:
     b = _bench(monkeypatch)
-    for leak in ("So x equals five.", "x = 5", "Fifteen divided by three is five.", "The answer is 5.", "x would be 5"):
+    leaks = ("So x equals five.", "x = 5", "Fifteen divided by three is five.", "The answer is 5.", "x would be 5")
+    # Solved in code (grading.py): "x is fifteen over three" says x is 5, asked or not.
+    for leak in (*leaks, "x is fifteen over three?", "You get x = 15/3."):
         assert b.leaks_answer(leak), leak
     fine_replies = (
         "Subtract five from both sides.",
         "Three x plus five equals twenty.",
-        "x is fifteen over three?",
         "What is five less than twenty?",
         "Next, what is 3x equal to?",
     )
@@ -1175,6 +1176,7 @@ def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -
         *("ELO", "ELE", "EH", "EHA", "EQD", "EQC", "EQW"),
         *("CR", "CRW", "CRH", "CRHW"),
         *("EQCN", "EQWN", "QCN", "QWN", "HS", "EHS"),
+        *("QQC", "QQW", "QQP", "QSC", "QSW", "EQQW"),
     }
     assert all(b.MATH_SCENARIOS[k].language == "es" for k in ("ELO", "ELE", "EH", "EHA", "EQD", "EQC", "EQW"))
     assert set(b.BIO_SCENARIOS) == {"A", "B", "AB", "BA"}
@@ -1781,6 +1783,7 @@ def test_wrong_quiz_answer_asks_the_model_for_one_hint_on_this_problem() -> None
     assert post.call_count == 2
     content = post.call_args.kwargs["json"]["messages"][1]["content"]
     assert 'The student\'s answer "x = 7" is WRONG' in content and "Quiz stage: hint" in content
+    assert "A good next step for this problem: Subtract 5 from both sides first." in content, "code's step as a guide"
     assert "2x - 4 = 10" not in content, "the hint call never sees the next problem"
     assert action.spoken_text == "Not quite. First take away five on both sides."
     assert (action.animation_state, action.verdict) == ("error", "wrong")  # type: ignore[attr-defined]
@@ -1911,3 +1914,26 @@ def test_quiz_hint_stating_the_solution_is_asked_again() -> None:
     with _posts(c, leak, MATH_GOOD) as post:
         action = c.evaluate("I'm stuck", JPEG, [], REGIONS, SIZE, mode="quiz", task=QUIZ_HINT)
     assert post.call_count == 2 and action.spoken_text == "Subtract five from both sides."
+
+
+def test_bench_graded_scenarios(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = _bench(monkeypatch)
+    wrong = b.MATH_SCENARIOS["QQW"]
+    assert wrong.expected == "error" and wrong.task["answer"] == "x = 5 or x = -3"
+    assert wrong.check("Not quite. Look for two numbers that multiply to negative fifteen.") is None
+    assert wrong.check("Not quite. One answer is x = 5.") == "gave the solution"
+    assert wrong.check("Correct, great job!") == "no 'Not quite' / 'Casi'"
+    assert b.MATH_SCENARIOS["QSC"].expected == "celebrating" and b.MATH_SCENARIOS["EQQW"].language == "es"
+    board, regions = b.draw_board(["x = 5"], (1280, 800))
+    assert board.shape == (800, 1280, 3) and regions[0]["x"] == 200
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_bench_flow_runs_the_whole_pipeline(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], language: str
+) -> None:
+    b = _bench(monkeypatch)
+    b.run_flow(_math_client("mock"), language, 1)
+    out = capsys.readouterr().out
+    assert out.count(f"[flow {language} run 1]") == len(b.FLOWS[language])
+    assert f"flow {language} run 1:" in out and "hl=[" in out, "the checks highlight the answer line"

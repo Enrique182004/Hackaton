@@ -49,6 +49,8 @@ MAX_UI_RECTS = 32
 UI_OVERLAP = 0.5
 # "pointing": the fingertip stops this far left of the ink it points at, so the avatar does not cover it.
 POINT_GAP = 24
+# Ink regions are word and symbol blobs; blobs this many line heights apart or closer, side by side, are one line.
+LINE_GAP = 1.5
 NO_ANSWER_TEXT = "I can't see an answer on the board yet. Write it, then ask me to check it."
 TEXTS = {
     "en": {
@@ -240,6 +242,35 @@ def drop_ui_ink(ink: list[Any], rects: Iterable[Box], highlight: Box | None = No
     return [region for region in ink if not covered(region)]
 
 
+def _union(a: Box, b: Box) -> Box:
+    x0, y0 = min(a[0], b[0]), min(a[1], b[1])
+    return x0, y0, max(a[0] + a[2], b[0] + b[2]) - x0, max(a[1] + a[3], b[1] + b[3]) - y0
+
+
+def _same_line(a: Box, b: Box) -> bool:
+    shared = min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
+    gap = max(a[0], b[0]) - min(a[0] + a[2], b[0] + b[2])
+    return shared >= 0.5 * min(a[3], b[3]) and gap <= LINE_GAP * max(a[3], b[3])
+
+
+def ink_lines(boxes: Iterable[Box]) -> list[Box]:
+    """Blobs grouped into written lines ("x", "=", "7" -> "x = 7"): boxes that share half the smaller height or more
+    and sit within LINE_GAP heights of each other side by side. Each line is the union of its blobs."""
+    lines = sorted(boxes, key=lambda b: b[0])
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(lines)):
+            for j in range(i + 1, len(lines)):
+                if _same_line(lines[i], lines[j]):
+                    lines[i] = _union(lines[i], lines.pop(j))
+                    merged = True
+                    break
+            if merged:
+                break
+    return lines
+
+
 def _distance(x: float, y: float, box: Box) -> float:
     dx = max(box[0] - x, 0.0, x - (box[0] + box[2]))
     dy = max(box[1] - y, 0.0, y - (box[1] + box[3]))
@@ -253,6 +284,7 @@ def place_target(
     *,
     about_answer: bool = False,
     stand_aside: bool = False,
+    lines: bool = False,
 ) -> tuple[AvatarAction, list[int] | None]:
     """The target snapped in code, and the ink region the answer is about ([x, y, w, h], projector px) or None.
 
@@ -260,11 +292,14 @@ def place_target(
     `about_answer` (a quiz check) the lowest one, the student's answer line. pointing stops just left of it (right of
     it at the board's left edge), error and celebrating at its centre. idle / walking (and `stand_aside`, a failed
     call) stand on the side of the board farthest from the ink, mid-height; without ink the model's target is kept.
+    `lines` (math): the regions are written lines (ink_lines), not the blobs ink detection finds.
     """
     width, height = projector_size
     boxes = [b for b in map(_box, ink) if b is not None]
     if not boxes:
         return action, None
+    if lines:
+        boxes = ink_lines(boxes)
 
     def at(x: float, y: float) -> AvatarAction:
         tx, ty = max(0, min(width - 1, round(x))), max(0, min(height - 1, round(y)))
@@ -678,7 +713,12 @@ class Assistant:
             self.push_tutor()
             checking = task is not None and task["kind"] == "quiz" and task.get("stage") == "check"
             action, highlight = place_target(
-                action, ink, self.settings.projector_size, about_answer=checking, stand_aside=failed
+                action,
+                ink,
+                self.settings.projector_size,
+                about_answer=checking,
+                stand_aside=failed,
+                lines=self.tutoring,
             )
             self._highlight = _box(highlight) if highlight else None
             said = {

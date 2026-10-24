@@ -1282,6 +1282,7 @@ RETRY_NOTES = {
         "wrong_answer": 'The student\'s answer "{answer}" is WRONG (it was checked). Do not praise it. Give ONE short hint '
         "about the next step of this problem and ask them to try again. NEVER say the answer or the value of the letter.",
         "incomplete": "It is only part of the answer: tell them there is more to find.",
+        "next_step": "A good next step for this problem: {step}",
     },
     "es": {
         "echo": "Tu respuesta anterior solo repitió las palabras del estudiante. Responde lo que preguntó.",
@@ -1299,6 +1300,7 @@ RETRY_NOTES = {
         "corta sobre el siguiente paso de este problema y pídele que lo intente otra vez. NUNCA digas la respuesta ni "
         "el valor de la letra.",
         "incomplete": "Es solo una parte de la respuesta: dile que falta encontrar más.",
+        "next_step": "Un buen siguiente paso para este problema: {step}",
     },
 }
 
@@ -1617,6 +1619,10 @@ class VLMClient:
         note = notes["wrong_answer"].format(answer=read.replace('"', "'"))
         if grading.incomplete(grading.parse_answers(read), expected_answers(t)):
             note += " " + notes["incomplete"]
+        step = grading.hint_for(_clean(t.get("problem")), normalize_reply_language(language))
+        if step:
+            # Worked out in code: a 3B model's own "next step" for a quadratic was often no step at all.
+            note += " " + notes["next_step"].format(step=step)
         hint_task = {**t, "stage": "hint", "next_problem": None}
         query_, image, context, ink, size, mode, _, turns = args
         reply = self._evaluate(query_, image, context, ink, size, mode, hint_task, turns, note=note, **extra)

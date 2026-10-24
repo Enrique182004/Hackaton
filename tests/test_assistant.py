@@ -1611,3 +1611,44 @@ def test_the_dashboards_stop_needs_no_confirmation(h: Harness) -> None:
     h.assistant.push_tutor()
     assert _tutor_events(h)[-1] == {"mode": "help", "learn_topic": None, "quiz": None, "confirm_stop": False}
     assert _ask(h, "yes")["task"] is None, "the old question is gone: 'yes' is a plain question now"
+
+
+def test_ink_lines_groups_blobs_into_written_lines() -> None:
+    from biobench_sar.assistant import ink_lines
+
+    blobs = [(198.0, 381.0, 82.0, 38.0), (294.0, 371.0, 36.0, 47.0), (343.0, 381.0, 63.0, 38.0)]  # "x = 7 or ..."
+    problem = [(199.0, 178.0, 73.0, 48.0), (282.0, 186.0, 39.0, 38.0), (384.0, 178.0, 121.0, 48.0)]
+    far = (1000.0, 178.0, 60.0, 48.0)  # another equation, far to the right
+    assert sorted(ink_lines([*blobs, *problem, far])) == [
+        (198.0, 371.0, 208.0, 48.0),
+        (199.0, 178.0, 306.0, 48.0),
+        (1000.0, 178.0, 60.0, 48.0),
+    ]
+    assert ink_lines([]) == []
+
+
+def test_math_highlight_outlines_the_whole_answer_line(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _bank(h, "a.md", ("3x + 5 = 20", "x = 5", 1), ("x + 1 = 2", "x = 1", 1))
+    _ask(h, "quiz me")
+    blobs = [
+        {"x": 199, "y": 178, "w": 73, "h": 48, "cx": 235, "cy": 202},  # "3x"
+        {"x": 384, "y": 178, "w": 121, "h": 48, "cx": 444, "cy": 202},  # "= 20"
+        {"x": 198, "y": 381, "w": 82, "h": 38, "cx": 239, "cy": 400},  # "x ="
+        {"x": 294, "y": 371, "w": 36, "h": 47, "cx": 312, "cy": 394},  # "7"
+    ]
+    _with_ink(monkeypatch, *blobs)
+    avatar = _reply(h, "check my answer", AvatarAction("Correct!", "celebrating", 239, 400))
+    assert avatar["highlight"] == [198, 371, 132, 48], "x = 7, not just its first blob"
+    assert (avatar["target_x"], avatar["target_y"]) == (264, 395)
+
+
+def test_biology_keeps_each_box_its_own_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SAR_PROFILE", "biology")
+    bio = Harness()
+    boxes = [
+        {"x": 60, "y": 480, "w": 300, "h": 120, "cx": 210, "cy": 540},
+        {"x": 420, "y": 480, "w": 300, "h": 120, "cx": 570, "cy": 540},
+    ]
+    _with_ink(monkeypatch, *boxes)
+    avatar = _reply(bio, "check my flowchart", AvatarAction("A step is missing.", "error", 600, 500))
+    assert avatar["highlight"] == [420, 480, 300, 120] and (avatar["target_x"], avatar["target_y"]) == (570, 540)
