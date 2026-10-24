@@ -965,6 +965,34 @@ def test_evaluate_of_a_substitution_check_records_no_miss() -> None:
     assert action.spoken_text == vc.TEXTS["en"]["reread"]
 
 
+@pytest.mark.parametrize(
+    ("language", "query", "praise"),
+    [("en", "Check my answer.", "Correct, great job!"), ("es", "Revisa mi respuesta.", "¡Correcto, muy bien!")],
+)
+def test_a_check_that_read_only_the_check_line_asks_again_for_the_answer_line(
+    language: str, query: str, praise: str
+) -> None:
+    # Live, qwen2.5vl:3b copied only the bottom line "3(5) + 5 = 20" of "x = 5" over its check, every time.
+    c = _math_client()
+    replies = _check_replies("3(5) + 5 = 20", "x = 5 ; 3(5) + 5 = 20", spoken=praise)
+    with patch.object(c.session, "post", side_effect=replies) as post:
+        action = c.evaluate(query, JPEG, [], REGIONS, SIZE, mode="quiz", task=QUIZ_CHECK, language=language)
+    assert post.call_count == 2
+    assert vc.RETRY_NOTES[language]["check_line"] in post.call_args.kwargs["json"]["messages"][1]["content"]
+    assert action.verdict == "correct"  # type: ignore[attr-defined]
+
+
+def test_a_check_still_reading_only_the_check_line_is_not_graded() -> None:
+    c = _math_client()
+    replies = _check_replies("3(5) + 5 = 20", "15 + 5 = 20", spoken="Correct, great job!")
+    with patch.object(c.session, "post", side_effect=replies) as post:
+        action = c.evaluate("Check my answer.", JPEG, [], REGIONS, SIZE, mode="quiz", task=QUIZ_CHECK)
+    assert post.call_count == 2, "asked again once, never more"
+    assert action.verdict is None and action.spoken_text == vc.TEXTS["en"]["reread"]  # type: ignore[attr-defined]
+    for read in ("x = 5", "x = 4", "3x = 15", "x = 5 ; 3(5) + 5 = 20"):
+        assert not grading.only_checks(read, QUIZ_CHECK["problem"]), read
+
+
 def test_evaluate_never_approves_the_problem_read_back() -> None:
     reply = {"board_answer": "1/2 + 1/3", **CHEER.to_dict()}
     action, _ = _ask(_math_client(), reply, query="Check my answer.", mode="quiz", task=_arithmetic_check("1/2 + 1/3"))

@@ -1311,6 +1311,9 @@ RETRY_NOTES = {
         "misread": "Your last board_answer was not what the student wrote. Look at the photo again and copy the bottom "
         "line of the student's own writing into board_answer, exactly as written; if the answer takes more than one "
         'line (both roots, or x and y), copy each of them, joined with " ; ".',
+        "check_line": "Your last board_answer was the student's check of the answer, not the answer. Look at the photo "
+        "again and copy the student's answer line too (the letter and its value, above the check), exactly as written, "
+        'joined with " ; ".',
         "wrong_answer": 'The student\'s answer "{answer}" is WRONG (it was checked). Do not praise it. Give ONE short hint '
         "about the next step of this problem and ask them to try again. NEVER say the answer or the value of the letter.",
         "incomplete": "It is only part of the answer: tell them there is more to find.",
@@ -1329,6 +1332,9 @@ RETRY_NOTES = {
         "misread": "Tu board_answer anterior no era lo que escribió el estudiante. Mira otra vez la foto y copia en "
         "board_answer la última línea de lo que escribió el estudiante, tal como está; si la respuesta ocupa más de "
         'una línea (las dos raíces, o la x y la y), copia cada una, unidas con " ; ".',
+        "check_line": "Tu board_answer anterior era la comprobación del estudiante, no su respuesta. Mira otra vez la "
+        "foto y copia también la línea de su respuesta (la letra y su valor, arriba de la comprobación), tal como está, "
+        'unidas con " ; ".',
         "wrong_answer": 'La respuesta del estudiante "{answer}" está MAL (ya se revisó). No la felicites. Da UNA pista '
         "corta sobre el siguiente paso de este problema y pídele que lo intente otra vez. NUNCA digas la respuesta ni "
         "el valor de la letra.",
@@ -1371,11 +1377,16 @@ def _retry_note(
     solutions: grading.Answers | None = None,
 ) -> str | None:
     """Why a finished math reply must be asked for again, or None. Quiz dictation and grading are fixed in code; a
-    check is asked again only when what it read off the board (`read`) is the next problem instead. `solutions`:
-    the problem's solution, worked out in code; a help or hint reply that states it is asked again."""
+    check is asked again only when what it read off the board (`read`) is the next problem instead, or only the
+    student's check of the answer ("3(5) + 5 = 20": then for the answer line too). `solutions`: the problem's
+    solution, worked out in code; a help or hint reply that states it is asked again."""
     notes = RETRY_NOTES[normalize_reply_language(language)]
     if kind == "quiz" and quiz_stage(task) == "check":
-        return notes["misread"] if copies_problem(read, _clean((task or {}).get("next_problem")), language) else None
+        t = task or {}
+        if copies_problem(read, _clean(t.get("next_problem")), language):
+            return notes["misread"]
+        # Only the check under the answer ("3(5) + 5 = 20"), the bottom line: never graded, so read the answer too.
+        return notes["check_line"] if read and grading.only_checks(read, _clean(t.get("problem"))) else None
     if kind == "quiz" and quiz_stage(task) != "hint":
         return None
     spoken = action.spoken_text

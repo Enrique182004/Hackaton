@@ -800,6 +800,12 @@ def parse_answers(text: Any, problem: Any = None) -> Answers:
     return frozenset(answers)
 
 
+def only_checks(text: Any, problem: Any) -> bool:
+    """Whether `text` holds a check of the answer and no answer: "3(5) + 5 = 20" (or "15 + 5 = 20") for 3x + 5 = 20,
+    the bottom line under "x = 5"."""
+    return bool(parse_answers(text)) and not parse_answers(text, problem)
+
+
 def unfinished(text: Any) -> bool:
     """Whether `text` is arithmetic still to be worked out, not an answer: "1/2 + 1/3", "2/6 + 3/6", "12 ÷ 4 =",
     "one half plus one third". An answer ("5/6", "1/2 + 1/3 = 5/6"), an equation or a step ("3x = 15") is not."""
