@@ -1,0 +1,68 @@
+# Keep these OUT of Claude's context to save tokens. Copy into each repo root.
+
+# deps & builds
+node_modules/
+.next/
+.nuxt/
+dist/
+build/
+out/
+.vercel/
+.netlify/
+.turbo/
+.cache/
+.parcel-cache/
+coverage/
+.nyc_output/
+.svelte-kit/
+.expo/
+
+# lockfiles (huge, zero signal)
+*.lock
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+bun.lockb
+
+# secrets & env
+.env
+.env.*
+!.env.example
+
+# vcs & os
+.git/
+.DS_Store
+Thumbs.db
+
+# generated / minified / maps
+*.min.js
+*.min.css
+*.map
+prisma/migrations/
+**/__generated__/
+**/*.generated.*
+
+# heavy assets & media (rarely need to read)
+public/
+assets/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.webp
+*.mp4
+*.pdf
+*.woff
+*.woff2
+*.ttf
+
+# tests fixtures & snapshots (big, low value to read)
+**/__snapshots__/
+**/fixtures/
+**/*.snap
+
+# logs & tmp
+*.log
+tmp/
+.tmp/
