@@ -2,6 +2,11 @@
 
 Usage: python scripts/bench_vlm.py [-n 3] [--model qwen2.5vl:3b] [--url http://localhost:11434]
        python scripts/bench_vlm.py --scenarios [--runs 5] [--profile biology|math] [--only H,P] [--raw]
+
+Math scenarios: H/HA help, P/PF practice (equation / fraction board), QD dictate, QH stuck mid-quiz (hint),
+QC/QW/QN check (right / wrong / only the problem written), QDI/QCI/QWI quiz without worksheet problems,
+LO/LE/HF lesson offer, starter and follow-up. Quiz cases get the real seeded chunks, answers included.
+Biology: A missing step, B complete, AB complete after an earlier "not yet".
 """
 
 from __future__ import annotations
@@ -486,7 +491,8 @@ def run_scenarios(
             kwargs = {"mode": scenario.mode, "task": scenario.task, "recent_turns": scenario.turns}
             # raw skips evaluate's math post-processing (quiz grading, offer question, mathspeak): the model alone.
             if raw:
-                a, read, _failed = client._evaluate(*args, **kwargs)
+                reply = client._evaluate(*args, **kwargs)
+                a, read = reply.action, reply.board_answer or reply.board_problem
             else:
                 a, read = client.evaluate(*args, **kwargs), None
             times.append(time.perf_counter() - t)

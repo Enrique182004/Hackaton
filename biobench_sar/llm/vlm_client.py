@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 import requests
 
-from biobench_sar.rag.quiz_bank import invent_problem, solve_problem, strip_answers
+from biobench_sar.rag.quiz_bank import invent_problem, similar_problem, solve_problem, strip_answers
 from biobench_sar.schemas import (
     AvatarAction,
     InkRegion,
@@ -108,6 +108,8 @@ MATH_SCHEMA = '{"spoken_text": str, "animation_state": "idle|walking|pointing|ce
 "target_y": int}'
 # Reading the answer into its own key first makes the model look at the board, and lets code check the value.
 QUIZ_SCHEMA = MATH_SCHEMA.replace('{"spoken_text"', '{"board_answer": str, "spoken_text"')
+# Same for practice: code can then tell when the "new" problem is the board's one read back.
+PRACTICE_SCHEMA = MATH_SCHEMA.replace('{"spoken_text"', '{"board_problem": str, "spoken_text"')
 
 MATH_HELP = """MODE: step-by-step help.
 - Read the equation on the board and the student's latest step.
@@ -128,7 +130,7 @@ Board (ink center 650,620): x^2 = 49. Query: "Just tell me x."
 {"spoken_text": "You can do it! Undo x squared by taking the square root of both sides. Write that step.", "animation_state": "pointing", "target_x": 650, "target_y": 620}"""
 
 MATH_PRACTICE = """MODE: similar problem.
-- Read the problem on the board.
+- FIRST copy the problem written on the board into board_problem, exactly ("" if the board is empty).
 - Make ONE new problem of the same type and difficulty with NEW numbers (and maybe a new letter). \
 It must be different from the board's problem: never read the board's problem back.
 - Dictate only the new problem in words so the student can write it. Do not solve it or say its answer.
@@ -137,9 +139,9 @@ It must be different from the board's problem: never read the board's problem ba
 
 Examples (JSON only, 1920x1080 screen):
 Board: 2x + 3 = 11. Query: "Give me a similar problem."
-{"spoken_text": "Try this one. Four x plus seven equals nineteen. Write it down and solve it.", "animation_state": "idle", "target_x": 960, "target_y": 540}
+{"board_problem": "2x + 3 = 11", "spoken_text": "Try this one. Four x plus seven equals nineteen. Write it down and solve it.", "animation_state": "idle", "target_x": 960, "target_y": 540}
 Board: 2/3 + 1/6. Query: "Another one like this."
-{"spoken_text": "Here is a new one. Three fourths plus one eighth. Give it a try.", "animation_state": "idle", "target_x": 960, "target_y": 540}"""
+{"board_problem": "2/3 + 1/6", "spoken_text": "Here is a new one. Three fourths plus one eighth. Give it a try.", "animation_state": "idle", "target_x": 960, "target_y": 540}"""
 
 MATH_QUIZ = """MODE: quiz. The message gives the quiz stage and the problem.
 - Stage dictate: say the problem number, read the given problem in words and ask for the answer on the board. \
@@ -183,8 +185,9 @@ Learn stage: own. Topic: fractions. Query: "I have one."
 {{"spoken_text": "Great! Write your exercise on the board, then ask me for help.", "animation_state": "idle", \
 "target_x": 960, "target_y": 540}}"""
 
+_SCHEMAS = {"quiz": QUIZ_SCHEMA, "practice": PRACTICE_SCHEMA}
 MATH_PROMPTS = {
-    kind: MATH_BASE.replace("{schema}", QUIZ_SCHEMA if kind == "quiz" else MATH_SCHEMA) + "\n\n" + rules
+    kind: MATH_BASE.replace("{schema}", _SCHEMAS.get(kind, MATH_SCHEMA)) + "\n\n" + rules
     for kind, rules in (("help", MATH_HELP), ("practice", MATH_PRACTICE), ("quiz", MATH_QUIZ), ("learn", MATH_LEARN))
 }
 # Repeated in the message: a 3B model follows the user turn more closely than the system prompt.
@@ -429,18 +432,16 @@ def build_prompt(
     return "\n\n".join(parts)
 
 
-_BOARD_ANSWER_RE = re.compile(r'"board_answer"\s*:\s*(?:"((?:[^"\\]|\\.)*)"|(-?\d+(?:\.\d+)?))')
-
-
-def board_answer(text: str | None) -> str | None:
-    """The model's board_answer: a string or a plain JSON number; the regex only rescues truncated JSON."""
+def _reply_value(text: str | None, key: str) -> str | None:
+    """A helper key of the model's reply (board_answer, board_problem): a string or a plain JSON number. The regex
+    only rescues truncated JSON."""
     data = _extract_json_object(text or "")
     if data is not None:
-        value = data.get("board_answer")
+        value = data.get(key)
         if isinstance(value, bool) or not isinstance(value, (str, int, float)):
             return None
         return _clean(value)
-    match = _BOARD_ANSWER_RE.search(text or "")
+    match = re.search(rf'"{key}"\s*:\s*(?:"((?:[^"\\]|\\.)*)"|(-?\d+(?:\.\d+)?))', text or "")
     if not match:
         return None
     if match.group(2) is not None:
@@ -449,6 +450,10 @@ def board_answer(text: str | None) -> str | None:
         return _clean(json.loads(f'"{match.group(1)}"'))
     except ValueError:
         return None
+
+
+def board_answer(text: str | None) -> str | None:
+    return _reply_value(text, "board_answer")
 
 
 # ---- what a reply says, checked in code ------------------------------------------------------------------------
@@ -492,16 +497,35 @@ def _norm_words(text: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9\s]", " ", _spoken(text).lower()).split())
 
 
-def _math_words(text: str) -> Counter[str]:
-    """The numbers and operations of a text as words ("thirds" -> "third", "divided" -> "over")."""
-    out: Counter[str] = Counter()
+def _math_seq(text: str) -> list[str]:
+    """The numbers and operations of a text as words, in order ("thirds" -> "third", "divided" -> "over")."""
+    out: list[str] = []
     for word in _norm_words(text).split():
         word = _WORD_FORMS.get(word, word)
         if word.endswith("s") and word[:-1] in _NUMBER_WORDS:
             word = word[:-1]
         if word in _NUMBER_WORDS or word.isdigit():
-            out[word] += 1
+            out.append(word)
     return out
+
+
+def _math_words(text: str) -> Counter[str]:
+    return Counter(_math_seq(text))
+
+
+def dictates_problem(spoken: str, like: str | None = None) -> bool:
+    """Whether a reply dictates a whole problem: an operation, and "equals" when it should be an equation."""
+    said = set(_math_seq(spoken))
+    if not said & {"plus", "minus", "times", "over"}:
+        return False
+    return "equals" in said or "=" not in (like or "")
+
+
+def reads_back(spoken: str, problem: str | None) -> bool:
+    """Whether a reply says this exact problem (its numbers and operations in the same order)."""
+    wanted, said = _math_seq(problem or ""), _math_seq(spoken)
+    n = len(wanted)
+    return bool(wanted) and any(said[i : i + n] == wanted for i in range(len(said) - n + 1))
 
 
 def reads_problem(spoken: str, problem: str | None) -> bool:
@@ -674,7 +698,12 @@ def fallback_text(kind: str, task: Mapping[str, Any] | None, has_ink: bool) -> s
 
 
 def _retry_note(
-    action: AvatarAction, kind: str, task: Mapping[str, Any] | None, query: str, recent_turns: Any
+    action: AvatarAction,
+    kind: str,
+    task: Mapping[str, Any] | None,
+    query: str,
+    recent_turns: Any,
+    board: str | None = None,
 ) -> str | None:
     """Why a finished math reply must be asked for again, or None. Quiz dictation and grading are fixed in code."""
     if kind == "quiz" and quiz_stage(task) != "hint":
@@ -682,6 +711,10 @@ def _retry_note(
     spoken = action.spoken_text
     if _is_echo(spoken, query):
         return "Your last reply only repeated the student's words. Answer what they asked instead."
+    if kind == "practice" and board and reads_back(spoken, board):
+        return f"Your last reply read the board's problem ({board}) back. Dictate a NEW problem with new numbers."
+    if kind == "practice" and board and solve_problem(board) and not dictates_problem(spoken, board):
+        return f"Your last reply did not dictate a whole new problem like {board}. Say all of it in words."
     earlier = _repeated(spoken, recent_turns)
     if earlier:
         return f'Your last reply copied an earlier one ("{_short(earlier)}"). Answer the student\'s latest message.'
@@ -691,9 +724,20 @@ def _retry_note(
 
 
 def _salvage(
-    action: AvatarAction, kind: str, task: Mapping[str, Any] | None, query: str, recent_turns: Any, has_ink: bool
+    action: AvatarAction,
+    kind: str,
+    task: Mapping[str, Any] | None,
+    query: str,
+    recent_turns: Any,
+    has_ink: bool,
+    board: str | None = None,
 ) -> AvatarAction:
     """Keep the sentences that are fine (not an echo, a copy or the answer); otherwise use the task's fallback."""
+    spoken = action.spoken_text
+    if kind == "practice" and board and (reads_back(spoken, board) or not dictates_problem(spoken, board)):
+        variant = similar_problem(board)  # same shape, new numbers, made in code
+        if variant:
+            return replace(action, spoken_text=f"Try this one. {variant}. Write it down and solve it.")
     earlier = [str(t.get("a") or "") for t in list(recent_turns or []) if isinstance(t, Mapping)]
 
     def copied(sentence: str) -> bool:
@@ -745,6 +789,7 @@ class RawReply(NamedTuple):
     action: AvatarAction
     board_answer: str | None
     failed: bool = False
+    board_problem: str | None = None
 
 
 class VLMClient:
@@ -826,18 +871,19 @@ class VLMClient:
             if kind == "quiz" and quiz_stage(t) == "dictate" and not _clean(t.get("problem")):
                 number, total = _as_int(t.get("number"), 1), _as_int(t.get("total"), DEFAULT_QUIZ_TOTAL)
                 task = {**t, "problem": _seed_problem(number, total)}
-            action = self._finish(reply, mode, task, query)
-            note = None if self.backend == "mock" else _retry_note(action, kind, task, query, recent_turns)
+                args = (query, image_jpeg, context, ink_regions, projector_size, mode, task, recent_turns)
+            action, board = self._finish(reply, mode, task, query), reply.board_problem
+            note = None if self.backend == "mock" else _retry_note(action, kind, task, query, recent_turns, board)
             if note is None:
                 return action
             logger.info("asking the model again: %s", note)
             retry = self._evaluate(*args, note=note)
             if not retry.failed:
-                again = self._finish(retry, mode, task, query)
-                if _retry_note(again, kind, task, query, recent_turns) is None:
+                again, board = self._finish(retry, mode, task, query), retry.board_problem or board
+                if _retry_note(again, kind, task, query, recent_turns, board) is None:
                     return again
                 action = again
-            return speakable(_salvage(action, kind, task, query, recent_turns, bool(ink_regions)))
+            return speakable(_salvage(action, kind, task, query, recent_turns, bool(ink_regions), board))
         except Exception as exc:  # evaluate must never raise
             logger.exception("Math post-processing failed, using the raw answer: %s", exc)
             return reply.action
@@ -888,7 +934,8 @@ class VLMClient:
             if _extract_json_object(text or "") is None:
                 logger.error("VLM reply is not JSON: %.200s", text)
                 return RawReply(_tutor(parse_vlm_response(text, projector_size), failed=True), None, True)
-            return RawReply(parse_vlm_response(text, projector_size), board_answer(text))
+            action = parse_vlm_response(text, projector_size)
+            return RawReply(action, board_answer(text), False, _reply_value(text, "board_problem"))
         except requests.Timeout:
             logger.error("VLM request timed out (backend=%s)", self.backend)
             message = "The AI model took too long to answer. Please try again."

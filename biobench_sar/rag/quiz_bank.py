@@ -463,6 +463,53 @@ _INVENTED: tuple[tuple[str, Callable[[random.Random], str]], ...] = (
 )
 
 
+_INT = re.compile(r"\d+")
+_FRACTION_PAIR = re.compile(r"(\d+)\s*/\s*(\d+)")
+
+
+def _new_fraction(match: re.Match[str], r: random.Random) -> str:
+    den = max(2, int(match.group(2)) + r.choice((-1, 1, 2, 3)))
+    return f"{r.randint(1, den - 1)}/{den}"
+
+
+def _new_int(match: re.Match[str], r: random.Random) -> str:
+    n = int(match.group())
+    return str(max(2 if n >= 2 else 1, n + r.choice((-2, -1, 1, 2, 3))))
+
+
+def _positive_whole(answer: str | None) -> bool:
+    value = (answer or "").split("=")[-1].strip()
+    return value.isdigit() and int(value) > 0
+
+
+def similar_problem(problem: str, rng: random.Random | None = None) -> str | None:
+    """A problem shaped like `problem` with new numbers ("3/4 - 1/2" -> "5/6 - 1/3", "3x + 5 = 20" -> "4x + 7 = 19"),
+    for when the model reads the board's problem back instead of making a new one. None if code can't vary it."""
+    r = rng or random.Random()
+    if solve_problem(problem) is None:
+        return None
+    sides = problem.split("=")
+    for _ in range(30):
+        if "=" not in problem:
+            candidate = _FRACTION_PAIR.sub(lambda m: _new_fraction(m, r), problem)
+            if candidate == problem:
+                candidate = _INT.sub(lambda m: _new_int(m, r), problem)
+            value = solve_problem(candidate)
+            fine = value is not None and not value.startswith("-") and value != "0"
+        else:
+            left = _INT.sub(lambda m: _new_int(m, r), sides[0])
+            if len(sides) == 2 and _INT.fullmatch(sides[1].strip()):
+                # One number on the right: pick the answer first, so it stays a whole number.
+                value = solve_problem(left.replace("x", f"({r.randint(2, 9)})"))
+                candidate = f"{left.rstrip()} = {value}" if value and value.isdigit() and value != "0" else ""
+            else:
+                candidate = "=".join([left, *(_INT.sub(lambda m: _new_int(m, r), s) for s in sides[1:])])
+            fine = bool(candidate) and _positive_whole(solve_problem(candidate))
+        if fine and candidate.replace(" ", "") != problem.replace(" ", ""):
+            return candidate.strip()
+    return None
+
+
 def invent_problem(number: int, total: int, rng: random.Random | None = None) -> QuizProblem:
     """A made-up problem `number` of `total` for a quiz without worksheet problems, with its answer: one-step
     equations first, x on both sides last. A 3B model asked to invent one mostly echoes the student instead."""

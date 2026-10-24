@@ -304,7 +304,7 @@ def test_math_few_shot_examples_are_json_in_words(kind: str, states: set[str]) -
         assert e["animation_state"] in ANIMATION_STATES
         assert isinstance(e["target_x"], int) and isinstance(e["target_y"], int)
         assert not NOTATION.search(e["spoken_text"]), e["spoken_text"]
-        assert set(e) - {"board_answer"} == {"spoken_text", "animation_state", "target_x", "target_y"}
+        assert set(e) - {"board_answer", "board_problem"} == {"spoken_text", "animation_state", "target_x", "target_y"}
 
 
 def test_math_mode_rules() -> None:
@@ -677,8 +677,8 @@ def test_raw_evaluate_returns_board_answer() -> None:
     c = _math_client()
     reply = {"board_answer": "x = 7", **PRAISE.to_dict()}
     with patch.object(c.session, "post", return_value=_ollama_resp(json.dumps(reply))):
-        action, read, failed = c._evaluate("q", None, [], [], SIZE, task=QUIZ_CHECK)
-    assert action == PRAISE and read == "x = 7" and not failed
+        raw = c._evaluate("q", None, [], [], SIZE, task=QUIZ_CHECK)
+    assert raw.action == PRAISE and raw.board_answer == "x = 7" and not raw.failed and raw.board_problem is None
     assert _math_client("mock")._evaluate("q", None, [], [], SIZE)[1] is None
 
 
@@ -1003,6 +1003,59 @@ def test_offer_question_replaces_another_closing_question() -> None:
 )
 def test_dictated_problems_lose_the_result_the_model_added(task: dict[str, Any], spoken: str, said: str) -> None:
     assert vc.apply_task_rules(AvatarAction(spoken, "idle", 1, 2), "help", task).spoken_text == said
+
+
+PRACTICE = {"kind": "practice"}
+CENTER = {"animation_state": "idle", "target_x": 960, "target_y": 540}
+
+
+def _practice(c: VLMClient, *replies: dict[str, Any]) -> tuple[AvatarAction, Any]:
+    with patch.object(c.session, "post", side_effect=[_ollama_resp(json.dumps(r)) for r in replies]) as post:
+        action = c.evaluate("another one like this", JPEG, [], REGIONS, SIZE, mode="practice", task=PRACTICE)
+    return action, post
+
+
+def test_practice_reading_the_board_back_is_asked_again() -> None:
+    back = {"board_problem": "3/4 - 1/2", "spoken_text": "Try this one. Three fourths minus one half.", **CENTER}
+    new = {**back, "spoken_text": "Try this one. Five sixths minus one third."}
+    action, post = _practice(_math_client(), back, new)
+    assert post.call_count == 2 and "read the board's problem (3/4 - 1/2) back" in str(post.call_args)
+    assert action.spoken_text == "Try this one. Five sixths minus one third."
+
+
+def test_practice_reading_the_board_back_twice_gets_a_problem_made_in_code() -> None:
+    back = {"board_problem": "3x + 5 = 20", "spoken_text": "Try three x plus five equals twenty.", **CENTER}
+    action, _ = _practice(_math_client(), back, back)
+    assert action.spoken_text.startswith("Try this one.") and "equals" in action.spoken_text
+    assert not vc.reads_back(action.spoken_text, "3x + 5 = 20") and action.animation_state == "idle"
+
+
+def test_practice_without_a_whole_problem_is_asked_again() -> None:
+    half = {"board_problem": "3x + 5 = 20", "spoken_text": "Five times something plus six. Can you solve it?", **CENTER}
+    full = {**half, "spoken_text": "Try this one. Four x plus three equals fifteen."}
+    action, post = _practice(_math_client(), half, full)
+    assert post.call_count == 2 and action.spoken_text == "Try this one. Four x plus three equals fifteen."
+
+
+def test_practice_new_problem_is_not_asked_again() -> None:
+    good = {"board_problem": "3x + 5 = 20", "spoken_text": "Try this one. Four x plus seven equals nineteen.", **CENTER}
+    _, post = _practice(_math_client(), good)
+    assert post.call_count == 1
+    assert '"board_problem": str' in system_prompt("math", "practice")
+
+
+@pytest.mark.parametrize(
+    ("spoken", "problem", "back"),
+    [
+        ("Try this one. Three fourths minus one half.", "3/4 - 1/2", True),
+        ("Try this one. Three quarters minus one half.", "3/4 - 1/2", True),
+        ("Try this one. Three fourths plus one half.", "3/4 - 1/2", False),
+        ("Two x plus three equals eleven.", "3x + 2 = 11", False),
+        ("anything", "", False),
+    ],
+)
+def test_reads_back(spoken: str, problem: str, back: bool) -> None:
+    assert vc.reads_back(spoken, problem) is back
 
 
 # --- the offline mock backend follows the task ------------------------------------------------------------------

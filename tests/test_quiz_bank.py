@@ -21,6 +21,7 @@ from biobench_sar.rag.quiz_bank import (
     parse_quiz_file,
     parse_worksheet_text,
     pick_progressive,
+    similar_problem,
     solve_problem,
     strip_answers,
 )
@@ -421,6 +422,28 @@ def test_solver_agrees_with_every_seed_answer() -> None:
             assert solved is None or answer_value(solved) == answer_value(row["answer"]), row
     for p in parse_quiz_file(SEED / "worksheet_linear_equations.md", "w.md"):
         assert solve_problem(p.problem) == p.answer, p
+
+
+@pytest.mark.parametrize(
+    "problem", ["3/4 - 1/2", "1/2 + 1/3", "5/6 ÷ 1/3", "3x + 5 = 20", "x/4 + 3 = 8", "10 - 3x = 4", "2(x + 5) = 3x + 4"]
+)
+def test_similar_problem_keeps_the_shape_with_new_numbers(problem: str) -> None:
+    import random
+
+    rng = random.Random(1)
+    for _ in range(20):
+        new = similar_problem(problem, rng)
+        assert new and new.replace(" ", "") != problem.replace(" ", "")
+        assert re.sub(r"\d+", "N", new) == re.sub(r"\d+", "N", problem), "same operations, same layout"
+        value = solve_problem(new)
+        assert value and not value.split("=")[-1].strip().startswith("-"), new
+        if "=" in problem:
+            assert value.split("=")[1].strip().isdigit(), "an equation keeps a whole-number answer"
+
+
+@pytest.mark.parametrize("problem", ["x^2 = 49", "hello", "x + y = 3"])
+def test_similar_problem_needs_something_code_can_solve(problem: str) -> None:
+    assert similar_problem(problem) is None
 
 
 def test_invented_problems_are_progressive_and_solvable() -> None:
