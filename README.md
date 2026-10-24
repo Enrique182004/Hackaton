@@ -217,7 +217,7 @@ like worksheet problems.
   Offline (`SAR_TTS_BACKEND=say` or `pyttsx3`, or when Edge can't reach the internet), the assistant picks an
   installed Spanish voice, Mexican first. If Spanish comes out with an English voice, install one: on macOS,
   System Settings → Accessibility → Spoken Content → System voice → Manage Voices (e.g. *Paulina*); on Windows,
-  Settings → Time & language → Speech → Add voices → Spanish (Mexico).
+  Settings → Time & language → Language & region → add *Español (México)* with text-to-speech.
 - **Everything else.** Spanish requests ("Ayúdame con el siguiente paso", "Dame un problema parecido", "Hazme
   un quiz", "Quiero aprender a resolver fracciones", "Termina el quiz") are understood by
   `biobench_sar/lang.py`. Math is spoken in Spanish words, and quiz answers in Spanish words are graded.

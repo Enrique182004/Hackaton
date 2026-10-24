@@ -1,81 +1,101 @@
 # Hardware day: plug in and test
 
-One ordered run-through for the first session with the real kit: a **Logitech C930e** webcam and an
+*En español: [HARDWARE_DAY.es.md](HARDWARE_DAY.es.md).*
+
+This is one ordered run-through for the first session with the real kit: a **Logitech C930e** webcam and an
 **Epson WXGA 3LCD** projector on a cart, with its lens level with the middle of the whiteboard. Each step
 says what you should see. If you don't see it, use the fix in that step before moving on.
 
-Budget about 45 minutes. Do part A the day before.
+Budget about 45 minutes, and do part A the day before.
 
 ---
 
 ## A. The day before (no hardware needed)
 
-1. **Install.** Either the desktop build (Windows installer or macOS app, see
+1. **Install.** Use either the desktop build (Windows installer or macOS app, see
    [DESKTOP_BUILDS.md](DESKTOP_BUILDS.md)) or the source checkout (`bash scripts/setup_mac.sh --pull-model`,
-   Windows: `scripts/setup_windows.ps1`).
+   or `scripts/setup_windows.ps1` on Windows).
 2. **The AI model.** Install Ollama and run `ollama pull qwen2.5vl:3b` (about 3.2 GB, needs internet once).
    ✅ `ollama list` shows `qwen2.5vl:3b`.
 3. **Room settings.** Copy `sar.env.example` to `sar.env`: next to the app on a desktop install, or in
-   the repo folder on a source checkout. It is already set for this kit: camera 1920×1080, projector
+   the repo folder on a source checkout (`cp sar.env.example sar.env`; PowerShell:
+   `Copy-Item sar.env.example sar.env`). It is already set for this kit: camera 1920×1080 at index 1, projector
    1280×800, math tutor, language Auto.
 4. **Dry run.** Start the assistant (`.venv/bin/python -m biobench_sar`, or open the app) and open
    `http://127.0.0.1:5050/dashboard`.
-   ✅ The dashboard opens. **Study files** shows the three seed files (quiz bank, tutoring guide, worksheet)
-   and **Ask** answers a typed question within ~10 s ("Help me with the next step").
-   Board shows "Camera not found". That is expected without the webcam.
-5. **First-run download.** On a computer with a microphone the speech model (~140 MB) downloads in the
+   ✅ The dashboard opens. **Worksheets & notes** lists the three seed files (quiz bank, tutoring guide,
+   worksheet), and **Ask** answers a typed question within ~10 s ("Help me with the next step").
+   The Board tab shows "Camera not found", which is expected without the webcam.
+5. **First-run download.** On a computer with a microphone, the speech model (~140 MB) downloads in the
    background at the first start. Let it finish while you still have internet.
+6. **Spanish voice offline (optional).** The Mexican Spanish voice is online (Edge). Without internet the
+   assistant falls back to a voice installed on the laptop, so install a Spanish (Mexico) one: on macOS,
+   System Settings → Accessibility → Spoken Content → System voice → Manage Voices (e.g. *Paulina*); on
+   Windows, Settings → Time & language → Language & region → add *Español (México)* with text-to-speech.
+   `SAR_TTS_BACKEND=say` (Mac) or `pyttsx3` (Windows) in `sar.env` skips the online voice altogether.
+   Test it: with the Wi-Fi off, ask one question in Spanish and listen.
 
 ## B. Set up the room
 
-6. **Projector on the cart**, lens level with the middle of the board and square-on to it (no tilt).
-   Projector menu: aspect **Normal/Native**, **keystone 0**, **Quick Corner off**, **Auto Iris off**,
+7. **Projector on the cart**, lens level with the middle of the board and square-on to it (no tilt).
+   In the projector menu: aspect **Normal/Native**, **keystone 0**, **Quick Corner off**, **Auto Iris off**,
    **ECO** light mode. Connect it to the laptop as an **extended display** at **1280 × 800**.
    ✅ The laptop's display settings show a second display at 1280 × 800.
-7. **Webcam above the lens.** The C930e goes on a tall tripod about **0.7 × the image width** from the
+8. **Webcam above the lens.** Put the C930e on a tall tripod about **0.7 × the image width** from the
    board and at least **0.53 × the image width above the lens**, tilted down so the whole projected
-   image is in view. For a 1.5 m image: about 1.05 m from the board, at least 0.8 m above the lens. Table
-   for other sizes: [HARDWARE_SETUP.md, section 0](HARDWARE_SETUP.md).
+   image is in view. For a 1.5 m image, that is about 1.05 m from the board and at least 0.8 m above the lens.
+   Table for other sizes: [HARDWARE_SETUP.md, section 0](HARDWARE_SETUP.md#0-this-classrooms-kit-logitech-c930e--epson-wxga-3lcd).
    Plug it **directly** into the laptop (no hub). In Logitech's camera app: **lock focus**, **RightLight
    off**, **anti-flicker 60 Hz**. Open the privacy shutter.
-8. **Board and markers.** Clean, matte board. Black or dark-blue marker. Write numbers at least 4 cm tall,
-   decimal points like a pea, minus signs as long as a digit is wide.
+9. **Board and markers.** Use a clean, matte board and a black or dark-blue marker. Write numbers at least
+   5 cm tall, decimal points the size of a pea, and minus signs as long as a digit is wide.
 
 ## C. Check the hardware
 
-9. **Run the hardware check** (from the repo folder; the desktop app shows the same information on its
-   dashboard):
+10. **Run the hardware check** from the repo folder:
 
-   ```bash
-   .venv/bin/python scripts/hardware_check.py
-   ```
+    ```bash
+    .venv/bin/python scripts/hardware_check.py
+    ```
 
-   ✅ Expect: `settings file PASS`, `camera names` listing **Logitech Webcam C930e**, one
-   `camera N PASS 1920x1080 @ ~30 fps`, `microphone PASS`, `tesseract PASS`, `ollama PASS`,
-   `model qwen2.5vl:3b PASS`, `projector PASS a display runs at 1280x800`.
-   - Camera gives 1280x720 → it is on a hub or another camera; plug it directly.
-   - The 1080p camera is not index 1 → set `SAR_CAMERA_INDEX` in `sar.env` to the index that showed
-     1920x1080, then restart the assistant.
-   - Microphone FAIL on a Mac → allow the microphone for Terminal (or the app) in System Settings →
-     Privacy & Security → Microphone; same for Camera.
+    (PowerShell: `.\.venv\Scripts\python.exe scripts\hardware_check.py`. The desktop app has no hardware check:
+    its dashboard's Board checklist shows the camera, microphone and model instead.)
+
+    ✅ Expect: `settings file PASS`, `camera names` listing **Logitech Webcam C930e**, one
+    `camera N PASS 1920x1080 @ ~30 fps`, `microphone PASS`, `tesseract PASS`, `ollama PASS`,
+    `model qwen2.5vl:3b PASS`, `projector PASS a display runs at 1280x800` (on macOS; Windows prints a
+    `displays` line instead).
+    - Camera gives 1280x720 → it is on a hub, or it is another camera. Plug it in directly.
+    - The 1080p camera is not index 1 → set `SAR_CAMERA_INDEX` in `sar.env` to the index that showed
+      1920x1080, then restart the assistant.
+    - Microphone FAIL on a Mac → allow the microphone for Terminal (or the app) in System Settings →
+      Privacy & Security → Microphone. Do the same for Camera.
+    - Camera or microphone dark on Windows → *Settings → Privacy & security → Camera* (and *Microphone*) →
+      turn on **Let desktop apps access your camera**.
+    - `displays ... skipped` on Windows → check by eye that Windows' display settings show the projector at
+      1280 × 800.
+    - `tesseract FAIL` on Windows → add `C:\Program Files\Tesseract-OCR` to your user `PATH` and open a new
+      PowerShell window. Only photo uploads need it.
 
 ## D. Line up camera and projector
 
-10. **Projector page.** Open `http://127.0.0.1:5050/` on the projector display, click once (allows
+11. **Projector page.** Open `http://127.0.0.1:5050/` on the projector display, click once (this allows
     sound), then press **F** for full screen.
     ✅ The board shows Pip, the avatar, on a black (invisible) background.
-11. **Calibrate.** On the laptop dashboard: **Board** tab → **Line up camera and projector**. A checkerboard
-    flashes on the board for a few seconds; keep everything still.
-    ✅ "Lined up!" and the Board checklist shows **Camera and projector are lined up**.
+12. **Calibrate.** On the laptop dashboard, go to the **Board** tab → **Line up camera and projector**. A
+    checkerboard flashes on the board for a few seconds, so keep everything still.
+    ✅ "Lined up!", and the Board checklist shows **Camera and projector are lined up**.
     - "Couldn't see the checkerboard" → the projector page is not full screen, the camera does not see the
-      whole image, or the room is too bright. Fix and press it again.
-12. **Glare.** The Board checklist shows no glare warning.
+      whole image, or the room is too bright. Fix it and press the button again.
+13. **Glare.** The Board checklist shows no glare warning.
     ✅ "No glare on the board".
-    - Glare warning → the projector lens is reflecting into the camera. Move the webcam further out on the
-      lens's side (higher above it), then use the one-eye test from
-      [HARDWARE_SETUP.md, section 1](HARDWARE_SETUP.md), and calibrate again.
-13. **Ink.** Write `3x + 5 = 20` large on the board.
-    ✅ Board tab: an orange box appears around it within a second or two (More tools → "Drawings: 1").
+    - Glare warning → the projector lens is reflecting into the camera. **Raise the webcam higher above
+      the lens**, check with the one-eye test from
+      [HARDWARE_SETUP.md, section 1](HARDWARE_SETUP.md#1-projector-and-webcam-placement), then calibrate again.
+14. **Ink.** Write `3x + 5 = 20` large on the board.
+    ✅ On the Board tab, an orange box appears around it within a second or two (More tools → "Drawings: 1").
+    Pip, the speech bubble and the quiz card are never boxed: the projector page tells the server where they
+    are, and that part of the camera picture is ignored.
 
 ## E. First lessons (English)
 
@@ -83,11 +103,12 @@ Ask from the dashboard (**Ask** tab: type, or press **Talk**) or press **Space**
 
 | Say / type | Expected |
 | --- | --- |
-| "Help me with the next step" (with `3x + 5 = 20` on the board) | Pip points at the equation, the equation is highlighted, and the next step is explained ("subtract five from both sides"). **It never says x = 5.** |
-| "Give me a problem like this one" | A new two-step equation is dictated in words; it's shown in notation on the dashboard. |
-| "Quiz me" | A quiz starts. Problem 1 of 10 is read out and shown in a card on the projector. Write the answer, then say "I'm done". A right answer gets 🎉 and the next problem; a wrong one gets an amber hint, never the answer. |
-| "I want to learn how to solve fractions" (empty board) | A short intro, then: "Do you have an exercise in mind, or should I make one up for you?" Answer "make one up" → a starter problem is dictated. |
-| "Stop the quiz" | Pip asks to confirm; say "yes". |
+| "Help me with the next step" (with `3x + 5 = 20` on the board) | Pip walks to just left of the equation and points at it, and a glowing outline pulses around the equation (it fades after about 8 s). The next step is explained ("subtract five from both sides"). **It never says x = 5.** |
+| "Give me a similar problem" | A new two-step equation is dictated in words and shown in notation on the dashboard. Pip stands where it covers none of the writing. |
+| "Quiz me" | A quiz starts. Problem 1 of 10 is read out and shown in a card at the top left of the projector. Write the answer, then say "check my answer". The code grades what you wrote: a right answer gets 🎉 and the next problem, and a wrong one gets an amber hint (never the answer) with the outline around your answer. An answer it can't read gets "I couldn't read your answer clearly. Ask me to check it again." |
+| "I'm stuck" (during the quiz) | One hint on the same problem. The quiz and the score stay as they are. |
+| "I want to learn how to solve fractions" (empty board) | A short intro, then "Do you have an exercise in mind, or should I make one up for you?" Answer "make one up" and a starter problem is dictated. |
+| "Stop the quiz" | Pip asks "Do you want to end the quiz? Say yes to stop, or keep going." Say "yes" and you hear your score. Anything else keeps the quiz going. The dashboard's **Stop quiz** button stops at once. |
 
 ✅ The voice never reads symbols ("three x plus five equals twenty", not "3x+5=20").
 
@@ -97,16 +118,36 @@ Switch the dashboard language to **Español** (or leave **Auto** and just speak 
 
 | Di / escribe | Esperado |
 | --- | --- |
-| "Ayúdame con el siguiente paso" | Explica el siguiente paso en español, sin decir el resultado. |
-| "Dame otro problema parecido" | Dicta una ecuación nueva en palabras ("dos x más tres es igual a once"). |
-| "Examíname" | Empieza el quiz en español. |
+| "Ayúdame con el siguiente paso" | Explica el siguiente paso en español, sin decir el resultado, y resalta la ecuación. |
+| "Dame un problema parecido" | Dicta una ecuación nueva en palabras ("dos x más tres es igual a once"). |
+| "Hazme un quiz" (o "Examíname") | Empieza el quiz en español. Una respuesta escrita como "x = 5" o "x es igual a cinco" se califica igual. |
 | "Quiero aprender a resolver fracciones" | Una introducción corta y la pregunta «¿Tienes un ejercicio en mente o quieres que invente uno?»; responde «invéntame uno». |
+| "Termina el quiz" | «¿Quieres terminar el quiz? Di «sí» para terminar o sigue con tu respuesta.» Responde «sí». |
 
 ✅ The Spanish voice is a Mexican voice and reads math in Spanish words.
 
-## G. Write down what you saw
+## G. Phones (optional)
 
-Record for each step: ✅ or what happened instead, with a phone photo of the board and the dashboard.
+Phones and tablets on the same Wi-Fi can be remote dashboards. The laptop still does all the work.
+Details and limits: [MOBILE.md](MOBILE.md).
+
+15. **Turn it on.** Stop the assistant, add `SAR_LAN=1` to `sar.env` and start it again. Allow the firewall
+    prompt (Windows: **Private networks**; macOS: **Allow**).
+    ✅ The terminal (or the app's console window) prints the phone address, e.g.
+    `http://192.168.1.20:5050/join`, and a six-digit **PIN**. The laptop keeps using
+    `http://127.0.0.1:5050/dashboard` and never needs the PIN.
+16. **Join from a phone.** Put the phone on the same Wi-Fi, open the address and type the PIN.
+    ✅ The phone shows the dashboard. A question typed on the phone (or spoken with the keyboard's dictation
+    mic) makes Pip answer on the board.
+    - The page doesn't load → both must be on the same Wi-Fi, and guest or campus networks often block devices
+      from reaching each other (use a phone hotspot). Disconnect any VPN on the laptop.
+    - "Too many wrong PINs" → that phone waits a minute. Phones that already joined keep working.
+17. **End of class.** Use **Disconnect all phones** (or **New PIN**, which also signs every phone out), then
+    remove `SAR_LAN=1` and restart. A restart always makes a new PIN.
+
+## H. Write down what you saw
+
+Record each step as ✅, or write what happened instead, with a phone photo of the board and the dashboard.
 Attach the `hardware_check.py` output. These close GitHub issues **#2** (camera and mic), **#3**
 (calibration on a real board), **#7** (wake word, if you try `SAR_LISTEN_MODE=wake`) and **#9** (scenario
 test cases). File anything that went wrong as a new issue with the photos.
@@ -117,7 +158,9 @@ test cases). File anything that went wrong as a new issue with the photos.
 | --- | --- |
 | Dashboard says it can't reach the assistant | The assistant window was closed. Start it again. |
 | Answers say the AI model is unreachable | Start Ollama (open the Ollama app), then ask again. |
-| Avatar points next to the writing | Calibrate again (step 11); check the projector page is full screen. |
-| Small symbols misread (decimals, minus signs) | Write bigger and bolder; check the camera really runs at 1920×1080 (step 9). |
-| Washed-out spot on the board in the camera view | Glare: step 12. |
-| No sound | Click once on the projector page; check the laptop's output device. |
+| Avatar points next to the writing, or the glowing outline is in the wrong place | Calibrate again (step 12) and check the projector page is full screen. |
+| Small symbols misread (decimals, minus signs) | Write bigger and bolder, and check the camera really runs at 1920×1080 (step 10). |
+| "I couldn't read your answer clearly" again and again | Write the answer alone on the bottom line, large, as `x = 5`. |
+| Washed-out spot on the board in the camera view | Glare: see step 13. |
+| No sound | Click once on the projector page and check the laptop's output device. |
+| Spanish sounds like an English voice (offline) | Install a Spanish (Mexico) voice (step 6). |
