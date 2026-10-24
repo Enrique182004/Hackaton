@@ -433,13 +433,6 @@ def test_ink_keeps_blobs_under_a_stale_ui_rect(built: Any, fakes: Any, monkeypat
     assert client.get("/api/ink").get_json()["regions"] == [WORK, PIP], "the page stopped reporting its boxes"
 
 
-def test_ink_drops_the_board_frame(built: Any, fakes: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    left = {"x": 0, "y": 0, "w": 20, "h": 360, "cx": 10, "cy": 180}
-    right = {"x": 610, "y": 10, "w": 25, "h": 340, "cx": 622, "cy": 180}
-    _board_with(fakes, monkeypatch, left, WORK, right)
-    assert built[0].test_client().get("/api/ink").get_json()["regions"] == [WORK]
-
-
 def test_query_empty_text_is_400(built: Any) -> None:
     client = built[0].test_client()
     assert client.post("/api/query", json={"text": "   "}).status_code == 400

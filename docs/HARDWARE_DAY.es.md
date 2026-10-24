@@ -117,8 +117,7 @@ Calcula unos 45 minutos y haz la parte A un día antes.
 14. **Tinta.** Escribe `3x + 5 = 20` en grande en el pizarrón.
     ✅ En la pestaña Pizarrón aparece un recuadro naranja alrededor en uno o dos segundos (Más herramientas →
     «Dibujos: 1»). Pip, el globo de diálogo y la tarjeta del quiz nunca llevan recuadro: la página del proyector
-    le dice al servidor dónde están, y esa parte de la imagen de la cámara se ignora. Tampoco el marco metálico
-    del pizarrón a la izquierda o a la derecha cuando la imagen se sale del pizarrón.
+    le dice al servidor dónde están, y esa parte de la imagen de la cámara se ignora.
 
 ## E. Primeras clases (inglés)
 

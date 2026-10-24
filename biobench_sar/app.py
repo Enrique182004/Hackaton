@@ -620,7 +620,7 @@ def create_app(
 
     @app.get("/api/ink")
     def api_ink() -> Any:
-        # The ink the model is shown, so the dashboard never boxes Pip, the bubble, the quiz card or the board's frame.
+        # The ink the model is shown, so the dashboard never boxes Pip, the speech bubble or the quiz card.
         regions, frame = assistant.board_ink()
         if frame is None:
             return jsonify({"regions": [], "size": list(settings.projector_size), "error": "no frame"}), 503
