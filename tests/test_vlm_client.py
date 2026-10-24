@@ -1762,6 +1762,55 @@ def test_spanish_check_that_copies_the_next_problem_is_asked_again_and_graded() 
     assert action.spoken_text == "¡Correcto, muy bien! Problema dos. dos x menos cuatro es igual a diez"
 
 
+MULTI_LINE = {"en": 'more than one line (both roots, or x and y), copy each of them, joined with " ; "'}
+MULTI_LINE["es"] = 'más de una línea (las dos raíces, o la x y la y), copia cada una, unidas con " ; "'
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_every_check_prompt_asks_for_every_answer_line(language: str) -> None:
+    # A system or two roots written one per line lost the point when only the bottom line was copied.
+    stage = " ".join(system_prompt("math", "quiz", language).split())
+    note = vc.quiz_task_text(QUIZ_CHECK, language)
+    retry = vc.RETRY_NOTES[language]["misread"]
+    for text in (stage, note, retry):
+        assert MULTI_LINE[language].lower() in " ".join(text.split()).lower(), text
+
+
+def _two_line_problems() -> list[tuple[str, str]]:
+    import csv
+
+    bank = Path(__file__).resolve().parent.parent / "biobench_sar" / "knowledge" / "math" / "quiz_bank.csv"
+    rows = list(csv.DictReader(bank.open(encoding="utf-8")))
+    return [(r["problem"], r["answer"]) for r in rows if re.search(r"\b(?:and|or)\b", r["answer"])]
+
+
+def test_two_line_answers_of_every_bundled_system_and_quadratic_get_the_point() -> None:
+    problems = _two_line_problems()
+    assert len(problems) == 7, "the 3 systems and 4 quadratics of the bundled bank"
+    for problem, answer in problems:
+        task = {**QUIZ_CHECK, "problem": problem, "answer": answer, "next_problem": None}
+        lines = re.split(r"\s+(?:and|or)\s+", answer)
+        for language in ("en", "es"):
+            # Copied joined with " ; ", or one per line, and a check line under them is no answer (R1).
+            for read in (" ; ".join(lines), "\n".join(lines), " ; ".join([*lines, "7 + 3 = 10"])):
+                action = vc.check_quiz_answer(PRAISE, task, read, language=language)
+                assert action.verdict == "correct", (problem, read, language)  # type: ignore[attr-defined]
+            half = vc.check_quiz_answer(PRAISE, task, lines[-1], language=language)
+            assert half.verdict == "wrong" and half.spoken_text == vc.TEXTS[language]["incomplete"]  # type: ignore[attr-defined]
+
+
+def test_a_misread_check_asks_again_for_every_answer_line_and_grades_them() -> None:
+    c = _math_client()
+    task = {**QUIZ_CHECK, "problem": "x + y = 10 and x - y = 4", "answer": "x = 7 and y = 3"}
+    replies = _check_replies("2x - 4 = 10", "x = 7 ; y = 3 ; 7 + 3 = 10", spoken="Correct, great job!")
+    with patch.object(c.session, "post", side_effect=replies) as post:
+        action = c.evaluate("Is it right?", JPEG, [], REGIONS, SIZE, mode="quiz", task=task)
+    assert post.call_count == 2
+    retry = post.call_args.kwargs["json"]["messages"][1]["content"]
+    assert vc.RETRY_NOTES["en"]["misread"] in retry and MULTI_LINE["en"] in retry
+    assert action.verdict == "correct"  # type: ignore[attr-defined]
+
+
 @pytest.mark.parametrize("language", ["en", "es"])
 def test_check_that_copies_the_next_problem_twice_stays_ungraded(language: str) -> None:
     c = _math_client()

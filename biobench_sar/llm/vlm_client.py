@@ -1309,7 +1309,8 @@ RETRY_NOTES = {
         "starter": "Your last reply did not dictate a problem. Dictate ONE easy problem on {topic} in words, with its "
         "numbers and operation, not a story.",
         "misread": "Your last board_answer was not what the student wrote. Look at the photo again and copy the bottom "
-        "line of the student's own writing into board_answer, exactly as written.",
+        "line of the student's own writing into board_answer, exactly as written; if the answer takes more than one "
+        'line (both roots, or x and y), copy each of them, joined with " ; ".',
         "wrong_answer": 'The student\'s answer "{answer}" is WRONG (it was checked). Do not praise it. Give ONE short hint '
         "about the next step of this problem and ask them to try again. NEVER say the answer or the value of the letter.",
         "incomplete": "It is only part of the answer: tell them there is more to find.",
@@ -1326,7 +1327,8 @@ RETRY_NOTES = {
         "starter": "Tu respuesta anterior no dictó un problema. Dicta UN problema fácil de {topic} con palabras, con "
         "sus números y su operación, no una historia.",
         "misread": "Tu board_answer anterior no era lo que escribió el estudiante. Mira otra vez la foto y copia en "
-        "board_answer la última línea de lo que escribió el estudiante, tal como está.",
+        "board_answer la última línea de lo que escribió el estudiante, tal como está; si la respuesta ocupa más de "
+        'una línea (las dos raíces, o la x y la y), copia cada una, unidas con " ; ".',
         "wrong_answer": 'La respuesta del estudiante "{answer}" está MAL (ya se revisó). No la felicites. Da UNA pista '
         "corta sobre el siguiente paso de este problema y pídele que lo intente otra vez. NUNCA digas la respuesta ni "
         "el valor de la letra.",
