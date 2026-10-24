@@ -62,6 +62,7 @@ let offlineHintTimer = null;
 let tutorVersion = 0; // bumped per "tutor" render so an older GET can't roll the card back
 let languageVersion = 0; // the same for "language"
 let highlight = null; // [x, y, w, h] in projector px while the outline is on (not fading)
+let outlined = null; // the ink the outline element frames, kept while it fades
 let highlightTimer = null;
 let sentRects = null; // the last "ui_rects" sent, and when
 let sentAt = 0;
@@ -84,10 +85,26 @@ function toPixels(x, y) {
 function placeAvatar(state, tx, ty) {
   const anchor = state === "pointing" ? POINT_TIP : CENTER;
   const p = toPixels(tx, ty);
-  avatar.style.left = Math.round(p.x - anchor.x) + "px";
-  avatar.style.top = Math.round(p.y - anchor.y) + "px";
+  const top = Math.round(p.y - anchor.y);
+  avatar.style.left = Math.round(besideHighlight(state, p.x - anchor.x, top)) + "px";
+  avatar.style.top = top + "px";
   // Bubble sits above the avatar; flip/shift it so it never leaves the projected area.
   fitBubble();
+}
+
+// error / celebrating stand beside the writing they are about: the server puts them there for a page drawn at the
+// projector's own size. A smaller window draws the avatar bigger than that, so it steps further aside rather than
+// cover the outlined ink, which the server would then take for the page's own light and drop.
+function besideHighlight(state, left, top) {
+  if (state === "pointing" || !highlight) return left;
+  const hl = highlightBox(highlight);
+  const w = avatar.offsetWidth || FRAME;
+  const h = avatar.offsetHeight || FRAME;
+  const covers = (x) => x < hl.left + hl.width && x + w > hl.left && top < hl.top + hl.height && top + h > hl.top;
+  if (!covers(left)) return left;
+  const sides = [hl.left - EDGE - w, hl.left + hl.width + EDGE];
+  if (left + w / 2 > hl.left + hl.width / 2) sides.reverse();
+  return sides.find((x) => x >= 0 && x + w <= window.innerWidth) ?? left;
 }
 
 function clampX(x, width) {
@@ -151,6 +168,7 @@ function placeHighlight() {
 function showHighlight(rect, state) {
   const same = highlight !== null && rect.every((v, i) => v === highlight[i]);
   highlight = rect.slice();
+  outlined = rect.slice();
   placeHighlight();
   const tone = HIGHLIGHT_TONES[state];
   if (tone) highlightEl.dataset.tone = tone;
@@ -198,15 +216,23 @@ function onBoard(node) {
   return !node.classList.contains("capturing");
 }
 
-// The outline goes as its four edges, not its whole box: the server drops ink mostly under a UI rect, and the
-// writing inside the outline is exactly what the student is working on.
-function edges(r) {
-  const band = HIGHLIGHT_BORDER;
+// A window-px box plus UI_PAD all round, as [x0, y0, x1, y1] in projector px.
+function padded(r, sx, sy) {
+  return [(r.left - UI_PAD) * sx, (r.top - UI_PAD) * sy, (r.left + r.width + UI_PAD) * sx, (r.top + r.height + UI_PAD) * sy];
+}
+
+// The outline goes as four bands, not its whole box: the server drops ink mostly under a UI rect, and the writing
+// inside the outline is exactly what the student is working on. Each band reaches from the glow (UI_PAD out) to
+// UI_PAD inside the border, and never past the edge of the ink it frames, however big the window draws the outline.
+function edges(r, sx, sy) {
+  const [x, y, w, h] = outlined;
+  const [x0, y0, x1, y1] = padded(r, sx, sy);
+  const inside = HIGHLIGHT_BORDER + UI_PAD;
   return [
-    { left: r.left, top: r.top, width: r.width, height: band },
-    { left: r.left, top: r.top + r.height - band, width: r.width, height: band },
-    { left: r.left, top: r.top, width: band, height: r.height },
-    { left: r.left + r.width - band, top: r.top, width: band, height: r.height },
+    [x0, y0, x1, Math.min(y, (r.top + inside) * sy)],
+    [x0, Math.max(y + h, (r.top + r.height - inside) * sy), x1, y1],
+    [x0, y0, Math.min(x, (r.left + inside) * sx), y1],
+    [Math.max(x + w, (r.left + r.width - inside) * sx), y0, x1, y1],
   ];
 }
 
@@ -222,15 +248,17 @@ function uiRects() {
     if (!onBoard(holder) || !onBoard(node)) continue;
     const r = node.getBoundingClientRect();
     if (!(r.width > 0 && r.height > 0)) continue;
-    boxes.push(...(node === highlightEl ? edges(r) : [r]));
+    if (node === highlightEl && outlined) boxes.push(...edges(r, sx, sy));
+    else boxes.push(padded(r, sx, sy));
   }
   const out = [];
-  for (const r of boxes) {
-    const x0 = Math.max(0, (r.left - UI_PAD) * sx);
-    const y0 = Math.max(0, (r.top - UI_PAD) * sy);
-    const x1 = Math.min(PROJ_W, (r.left + r.width + UI_PAD) * sx);
-    const y1 = Math.min(PROJ_H, (r.top + r.height + UI_PAD) * sy);
-    if (x1 - x0 >= 1 && y1 - y0 >= 1) out.push([Math.round(x0), Math.round(y0), Math.round(x1 - x0), Math.round(y1 - y0)]);
+  // Edges are rounded, not sizes, so a band that stops at the ink's edge still stops there once rounded.
+  for (const [a, b, c, d] of boxes) {
+    const x0 = Math.round(Math.max(0, a));
+    const y0 = Math.round(Math.max(0, b));
+    const x1 = Math.round(Math.min(PROJ_W, c));
+    const y1 = Math.round(Math.min(PROJ_H, d));
+    if (x1 - x0 >= 1 && y1 - y0 >= 1) out.push([x0, y0, x1 - x0, y1 - y0]);
   }
   return out;
 }
@@ -567,7 +595,8 @@ document.addEventListener("keydown", (e) => {
 
 window.addEventListener("resize", () => {
   placeHighlight();
-  if (lastTarget) placeAvatar(currentState, lastTarget.x, lastTarget.y);
+  // The destination's state, not "walking": a resize mid-walk keeps the pointing anchor and the step aside.
+  if (lastTarget) placeAvatar(pendingState, lastTarget.x, lastTarget.y);
   updateCrosshair();
   uiChanged();
 });

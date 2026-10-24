@@ -1418,12 +1418,108 @@ def test_pointing_at_ink_on_the_left_edge_stands_right_of_it(h: Harness, monkeyp
     assert (avatar["target_x"], avatar["target_y"]) == (5 + 50 + POINT_GAP, 120)
 
 
-def test_error_and_celebrating_go_to_the_centre_of_the_region(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+# Beside the region, not on it (it used to be its centre): the page reports the avatar's box as UI, so the answer
+# rewritten under it was dropped on the next check. The avatar's centre is AVATAR_REACH + POINT_GAP = 124 px out.
+BESIDE = 124
+
+
+def test_error_and_celebrating_stand_beside_the_region(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     _with_ink(monkeypatch, LINE_1, LINE_2)
     error = _reply(h, "is this right?", AvatarAction("A step is missing.", "error", 900, 700))
-    assert (error["target_x"], error["target_y"]) == (500, 440) and error["highlight"] == [400, 400, 200, 80]
+    assert (error["target_x"], error["target_y"]) == (400 - BESIDE, 440) and error["highlight"] == [400, 400, 200, 80]
     cheer = _reply(h, "is this right?", AvatarAction("All there!", "celebrating", 10, 10))
-    assert (cheer["target_x"], cheer["target_y"]) == (550, 240) and cheer["highlight"] == [400, 200, 300, 80]
+    assert (cheer["target_x"], cheer["target_y"]) == (400 - BESIDE, 240) and cheer["highlight"] == [400, 200, 300, 80]
+
+
+def _avatar_box(x: float, y: float) -> tuple[float, float, float, float]:
+    from biobench_sar.assistant import AVATAR_REACH
+
+    return (x - AVATAR_REACH, y - AVATAR_REACH, 2.0 * AVATAR_REACH, 2.0 * AVATAR_REACH)
+
+
+def _covers(a: tuple[float, ...], b: tuple[float, ...]) -> bool:
+    return min(a[0] + a[2], b[0] + b[2]) > max(a[0], b[0]) and min(a[1] + a[3], b[1] + b[3]) > max(a[1], b[1])
+
+
+@pytest.mark.parametrize(
+    ("ink", "state", "spot"),
+    [
+        # Left of the line, as pointing stands.
+        ([(500.0, 300.0, 300.0, 56.0)], "error", (500 - BESIDE, 328)),
+        # No room on the left: on the right.
+        ([(60.0, 300.0, 300.0, 56.0)], "celebrating", (360 + BESIDE, 328)),
+        # Other writing on the left: the free side.
+        ([(150.0, 300.0, 220.0, 56.0), (420.0, 300.0, 250.0, 56.0)], "error", (670 + BESIDE, 328)),
+        # A line across the whole board: under it, or over it at the bottom.
+        ([(40.0, 300.0, 1200.0, 56.0)], "error", (640, 356 + BESIDE)),
+        ([(40.0, 640.0, 1200.0, 56.0)], "celebrating", (640, 640 - BESIDE)),
+    ],
+)
+def test_error_and_celebrating_never_stand_on_ink(
+    ink: list[tuple[float, float, float, float]], state: str, spot: tuple[int, int]
+) -> None:
+    from biobench_sar.assistant import AVATAR_HALF, place_target
+
+    regions = [{"x": x, "y": y, "w": w, "h": hgt} for x, y, w, hgt in ink]
+    target = ink[-1]
+    model = AvatarAction("a", state, round(target[0] + target[2] / 2), round(target[1] + target[3] / 2))
+    action, box = place_target(model, regions, (1280, 800))
+    assert box == [round(v) for v in target]
+    assert (action.target_x, action.target_y) == spot
+    avatar = _avatar_box(action.target_x, action.target_y)
+    assert not any(_covers(avatar, line) for line in ink), "the avatar's box covers no writing"
+    assert AVATAR_HALF <= action.target_x <= 1280 - AVATAR_HALF, "the whole sprite is on the board"
+
+
+def _page_ui(avatar: dict[str, Any]) -> list[list[int]]:
+    """What main.js reports after this answer on a full-screen page (1 window px = 1 projector px): the avatar's
+    160 px sprite centred on the target plus its 10 px UI_PAD, and the outline's four bands, from 10 px past its
+    3 px border (14 px out from the ink) to 4 px short of the ink (test_frontend checks the page itself)."""
+    tx, ty = avatar["target_x"], avatar["target_y"]
+    rects = [[tx - 90, ty - 90, 180, 180]]
+    if avatar["highlight"]:
+        x, y, w, hgt = avatar["highlight"]
+        left, top, wide, tall = x - 27, y - 27, w + 54, hgt + 54
+        rects += [
+            [left, top, wide, 23],
+            [left, y + hgt + 4, wide, 23],
+            [left, top, 23, tall],
+            [x + w + 4, top, 23, tall],
+        ]
+    return rects
+
+
+# "3x + 5 = 20" over the student's answer, camera blobs about 55 px tall (a 1.40 m board at 1280 px: ~4 cm digits).
+PROBLEM_BLOBS = [
+    {"x": 300, "y": 300, "w": 92, "h": 55, "cx": 346, "cy": 327},
+    {"x": 420, "y": 308, "w": 40, "h": 40, "cx": 440, "cy": 328},
+    {"x": 488, "y": 300, "w": 36, "h": 55, "cx": 506, "cy": 327},
+    {"x": 552, "y": 315, "w": 45, "h": 25, "cx": 574, "cy": 327},
+    {"x": 625, "y": 300, "w": 80, "h": 55, "cx": 665, "cy": 327},
+]
+ANSWER_BLOBS = [  # "x = 7", rewritten as "x = 5" in the same place
+    {"x": 300, "y": 400, "w": 40, "h": 40, "cx": 320, "cy": 420},
+    {"x": 345, "y": 408, "w": 30, "h": 22, "cx": 360, "cy": 419},
+    {"x": 385, "y": 393, "w": 36, "h": 55, "cx": 403, "cy": 420},
+]
+
+
+def test_a_rewritten_answer_is_read_again_beside_the_avatar(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The live quiz loop: wrong, rewritten, checked again. Centred on the answer, the avatar's box (reported as UI)
+    # covered it and the second check said "no answer"; beside it, the new answer is read and graded.
+    _bank(h, "a.md", ("3x + 5 = 20", "x = 5", 1), ("x + 1 = 2", "x = 1", 1))
+    _ask(h, "quiz me")
+    _with_ink(monkeypatch, *PROBLEM_BLOBS, *ANSWER_BLOBS)
+    wrong = _reply(h, "check my answer", AvatarAction("Not quite.", "error", 500, 420))
+    assert wrong["highlight"] == [300, 393, 121, 55]
+    assert (wrong["target_x"], wrong["target_y"]) == (300 - BESIDE, 420)
+    h.assistant.set_ui_rects(_page_ui(wrong))
+    right = _reply(h, "check my answer", AvatarAction("Correct!", "celebrating", 500, 420))
+    assert h.vlm.seen[-1][2] == [*PROBLEM_BLOBS, *ANSWER_BLOBS], "nothing the student wrote is masked"
+    assert right["highlight"] == [300, 393, 121, 55] and h.assistant.tutor.quiz_number == 2
+    h.assistant.set_ui_rects(_page_ui(right))
+    _reply(h, "check my answer", AvatarAction("Correct!", "celebrating", 500, 420))
+    assert h.vlm.seen[-1][2] == [*PROBLEM_BLOBS, *ANSWER_BLOBS]
 
 
 def test_quiz_check_highlights_the_answer_line(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1431,7 +1527,7 @@ def test_quiz_check_highlights_the_answer_line(h: Harness, monkeypatch: pytest.M
     _ask(h, "quiz me")
     _with_ink(monkeypatch, LINE_1, LINE_2)
     avatar = _reply(h, "check my answer", AvatarAction("Correct!", "celebrating", 550, 240))  # the model: line 1
-    assert (avatar["target_x"], avatar["target_y"]) == (500, 440), "the lowest line is the answer"
+    assert (avatar["target_x"], avatar["target_y"]) == (400 - BESIDE, 440), "beside the lowest line, the answer"
     assert avatar["highlight"] == [400, 400, 200, 80]
 
 
@@ -1522,11 +1618,18 @@ def test_set_ui_rects_skips_malformed_entries(h: Harness) -> None:
     assert len(h.assistant.ui_rects()) == MAX_UI_RECTS
 
 
+# What main.js reports for the outline around LINE_1 ([400, 200, 300, 80]) on a full-screen 1280×800 page: four bands
+# from 10 px past the 3 px border, 14 px out from the ink, to 10 px inside it (test_frontend checks the page itself).
+LINE_1_OUTLINE = [[373, 173, 354, 23], [373, 284, 354, 23], [373, 173, 23, 134], [704, 173, 23, 134]]
+
+
 def test_the_highlight_never_masks_the_ink_it_outlines(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The page never reports the outline's whole box (the old server exemption for one never fired): its four
+    # edges mask its glow and leave the writing inside alone.
     _with_ink(monkeypatch, LINE_1, LINE_2)
     first = _reply(h, "help", AvatarAction("Look.", "pointing", 410, 210))
-    x, y, w, hgt = first["highlight"]
-    h.assistant.set_ui_rects([[x - 10, y - 10, w + 20, hgt + 20], [380, 380, 300, 150]])  # glow + the bubble
+    assert first["highlight"] == [400, 200, 300, 80]
+    h.assistant.set_ui_rects([*LINE_1_OUTLINE, [380, 380, 300, 150]])  # the outline + the bubble
     _reply(h, "and now?", AvatarAction("Look.", "pointing", 410, 210))
     assert h.vlm.seen[-1][2] == [LINE_1], "the outlined line stays, the line under the bubble goes"
 
@@ -1537,9 +1640,13 @@ def test_drop_ui_ink() -> None:
     ink = [dict(LINE_1), dict(LINE_2), {"x": 1}]
     assert drop_ui_ink(ink, []) == ink
     assert drop_ui_ink(ink, [(380.0, 380.0, 300.0, 150.0)]) == [LINE_1, {"x": 1}], "no box: kept"
-    outline = (400.0, 200.0, 300.0, 80.0)
-    assert drop_ui_ink(ink, [(395.0, 195.0, 310.0, 90.0)], outline) == ink, "the highlight itself"
-    assert drop_ui_ink(ink, [(0.0, 0.0, 1280.0, 800.0)], outline) == [{"x": 1}], "a full-screen card is no highlight"
+    assert drop_ui_ink(ink, [(0.0, 0.0, 1280.0, 800.0)]) == [{"x": 1}], "a full-screen card hides everything"
+    bands = [tuple(map(float, band)) for band in LINE_1_OUTLINE]
+    glow = [
+        {"x": 380, "y": 176, "w": 200, "h": 12, "cx": 480, "cy": 182},  # the bright border read as a stroke
+        {"x": 376, "y": 220, "w": 14, "h": 40, "cx": 383, "cy": 240},  # its halo down the left side
+    ]
+    assert drop_ui_ink([*ink, *glow], bands) == ink, "the outline's light goes, the ink inside it stays"
 
 
 def test_place_target_unit() -> None:
@@ -1639,7 +1746,8 @@ def test_math_highlight_outlines_the_whole_answer_line(h: Harness, monkeypatch: 
     _with_ink(monkeypatch, *blobs)
     avatar = _reply(h, "check my answer", AvatarAction("Correct!", "celebrating", 239, 400))
     assert avatar["highlight"] == [198, 371, 132, 48], "x = 7, not just its first blob"
-    assert (avatar["target_x"], avatar["target_y"]) == (264, 395)
+    # No room left of it on the board (198 - 124 < 80): beside it on the right.
+    assert (avatar["target_x"], avatar["target_y"]) == (198 + 132 + BESIDE, 395)
 
 
 def test_biology_keeps_each_box_its_own_region(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1651,4 +1759,6 @@ def test_biology_keeps_each_box_its_own_region(monkeypatch: pytest.MonkeyPatch) 
     ]
     _with_ink(monkeypatch, *boxes)
     avatar = _reply(bio, "check my flowchart", AvatarAction("A step is missing.", "error", 600, 500))
-    assert avatar["highlight"] == [420, 480, 300, 120] and (avatar["target_x"], avatar["target_y"]) == (570, 540)
+    assert avatar["highlight"] == [420, 480, 300, 120]
+    # Its left side is the other box: the avatar stands right of it, over no ink.
+    assert (avatar["target_x"], avatar["target_y"]) == (720 + BESIDE, 540)

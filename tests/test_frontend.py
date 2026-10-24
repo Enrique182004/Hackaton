@@ -2095,6 +2095,113 @@ assert.equal(sock.emitted.length, offline);
     )
 
 
+# A 1920×1080 board: "3x + 5 = 38" over the answer "x = 11", blobs as ink detection finds them (digits ~56 px tall).
+BOARD_SIZE = (1920, 1080)
+PROBLEM_BLOBS = [(560, 380, 96, 56), (680, 388, 42, 42), (746, 380, 38, 56), (808, 396, 46, 26), (878, 380, 80, 56)]
+ANSWER_BLOBS = [(560, 492, 42, 42), (626, 496, 46, 26), (696, 480, 16, 56), (726, 480, 16, 56)]  # the last 1 is thin
+
+
+def _region(box: tuple[int, int, int, int]) -> dict[str, int]:
+    x, y, w, h = box
+    return {"x": x, "y": y, "w": w, "h": h, "cx": x + w // 2, "cy": y + h // 2}
+
+
+def projector_ui_after(tmp_path: Path, window: tuple[int, int], update: dict[str, object]) -> list[list[int]]:
+    """The "ui_rects" the projector page sends after `update` (an avatar_update), on a 1920×1080 projector drawn in
+    a `window`-sized browser window. The bubble stays hidden (no text) and the status corner is pinned."""
+    out = run_node(
+        tmp_path,
+        "index.html",
+        f"""
+const doc = installDom(NODES, {{ bodyData: {{ projectorWidth: "1920", projectorHeight: "1080" }} }});
+window.innerWidth = {window[0]};
+window.innerHeight = {window[1]};
+const $ = (id) => doc.getElementById(id);
+const sock = installIo();
+installFetch();
+await import("./main.js");
+Object.assign($("avatar"), {{ offsetWidth: 160, offsetHeight: 160 }});
+$("status").rect = {{ left: {window[0] - 130}, top: {window[1] - 40}, width: 120, height: 30 }};
+sock.fire("connect");
+await settle();
+sock.fire("avatar_update", {json.dumps(update)});
+await settle();
+console.log(JSON.stringify(sock.emitted.filter(([name]) => name === "ui_rects").at(-1)[1].rects));
+""",
+    )
+    return json.loads(out.splitlines()[-2])
+
+
+@needs_node
+@pytest.mark.parametrize("window", [(1920, 1080), (1280, 720), (640, 360)])
+def test_projector_outline_masks_its_glow_never_the_ink_inside(tmp_path: Path, window: tuple[int, int]) -> None:
+    # The exact rects the page sends, through the server's own filter: the outline goes as four bands, so its light
+    # is dropped as UI and every blob of the outlined answer stays, however big the window draws the outline.
+    from biobench_sar.assistant import drop_ui_ink, place_target
+    from biobench_sar.schemas import AvatarAction
+
+    ink = [_region(b) for b in PROBLEM_BLOBS + ANSWER_BLOBS]
+    wrong, highlight = place_target(
+        AvatarAction("Not quite.", "error", 900, 400), ink, BOARD_SIZE, about_answer=True, lines=True
+    )
+    assert highlight == [560, 480, 182, 56], "the whole answer line"
+    rects = projector_ui_after(tmp_path, window, {**wrong.to_dict(), "spoken_text": "", "highlight": highlight})
+    assert len(rects) == 6, rects  # the avatar, the outline's four bands, the status corner
+    bands = [tuple(map(float, r)) for r in rects[1:5]]
+    x, y, w, h = highlight
+    for band in bands:
+        shared_w = min(band[0] + band[2], x + w) - max(band[0], x)
+        shared_h = min(band[1] + band[3], y + h) - max(band[1], y)
+        assert shared_w <= 0 or shared_h <= 0, f"band {band} lies over the ink"
+    s = BOARD_SIZE[0] / window[0]  # projector px per window px: the border, glow and padding scale with it
+    glow = [
+        (x, round(y - 14 - 3 * s), w, round(3 * s + 4)),  # the bright top border read as a stroke
+        (round(x - 14 - 15 * s), y, round(12 * s), h),  # the glow down the left side
+        (x, round(y + h + 14 + 3 * s), w, round(12 * s)),  # and under the bottom edge
+    ]
+    assert drop_ui_ink(ink + [_region(g) for g in glow], bands) == ink
+    if s <= 1.5:
+        # The avatar stands beside the answer: nothing the student wrote is under any of the page's UI.
+        assert drop_ui_ink(ink, [tuple(map(float, r)) for r in rects]) == ink
+
+
+@needs_node
+def test_projector_avatar_steps_off_the_outlined_ink(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        """
+// A 1920×1080 projector in a 1280×720 window: the avatar is drawn half again bigger than the server reckons.
+const doc = installDom(NODES, { bodyData: { projectorWidth: "1920", projectorHeight: "1080" } });
+window.innerWidth = 1280;
+window.innerHeight = 720;
+const $ = (id) => doc.getElementById(id);
+const sock = installIo();
+installFetch();
+await import("./main.js");
+const avatar = $("avatar");
+Object.assign(avatar, { offsetWidth: 160, offsetHeight: 160 });
+sock.fire("connect");
+const at = () => [avatar.style.left, avatar.style.top];
+// The server's spot beside "x = 11" (124 projector px left of it) would put the sprite's edge over the ink here, so
+// it steps left of the outline instead (outline left 361 px, 24 px gap, 160 px sprite).
+const answer = [560, 480, 182, 56];
+sock.fire("avatar_update", { animation_state: "error", target_x: 436, target_y: 508, highlight: answer });
+assert.deepEqual(at(), ["177px", "259px"]);
+// No room on the left: it goes right of the outline.
+sock.fire("avatar_update", { animation_state: "celebrating", target_x: 150, target_y: 508, highlight: [120, 480, 182, 56] });
+assert.deepEqual(at(), [`${Math.round(((120 + 182 + 14) / 1.5) + 3 + 24)}px`, "259px"]);
+// Clear of the outline already, or pointing (the fingertip belongs next to the ink), or nothing outlined: as sent.
+sock.fire("avatar_update", { animation_state: "error", target_x: 200, target_y: 508, highlight: answer });
+assert.deepEqual(at(), ["53px", "259px"]);
+sock.fire("avatar_update", { animation_state: "pointing", target_x: 536, target_y: 508, highlight: answer });
+assert.deepEqual(at(), [`${Math.round(536 / 1.5 - 153)}px`, `${Math.round(508 / 1.5 - 56)}px`]);
+sock.fire("avatar_update", { animation_state: "celebrating", target_x: 650, target_y: 508, highlight: null });
+assert.deepEqual(at(), [`${Math.round(650 / 1.5 - 80)}px`, "259px"]);
+""",
+    )
+
+
 @needs_node
 def test_quiz_bar_waits_for_yes_or_no_before_ending_the_quiz(tmp_path: Path) -> None:
     run_node(

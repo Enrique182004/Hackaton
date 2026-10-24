@@ -49,6 +49,11 @@ MAX_UI_RECTS = 32
 UI_OVERLAP = 0.5
 # "pointing": the fingertip stops this far left of the ink it points at, so the avatar does not cover it.
 POINT_GAP = 24
+# error / celebrating stand beside the ink, never on it: the page reports the avatar as UI, so writing under it would
+# be dropped on the next turn. Its 160 px sprite (main.js FRAME, centred on the target) reaches AVATAR_HALF from the
+# target; the box the page reports adds its 10 px UI_PAD, and the error shake moves it 10 px more.
+AVATAR_HALF = 80
+AVATAR_REACH = AVATAR_HALF + 20
 # Ink regions are word and symbol blobs; blobs this many line heights apart or closer, side by side, are one line.
 LINE_GAP = 1.5
 NO_ANSWER_TEXT = "I can't see an answer on the board yet. Write it, then ask me to check it."
@@ -217,19 +222,12 @@ def _overlap(a: Box, b: Box) -> float:
     return max(0.0, w) * max(0.0, h)
 
 
-def _is_highlight(rect: Box, highlight: Box | None) -> bool:
-    """The page's own outline around the ink an answer is about: that ink is the student's, so it is never masked."""
-    if highlight is None:
-        return False
-    area = highlight[2] * highlight[3]
-    return _overlap(rect, highlight) >= 0.9 * area and rect[2] * rect[3] <= 4 * area
-
-
-def drop_ui_ink(ink: list[Any], rects: Iterable[Box], highlight: Box | None = None) -> list[Any]:
+def drop_ui_ink(ink: list[Any], rects: Iterable[Box]) -> list[Any]:
     """Ink regions not mostly under projected UI: one that a UI rect covers by more than UI_OVERLAP of its area is
-    the projector's light (the bubble's text, the avatar), not the student's writing. The highlight drawn around the
-    student's own ink is skipped: masking it would hide that ink."""
-    boxes = [r for r in rects if not _is_highlight(r, highlight)]
+    the projector's light (the bubble's text, the avatar), not the student's writing. The page reports the outline
+    around highlighted ink as four bands from its glow in to that ink's edge, so the outline's light is masked and
+    the writing inside it never is."""
+    boxes = list(rects)
     if not boxes:
         return ink
 
@@ -277,6 +275,25 @@ def _distance(x: float, y: float, box: Box) -> float:
     return math.hypot(dx, dy)
 
 
+def _beside(box: Box, ink: list[Box], projector_size: tuple[int, int]) -> tuple[float, float]:
+    """Where error / celebrating stand: the avatar's centre beside `box`, left of it, else right of it (above or below
+    a line as wide as the board), on the board and over no ink if any spot is; else over the least ink."""
+    width, height = projector_size
+    x, y, w, h = box
+    away = AVATAR_REACH + POINT_GAP
+    cy = min(max(y + h / 2, AVATAR_HALF), height - AVATAR_HALF)
+    spots = [(x - away, cy), (x + w + away, cy), (x + w / 2, y + h + away), (x + w / 2, y - away)]
+
+    def on_board(spot: tuple[float, float]) -> bool:
+        return AVATAR_HALF <= spot[0] <= width - AVATAR_HALF and AVATAR_HALF <= spot[1] <= height - AVATAR_HALF
+
+    def covered(spot: tuple[float, float]) -> float:
+        avatar = (spot[0] - AVATAR_REACH, spot[1] - AVATAR_REACH, 2.0 * AVATAR_REACH, 2.0 * AVATAR_REACH)
+        return sum(_overlap(avatar, line) for line in ink)
+
+    return min([spot for spot in spots if on_board(spot)] or spots, key=covered)
+
+
 def place_target(
     action: AvatarAction,
     ink: list[Any],
@@ -290,9 +307,11 @@ def place_target(
 
     pointing / error (and celebrating, with ink): that region is the one nearest the model's target, or with
     `about_answer` (a quiz check) the lowest one, the student's answer line. pointing stops just left of it (right of
-    it at the board's left edge), error and celebrating at its centre. idle / walking (and `stand_aside`, a failed
-    call) stand on the side of the board farthest from the ink, mid-height; without ink the model's target is kept.
-    `lines` (math): the regions are written lines (ink_lines), not the blobs ink detection finds.
+    it at the board's left edge); error and celebrating stand beside it (_beside), never on it: the page reports the
+    avatar as UI, and the answer rewritten under it would be dropped on the next check. idle / walking (and
+    `stand_aside`, a failed call) stand on the side of the board farthest from the ink, mid-height; without ink the
+    model's target is kept. `lines` (math): the regions are written lines (ink_lines), not the blobs ink detection
+    finds.
     """
     width, height = projector_size
     boxes = [b for b in map(_box, ink) if b is not None]
@@ -312,10 +331,10 @@ def place_target(
         else:
             box = min(boxes, key=lambda b: _distance(action.target_x, action.target_y, b))
         x, y, w, h = box
-        tx = x + w / 2
+        highlight = [round(x), round(y), round(w), round(h)]
         if state == "pointing":
-            tx = x - POINT_GAP if x - POINT_GAP >= 0 else x + w + POINT_GAP
-        return at(tx, y + h / 2), [round(x), round(y), round(w), round(h)]
+            return at(x - POINT_GAP if x - POINT_GAP >= 0 else x + w + POINT_GAP, y + h / 2), highlight
+        return at(*_beside(box, boxes, projector_size)), highlight
     left, right = min(b[0] for b in boxes), max(b[0] + b[2] for b in boxes)
     x = left / 2 if left >= width - right else (right + width) / 2
     return at(x, height / 2), None
@@ -461,11 +480,11 @@ class Assistant:
         self._ui_lock = threading.Lock()
         self._ui_rects: list[Box] = []
         self._ui_rects_at: float | None = None
-        self._highlight: Box | None = None  # the last one sent: the page outlines it and reports it as UI
 
     # ---- projected UI --------------------------------------------------------
     def set_ui_rects(self, rects: Any) -> None:
-        """The projector page's UI boxes ([[x, y, w, h], ...], projector px: avatar, bubble, quiz card, highlight).
+        """The projector page's UI boxes ([[x, y, w, h], ...], projector px: avatar, bubble, quiz card, the
+        highlight's four edge bands).
         Ink mostly under them is dropped before the model and the target snapping; a report older than
         UI_RECTS_TTL_S is ignored. Malformed entries are skipped; anything but a list clears them."""
         boxes: list[Box] = []
@@ -670,7 +689,7 @@ class Assistant:
         rects = self.ui_rects()
         if ink and rects:
             try:
-                ink = drop_ui_ink(ink, rects, self._highlight)
+                ink = drop_ui_ink(ink, rects)
             except Exception:
                 log.exception("projected-UI filter failed; keeping every ink region")
         if not ink or raw is None:
@@ -720,7 +739,6 @@ class Assistant:
                 stand_aside=failed,
                 lines=self.tutoring,
             )
-            self._highlight = _box(highlight) if highlight else None
             said = {
                 "display_text": display,
                 "spoken_text": action.spoken_text,
