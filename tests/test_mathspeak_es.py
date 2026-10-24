@@ -359,6 +359,21 @@ RANGES = [
     ("3-5 x", "tres menos cinco x"),
     ("Si x = 2, entonces 3-5", "Si x es igual a dos, entonces tres menos cinco"),
     ("Toma 3-5 muestras y calcula 8-3 = 5", "Toma tres a cinco muestras y calcula ocho menos tres es igual a cinco"),
+    ("x - 4", "x menos cuatro"),
+    ("9 – 4", "nueve menos cuatro"),
+    ("5-3", "cinco menos tres"),
+    ("3-4", "tres a cuatro"),
+    # A measurement after a relation is still a range; a one-letter unit there may be a variable, so it subtracts.
+    ("Dura 2-3 días = 48-72 horas", "Dura dos a tres días es igual a cuarenta y ocho a setenta y dos horas"),
+    ("La distancia ≈ 2-3 km", "La distancia es aproximadamente igual a dos a tres kilómetros"),
+    ("x = 3-5 m", "x es igual a tres menos cinco m"),
+    ("t = 72-48 horas", "t es igual a setenta y dos menos cuarenta y ocho horas"),
+    # The end of a range carries a one-letter unit.
+    ("5-10 g", "cinco a diez gramos"),
+    ("Mide 2–3 m", "Mide dos a tres metros"),
+    ("de 2 a 3 m", "de dos a tres metros"),
+    ("entre 2 y 3 m", "entre dos y tres metros"),
+    ("de 2 a 3 m + 1", "de dos a tres m más uno"),
 ]
 ASIDES = [
     # A spaced em / en dash before a Spanish one-letter word is an aside, not a minus (and "y" stays "i").
@@ -383,6 +398,12 @@ SIGNED_DASHES = [
         "x = –b ± √(b² – 4ac) / 2a",
         "x es igual a menos b más o menos la raíz cuadrada de la cantidad b al cuadrado menos cuatro a c sobre dos a",
     ),
+    # An en dash glued to a number is its sign before a degree, a percent, the end of the clause or another number.
+    ("–5", "menos cinco"),
+    ("–5 °C", "menos cinco grados Celsius"),
+    ("Hace –5 grados", "Hace menos cinco grados"),
+    ("–5, –3 y 0", "menos cinco, menos tres y cero"),
+    ("de –5 a 10 °C", "de menos cinco a diez grados Celsius"),
 ]
 MONEY_MAGNITUDES = [
     ("$10 mil", "diez mil dólares"),
@@ -399,6 +420,10 @@ MONEY_MAGNITUDES = [
     ("La respuesta es $2x$", "La respuesta es dos x"),
     ("La respuesta es $x$.", "La respuesta es x."),
     ("Cuesta $5 y $10", "Cuesta cinco dólares y diez dólares"),
+    ("Ganó $1 millón y medio", "Ganó un millón y medio de dólares"),
+    ("$2 millones y medio de pesos", "dos millones y medio de pesos"),
+    ("$2x + 1", "dos x más uno"),
+    ("La respuesta es $2x", "La respuesta es dos x"),
 ]
 THOUSANDS = [
     ("Hay 25 000 habitantes", "Hay veinticinco mil habitantes"),
@@ -429,6 +454,11 @@ Y_IN_MATH = [
     ("Encuentra y de la ecuación 2y = 6", "Encuentra ye de la ecuación dos ye es igual a seis"),
     ("y ∈ [0, 1]", "ye pertenece al intervalo de cero a uno"),
     ("Encuentra y sabiendo que x = 2", "Encuentra ye sabiendo que x es igual a dos"),
+    # Right after the variable y, another y is the conjunction; after the conjunction it is the variable.
+    ("el valor de y y el de x", "el valor de ye y el de x"),
+    ("despeja y y luego comprueba", "despeja ye y luego comprueba"),
+    ("x y y son enteros", "x y ye son enteros"),
+    ("Calcula x y y", "Calcula x y ye"),
 ]
 GENDER = [
     ("Tienes 1 error en el paso 2", "Tienes un error en el paso dos"),
@@ -447,6 +477,9 @@ GENDER = [
     ("El 1 solo se divide entre sí mismo", "El uno solo se divide entre sí mismo"),
     ("La figura 1 muestra que x = 2", "La figura uno muestra que x es igual a dos"),
     ("1 solo paso", "un solo paso"),
+    ("Toma 1 tableta", "Toma una tableta"),
+    ("Toma 2-3 veces al día 1 pastilla", "Toma dos a tres veces al día una pastilla"),
+    ("Usa 1 frasco", "Usa un frasco"),
 ]
 TIMES_AND_RATIOS = [
     ("Escala 1:50,000", "Escala uno es a cincuenta mil"),
@@ -507,6 +540,8 @@ OLDER = [
     ("Contestaste 7/10 bien", "Contestaste siete de diez bien"),
     ("Tienes 8/10 correctas", "Tienes ocho de diez correctas"),
     ("ab-1", "ab menos uno"),
+    ("Recuerda: el 1° de cada mes revisamos la tarea.", "Recuerda: el primero de cada mes revisamos la tarea."),
+    ("El 1° del mes", "El primero del mes"),
 ]
 REVIEW_CASES = (
     POWERED_GROUPS
@@ -828,7 +863,20 @@ def test_membership_is_math() -> None:
 
 
 def test_amount_glued_to_a_variable_is_not_money() -> None:
-    assert "dólares" not in to_speech_es("$2x")
+    assert to_speech_es("$2x") == "dos x"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("—5 minutos más, dijo", "—cinco minutos más, dijo"),
+        ("Es –5 veces– mayor", "Es –cinco veces– mayor"),
+        ("Paso 2 –5 minutos", "Paso dos –cinco minutos"),
+    ],
+)
+def test_dialogue_and_aside_dashes_before_a_number_stay_prose(text: str, expected: str) -> None:
+    # An em dash, a dash before a noun or a dash after another number is not a sign.
+    assert to_speech_es(text) == expected
 
 
 def test_has_math_symbols_defers_to_the_shared_detector(monkeypatch: pytest.MonkeyPatch) -> None:

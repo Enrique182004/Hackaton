@@ -233,6 +233,7 @@ _MASC_NOUNS = _with_plurals(
     billete bloque objeto elemento dato caso intervalo polígono cateto coeficiente exponente denominador numerador
     divisor múltiplo conjunto único último nuevo error acierto signo cuadro dibujo quiste trofozoíto microscopio río
     lago animal color cilindro prisma cono hexágono pentágono dálmata ciclo cultivo tubo pozo micrómetro microlitro
+    frasco matraz filtro
     """
 ) | frozenset(["mil", "paréntesis"])
 _FEM_NOUNS = _with_plurals(
@@ -243,7 +244,8 @@ _FEM_NOUNS = _with_plurals(
     cifra regla flor casa calle cuadra milla libra onza tonelada pulgada yarda gota papa tortilla paleta vuelta ronda
     manera medida variable incógnita ficha carta célula bacteria amiba especie planta semilla hormiga abeja mesa silla
     raíz base mano noche fase luz ley red diagonal sola única última nueva pista duda calculadora muestra laguna cara
-    forma idea cosa potencia décima centésima tortuga serie pieza placa colonia micra
+    forma idea cosa potencia décima centésima tortuga serie pieza placa colonia micra tableta pastilla cápsula pipeta
+    jeringa
     """
 ) | frozenset(["imagen", "imágenes"])
 _FEM_SUFFIXES = ("ción", "ciones", "sión", "siones", "dad", "dades", "tad", "tades", "tud", "tudes", "umbre", "umbres")
@@ -313,6 +315,8 @@ _NORMALIZE = (
     (re.compile(r"(?<![\w&#])#(?=\d)"), "número "),
     # "$2x$" is LaTeX inline math, not money; "$5 y $10" is money (a closing "$" never sits before a digit).
     (re.compile(r"(?<![\w$])\$(?=[^\s$\d]|\d+(?:\.\d+)?[a-zA-Z^({\\])([^$\n]*?[^\s$])\$(?![\w$])"), r"\1"),
+    # An unclosed "$2x" opens LaTeX too: an amount glued to a lone variable is never money.
+    (re.compile(r"(?<![\w$])\$(?=\d+(?:\.\d+)?[a-zA-Z](?![^\W\d_]))"), ""),
     # "3 x 4 = 12", "3 m x 5 m", "3x10^5": the letter x between numbers is a times sign.
     (re.compile(r"(\d(?:\.\d+)?(?:[ \t]*(?:km|cm|mm|m))?)[ \t]+[xX][ \t]+(?=\d)"), r"\1 × "),
     (re.compile(r"(?<=\d)[xX](?=10[ \t]*\^)"), "×"),
@@ -338,11 +342,15 @@ _RANGE = re.compile(
 )
 _DASH = re.compile("([ \t]*)[–—‒]([ \t]*)")
 _LATER_OPERATOR = re.compile(r"[=+*/×·÷±<>≤≥≠≈^]|[-–‒](?=[ \t]*[\d(])")
+# What may follow "–5" for the dash to be a sign: a degree, a percent, the end of the clause or another number.
+_SIGNED_TAIL = re.compile(
+    r"\d+(?:[.,]\d+)*[ \t]*(?:[°%]|grados?(?![^\W\d_])|(?:y|o|a|al|hasta)[ \t]+[-–‒]?\d|[.,;:!?)\]]|$)", re.M
+)
 _SUPERSCRIPT_RUN = re.compile("[⁰¹²³⁴⁵⁶⁷⁸⁹⁻ⁿ]+")
 _UNICODE_FRACTION = re.compile("(\\d?)([" + "".join(_UNICODE_FRACTIONS) + "])")
 _CURRENCY = re.compile(
     r"\$[ \t]?(?P<neg>-[ \t]?)?(?P<whole>\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.(?P<frac>\d+))?(?![^\W\d_])"
-    r"(?:[ \t]+(?P<mag>mil(?:[ \t]+millones)?|mill[óo]n|millones)(?![^\W\d_]))?"
+    r"(?:[ \t]+(?P<mag>mil(?:[ \t]+millones)?|(?:mill[óo]n|millones)(?:[ \t]+y[ \t]+medio)?)(?![^\W\d_]))?"
     r"(?:[ \t]+(?:de[ \t]+)?(?P<named>pesos?|d[óo]lar(?:es)?|dlls?|usd|mxn)(?![^\W\d_]))?",
     re.I,
 )
@@ -356,6 +364,8 @@ _UNIT = re.compile(
 # "3 m por 5 m", "1.5 m de profundidad", "1 L de leche": a one-letter unit in a measurement, not a variable.
 _UNIT_WORD_AFTER = re.compile(r"[ \t]+(?:de|por|x)(?![^\W\d_])|[ \t]*×")
 _UNIT_WORD_BEFORE = re.compile(r"\d[ \t]*(?:km|cm|mm|m|kg|g|mg|L|mL|ml)(?:[ \t]+(?:por|x)[ \t]+|[ \t]*×[ \t]*)$")
+# "5-10 g" (now "5 a 10 g"), "de 2 a 3 m", "entre 2 y 3 m": the end of a range carries the unit, not a variable.
+_UNIT_RANGE_BEFORE = re.compile(rf"(?:\d[ \t]+al?|(?<![^\W\d_])entre[ \t]+(?:{_NUM})[ \t]+y)[ \t]+$", re.I)
 _OPERATOR_AFTER = re.compile(r"[ \t]*[-–+*/×·÷=<>≤≥≠≈^(]")
 # "células/mL", "metros/segundo", "$15/kg": a word or an amount over a unit is a rate, read "por".
 _RATE = re.compile(
@@ -449,11 +459,11 @@ _ORDINAL_SUFFIX = re.compile(r"(?<![\w.,])(10|[1-9])(er|ero|era|do|da|ro|ra|to|t
 # In Mexico "3° de secundaria" / "1° grado" are ordinals, not angles.
 _ORDINAL_DEGREE = re.compile(
     r"(?<![\w.,])(10|[1-9])[ \t]*°(?=[ \t]+(de[ \t]+(?:secundaria|primaria|preparatoria|prepa|bachillerato|k[íi]nder)"
-    rf"|de[ \t]+(?:{_MONTHS})|grado|lugar|año|semestre|bimestre|trimestre|cuatrimestre|periodo|período|parcial|piso"
-    r"|nivel|grupo)(?![^\W\d_]))",
+    rf"|de[ \t]+(?:{_MONTHS}|cada[ \t]+mes)|del[ \t]+mes|grado|lugar|año|semestre|bimestre|trimestre|cuatrimestre"
+    r"|periodo|período|parcial|piso|nivel|grupo)(?![^\W\d_]))",
     re.I,
 )
-_MONTH_AFTER = re.compile(rf"de[ \t]+(?:{_MONTHS})", re.I)
+_MONTH_AFTER = re.compile(rf"de[ \t]+(?:{_MONTHS}|cada[ \t]+mes)|del[ \t]+mes", re.I)
 # "Tu calificación es 10/10", "Contestaste 7/10 bien": a score is "diez de diez", never "diez décimos".
 _SCORE_BEFORE = re.compile(
     r"(?<![^\W\d_])(?:calificaci[óo]n|calificaste|sacaste|sac[óo]|saqu[ée]|obtuviste|obtuvo|contestaste|acertaste"
@@ -710,13 +720,18 @@ def _number_range(m: re.Match[str], *, busy: bool) -> str:
     # "3–5 muestras", "25-37 °C", "1990–2000" are ranges; "8–3 = 5", "2(8-3)", "Calcula 8–3" subtract.
     s, i, j = m.string, m.start(), m.end()
     minus = m[1] + "-" + m[3]
+    upward = float(m[1].replace(",", "")) < float(m[3].replace(",", ""))
     if _in_expression(s, i, j):
-        return minus
+        prev = _prev_char(s, i)
+        # "2-3 días = 48-72 horas": a measurement after a relation is still a range ("x = 3-5 m" may be algebra).
+        measured = prev != "" and prev in _RELATIONS and not _joined_after(s, j) and _range_tail(s, j, short=False)
+        if not (measured and upward):
+            return minus
     if not _range_tail(s, j):
         words = re.findall(r"[^\W\d_]+", s[max(0, i - 32) : i])[-2:]
         if busy or any(w.lower() in _SUBTRACT_CUES for w in words):
             return minus
-        if float(m[1].replace(",", "")) >= float(m[3].replace(",", "")):
+        if not upward:
             return minus  # a range runs upward: a bare "8-3" is a subtraction
     before = _PREV_WORD.search(s, max(0, i - 24), i)
     word = before[1].lower() if before else ""
@@ -736,6 +751,10 @@ def _in_expression(s: str, i: int, j: int) -> bool:
             k -= 1
     if k >= 0 and s[k] in _OPS + _PREFIX + "–—‒|":
         return True  # "x = 8-3", "√(8-3)"
+    return _joined_after(s, j)
+
+
+def _joined_after(s: str, j: int) -> bool:
     k = j
     while k < len(s) and s[k] in " \t)]":
         k += 1
@@ -746,7 +765,7 @@ def _in_expression(s: str, i: int, j: int) -> bool:
     return bool(_EQUALS_WORD.match(s, j))
 
 
-def _range_tail(s: str, j: int) -> bool:
+def _range_tail(s: str, j: int, *, short: bool = True) -> bool:
     tail = _RANGE_TAIL.match(s, j)
     if not tail:
         return False
@@ -755,7 +774,9 @@ def _range_tail(s: str, j: int) -> bool:
         return True  # "25-37 °C", "5–10 %"
     if word.lower() == "de":
         return bool(tail["month"])  # "Del 3–7 de marzo"
-    return word in _RANGE_UNITS or _noun_gender(word) is not None or _noun_gender(word.lower()) is not None
+    if word in _RANGE_UNITS:
+        return short or len(word) > 1  # a one-letter unit ("m", "g") can also be a variable
+    return _noun_gender(word) is not None or _noun_gender(word.lower()) is not None
 
 
 def _other_gender(stem: str, suffix: str) -> str | None:
@@ -822,6 +843,8 @@ def _dash(m: re.Match[str]) -> str:
             line_end = s.find("\n", j)
             if _LATER_OPERATOR.search(s, j, len(s) if line_end < 0 else line_end):
                 return m[1] + "-"  # "–5 + 3 = –2" opens with a negative number
+        if dash != "—" and right.isdigit() and not _ends_operand(s, i) and _SIGNED_TAIL.match(s, j):
+            return m[1] + "-"  # "Hace –5 °C", "–5, –3 y 0": a negative reading; "–5 minutos más, dijo" stays
     return m[0]
 
 
@@ -980,7 +1003,11 @@ def _measurement(m: re.Match[str]) -> bool:
         return not _OPERATOR_AFTER.match(s, m.end())  # "24 h" is hours; "5 h + 2" stays algebra
     if "." in m["num"] or _UNIT_WORD_AFTER.match(s, m.end()):
         return True
-    return bool(_UNIT_WORD_BEFORE.search(s, max(0, m.start() - 16), m.start()))
+    if _UNIT_WORD_BEFORE.search(s, max(0, m.start() - 16), m.start()):
+        return True
+    if _OPERATOR_AFTER.match(s, m.end()):
+        return False  # "de 2 a 3 m + 1" is still algebra
+    return bool(_UNIT_RANGE_BEFORE.search(s, max(0, m.start() - 32), m.start()))
 
 
 def _prev_char(s: str, i: int) -> str:
@@ -1011,7 +1038,7 @@ def _split_letters(m: re.Match[str]) -> str:
     return SOFT + SOFT.join(YV if c == "y" else c for c in run) + SOFT
 
 
-def _variable_y(m: re.Match[str]) -> str:
+def _variable_y(m: re.Match[str], *, chained: bool = True) -> str:
     s, i, y = m.string, m.start(), m[0]
     prev, nxt = _prev_char(s, i), _next_char(s, m.end())
     if (i > 0 and s[i - 1].isdigit()) or (prev and prev in _OPS + _OPENERS + _PREFIX + "%"):
@@ -1029,6 +1056,11 @@ def _variable_y(m: re.Match[str]) -> str:
     word = _PREV_WORD.search(s, max(0, i - 24), i)
     cue = word[1].lower() if word else ""
     if cue in _Y_CUES:
+        if cue == "y" and chained:
+            # "x y y" ends on the variable, but "el valor de y y el de x" joins the variable to more prose.
+            before = _VARIABLE_Y.match(s, word.start(1))
+            if before and _variable_y(before, chained=False) == YV:
+                return y
         return YV
     if cue == "para" and _Y_SOLVE.search(s, max(0, i - 80), i):
         return YV  # "Resuelve la ecuación para y en..."
