@@ -25,6 +25,7 @@ class AudioTrigger:
         recorder: Callable[[float], np.ndarray] | None = None,
         transcriber: Callable[[np.ndarray], str] | None = None,
         wake_chunk_seconds: float = WAKE_CHUNK_SECONDS,
+        should_listen: Callable[[], bool] | None = None,
     ) -> None:
         self.on_query = on_query
         self.whisper_model = whisper_model
@@ -35,6 +36,7 @@ class AudioTrigger:
         self.wake_chunk_seconds = wake_chunk_seconds
         self._recorder = recorder
         self._transcriber = transcriber
+        self._should_listen = should_listen or (lambda: True)
         self._model = None
         self._model_lock = threading.Lock()
         self._busy_lock = threading.Lock()
@@ -177,13 +179,17 @@ class AudioTrigger:
                 else:
                     skip = False
                     self._busy = True
-            if skip:
+            if skip or not self._should_listen():
+                if not skip:
+                    with self._busy_lock:
+                        self._busy = False
                 self._stop.wait(0.2)
                 continue
             query = ""
             try:
                 heard = self.transcribe(self._record(self.wake_chunk_seconds))
-                rest = self.extract_after_wake(heard)
+                # The avatar may have started talking mid-chunk; its own voice must not count as a wake word.
+                rest = self.extract_after_wake(heard) if self._should_listen() else None
                 if rest is not None:
                     if not rest:
                         self._state("listening")
