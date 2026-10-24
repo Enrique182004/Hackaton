@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="{{ 'es' if language == 'es' else 'en' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# Same-origin, not no-referrer: with no-referrer the PIN form posts Origin: null and the cross-origin guard refuses it. #}
+  <meta name="referrer" content="same-origin">
+  <title data-i18n="join.title">Join the Whiteboard Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  {# Never render-blocking, as on the dashboard: classroom Wi-Fi often has no way out to Google. #}
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Caveat:wght@700&family=Fraunces:opsz,wght@9..144,700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Caveat:wght@700&family=Fraunces:opsz,wght@9..144,700&display=swap"></noscript>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+  {% if lan_enabled %}
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
+  <meta name="theme-color" content="#23497d">
+  <link rel="icon" href="{{ url_for('static', filename='icons/icon.svg') }}" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
+  <meta name="apple-mobile-web-app-title" content="Whiteboard">
+  {% endif %}
+</head>
+<body class="join-page" data-language="{{ language or '' }}">
+  <main class="join-card">
+    <p class="kicker" data-i18n="app.kicker">lab notebook</p>
+    <h1 data-i18n="join.heading">Join the Whiteboard Assistant</h1>
+    <p class="hint" data-i18n="join.hint">Type the 6-digit PIN shown on the teacher's laptop, under More tools.</p>
+    {% if locked_for and locked_for > 0 %}
+    {# join.js turns this into a countdown and keeps the button off until it ends. #}
+    <p class="join-alert" id="join-locked" role="alert" data-locked-for="{{ locked_for }}" data-i18n="join.locked">Too many wrong PINs. Wait a few minutes, then try again.</p>
+    {% elif error %}
+    <p class="join-alert" id="join-error" role="alert" data-i18n="join.error">That PIN didn't work. Check it on the laptop and try again.</p>
+    {% endif %}
+    <form class="join-form" id="join-form" method="post" action="/join">
+      <label for="pin" data-i18n="join.label">PIN</label>
+      {# The server ignores spaces and dashes and reads full-width digits, so nothing is filtered here. #}
+      <input id="pin" name="pin" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="9" placeholder="123 456" required autofocus>
+      <button class="btn" type="submit" id="join-btn" data-i18n="join.submit">Join</button>
+    </form>
+    <p class="note" id="join-msg" role="status"></p>
+    <p class="hint small" data-i18n="join.help">On the same Wi-Fi as the laptop? Scanning the QR code on the laptop joins without typing.</p>
+  </main>
+  <script type="module" src="{{ url_for('static', filename='js/join.js') }}"></script>
+</body>
+</html>

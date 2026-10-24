@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body data-projector-width="{{ projector_width }}" data-projector-height="{{ projector_height }}">
+  {# The ink the latest answer is about: a glowing outline around it, drawn by main.js. #}
+  <div id="highlight" class="hidden" aria-hidden="true"></div>
   <div id="avatar" class="state-idle" aria-hidden="true">
     <div id="bubble" class="hidden"></div>
   </div>

@@ -1,6 +1,6 @@
 import { $, request, every, setNote } from "./api.js";
 import { initAsk, addInteraction, showPending, loadHistory, onListenState } from "./ask.js";
-import { initCamera, setTarget } from "./camera.js";
+import { initCamera, setHighlight, setTarget } from "./camera.js";
 import { initFiles, refreshFiles, renderFiles } from "./files.js";
 import { t } from "../i18n.js";
 import { initLanguage, languageVersion, refreshLanguage, renderLanguage } from "./language.js";
@@ -9,6 +9,7 @@ import { initTabs } from "./tabs.js";
 import { logEvent, renderConfig } from "./log.js";
 import { setProfile } from "./profile.js";
 import { initTutor, refreshTutor, renderTutor } from "./tutor.js";
+import { initPhone, initServiceWorker, refreshPhone } from "./phone.js";
 
 const STATUS_MS = 2000;
 // The first handshake takes a moment; "Connecting…" stays up until then instead of flashing "not connected".
@@ -61,6 +62,8 @@ function initSocket() {
     refreshFiles().catch(() => {});
     refreshTutor().catch(() => {});
     refreshLanguage().catch(() => {});
+    // A restarted server has a new PIN.
+    refreshPhone().catch(() => {});
   });
   socket.on("disconnect", () => {
     socketLive = false;
@@ -83,6 +86,7 @@ function initSocket() {
   });
   socket.on("avatar_update", (d) => {
     setTarget(d.target_x, d.target_y);
+    if (Object.hasOwn(d, "highlight")) setHighlight(d.highlight);
     logEvent("avatar_update", d);
   });
   socket.on("interaction", (d) => addInteraction(d));
@@ -142,6 +146,8 @@ initAsk();
 initFiles();
 initTutor();
 initCalibration();
+initPhone();
+initServiceWorker();
 every(STATUS_MS, async () => {
   const seenLanguage = languageVersion();
   const status = await request("/api/status");

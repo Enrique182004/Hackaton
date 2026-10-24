@@ -35,6 +35,8 @@ export function renderTutor(data) {
   const problem = $("quiz-problem");
   problem.textContent = active && quiz.problem ? quiz.problem : "";
   problem.hidden = !problem.textContent;
+  // "Stop" said or typed mid-quiz: the assistant asked whether to end it, and the next answer decides.
+  $("quiz-confirm").hidden = !(active && data.confirm_stop === true);
   $("quiz-start-btn").hidden = active;
   $("quiz-stop-btn").hidden = !active;
   const learn = $("learn-line");

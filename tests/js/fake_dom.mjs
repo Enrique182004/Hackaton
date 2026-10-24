@@ -77,6 +77,18 @@ export class FakeElement {
     this.parentNode = null;
   }
 
+  // A test may pin the box with `node.rect = {left, top, width, height}`; otherwise it comes from the inline style
+  // (left/top/width/height in px), with offsetWidth/offsetHeight for a size the style doesn't give.
+  getBoundingClientRect() {
+    const r = this.rect ?? {
+      left: parseFloat(this.style.left) || 0,
+      top: parseFloat(this.style.top) || 0,
+      width: parseFloat(this.style.width) || this.offsetWidth,
+      height: parseFloat(this.style.height) || this.offsetHeight,
+    };
+    return { ...r, x: r.left, y: r.top, right: r.left + r.width, bottom: r.top + r.height };
+  }
+
   setAttribute(name, value) { this.attributes[name] = String(value); }
   getAttribute(name) { return this.attributes[name] ?? null; }
   focus() {}
@@ -128,15 +140,17 @@ export class FakeElement {
   }
 }
 
-// `nodes` are ids, or {id, tag, data, hidden} as test_frontend.template_nodes reads them from the template.
+// `nodes` are ids, or {id, tag, data, hidden, classes} as test_frontend.template_nodes reads them from the template.
 export function installDom(nodes, { bodyData = {} } = {}) {
   const body = new FakeElement("body");
   Object.assign(body.dataset, bodyData);
   for (const spec of nodes) {
-    const { id = "", tag = "div", data = {}, hidden = false } = typeof spec === "string" ? { id: spec } : spec;
+    const { id = "", tag = "div", data = {}, hidden = false, classes = [] } = typeof spec === "string" ? { id: spec } : spec;
     const node = new FakeElement(tag);
     node.id = id;
     node.hidden = hidden;
+    node.classList.add(...classes);
+    node.className = classes.join(" ");
     Object.assign(node.dataset, data);
     body.appendChild(node);
   }
