@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SAR Whiteboard Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body data-projector-width="{{ projector_width }}" data-projector-height="{{ projector_height }}">
+  <div id="avatar" class="state-idle" aria-hidden="true">
+    <div id="bubble" class="hidden"></div>
+  </div>
+
+  <div id="status" data-state="idle">
+    <span class="ring"></span>
+    <span class="dots"><i></i><i></i><i></i></span>
+    <span id="status-label">idle</span>
+  </div>
+  <div id="transcript" class="hidden"></div>
+
+  <div id="text-overlay" class="hidden">
+    <input id="text-input" type="text" placeholder="Type a question, Enter to send, Esc to cancel" autocomplete="off">
+  </div>
+
+  <div id="debug" class="hidden">
+    <div id="debug-conn">socket: connecting</div>
+    <pre id="debug-event">(no events yet)</pre>
+  </div>
+  <div id="crosshair" class="hidden"></div>
+
+  <script src="{{ url_for('static', filename='js/vendor/socket.io.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

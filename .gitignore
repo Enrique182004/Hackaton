@@ -13,3 +13,5 @@ coverage/
 __pycache__/
 *.pyc
 chroma_db/
+data/
+.claude/

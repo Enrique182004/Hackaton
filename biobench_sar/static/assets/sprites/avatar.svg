@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="160" viewBox="0 0 800 160">
+  <defs>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .c { fill: none; stroke: #7ffcff; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+      .w { fill: none; stroke: #ffffff; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+      .f { fill: #7ffcff; stroke: none; }
+      .a { fill: none; stroke: #ffb347; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+      .af { fill: #ff6b4a; stroke: none; }
+      .s { fill: #ffffff; stroke: none; }
+    </style>
+  </defs>
+
+  <!-- 0 idle -->
+  <g filter="url(#glow)" transform="translate(0,0)">
+    <circle class="c" cx="80" cy="40" r="20"/>
+    <circle class="f" cx="73" cy="38" r="3"/><circle class="f" cx="87" cy="38" r="3"/>
+    <path class="w" d="M72 47 Q80 54 88 47"/>
+    <path class="c" d="M80 20 L80 12"/><circle class="f" cx="80" cy="9" r="3"/>
+    <path class="c" d="M66 66 Q80 60 94 66 L98 106 L62 106 Z"/>
+    <path class="c" d="M66 72 L48 98"/><path class="c" d="M94 72 L112 98"/>
+    <path class="c" d="M72 106 L70 142"/><path class="c" d="M88 106 L90 142"/>
+    <path class="w" d="M64 144 L76 144"/><path class="w" d="M84 144 L96 144"/>
+  </g>
+
+  <!-- 1 walking -->
+  <g filter="url(#glow)" transform="translate(160,0)">
+    <circle class="c" cx="84" cy="40" r="20"/>
+    <circle class="f" cx="78" cy="38" r="3"/><circle class="f" cx="92" cy="38" r="3"/>
+    <path class="w" d="M77 47 Q85 54 93 47"/>
+    <path class="c" d="M84 20 L84 12"/><circle class="f" cx="84" cy="9" r="3"/>
+    <path class="c" d="M70 66 Q84 60 98 66 L100 106 L66 106 Z"/>
+    <path class="c" d="M72 72 L56 90 L46 84"/><path class="c" d="M96 72 L110 94 L120 88"/>
+    <path class="c" d="M74 106 L56 128 L44 140"/><path class="c" d="M92 106 L108 126 L116 142"/>
+    <path class="w" d="M38 142 L50 142"/><path class="w" d="M112 144 L124 144"/>
+  </g>
+
+  <!-- 2 pointing: right arm extended to the right edge so the fingertip is the anchor -->
+  <g filter="url(#glow)" transform="translate(320,0)">
+    <circle class="c" cx="60" cy="40" r="20"/>
+    <circle class="f" cx="53" cy="38" r="3"/><circle class="f" cx="67" cy="38" r="3"/>
+    <path class="w" d="M52 47 Q60 54 68 47"/>
+    <path class="c" d="M60 20 L60 12"/><circle class="f" cx="60" cy="9" r="3"/>
+    <path class="c" d="M46 66 Q60 60 74 66 L78 106 L42 106 Z"/>
+    <path class="c" d="M44 72 L28 98"/>
+    <path class="c" d="M74 70 L152 56"/>
+    <circle class="f" cx="153" cy="56" r="4"/>
+    <path class="w" d="M142 50 L154 56 L143 62"/>
+    <path class="c" d="M52 106 L50 142"/><path class="c" d="M68 106 L70 142"/>
+    <path class="w" d="M44 144 L56 144"/><path class="w" d="M64 144 L76 144"/>
+  </g>
+
+  <!-- 3 celebrating -->
+  <g filter="url(#glow)" transform="translate(480,0)">
+    <circle class="c" cx="80" cy="46" r="20"/>
+    <path class="f" d="M72 42 Q75 37 78 42 Z"/><path class="f" d="M82 42 Q85 37 88 42 Z"/>
+    <path class="w" d="M69 50 Q80 64 91 50 Z"/>
+    <path class="c" d="M80 26 L80 18"/><circle class="f" cx="80" cy="15" r="3"/>
+    <path class="c" d="M66 72 Q80 66 94 72 L98 110 L62 110 Z"/>
+    <path class="c" d="M66 76 L44 52 L38 30"/><path class="c" d="M94 76 L116 52 L122 30"/>
+    <path class="c" d="M72 110 L62 140"/><path class="c" d="M88 110 L98 140"/>
+    <path class="w" d="M54 142 L66 142"/><path class="w" d="M94 142 L106 142"/>
+    <path class="s" d="M20 20 L23 28 L31 31 L23 34 L20 42 L17 34 L9 31 L17 28 Z"/>
+    <path class="s" d="M140 16 L143 24 L151 27 L143 30 L140 38 L137 30 L129 27 L137 24 Z"/>
+    <path class="f" d="M24 80 L26 85 L31 87 L26 89 L24 94 L22 89 L17 87 L22 85 Z"/>
+    <path class="f" d="M138 76 L140 81 L145 83 L140 85 L138 90 L136 85 L131 83 L136 81 Z"/>
+    <circle class="s" cx="80" cy="4" r="2"/>
+  </g>
+
+  <!-- 4 error -->
+  <g filter="url(#glow)" transform="translate(640,0)">
+    <circle class="a" cx="80" cy="40" r="20"/>
+    <path class="a" d="M70 33 L78 41 M78 33 L70 41"/><path class="a" d="M82 33 L90 41 M90 33 L82 41"/>
+    <path class="a" d="M72 54 Q80 47 88 54"/>
+    <path class="a" d="M80 20 L76 12 L84 8"/><circle class="af" cx="84" cy="7" r="3"/>
+    <path class="a" d="M66 66 Q80 60 94 66 L98 106 L62 106 Z"/>
+    <path class="a" d="M66 72 L52 62 L56 48"/><path class="a" d="M94 72 L108 62 L104 48"/>
+    <path class="a" d="M72 106 L70 142"/><path class="a" d="M88 106 L90 142"/>
+    <path class="a" d="M64 144 L76 144"/><path class="a" d="M84 144 L96 144"/>
+    <path class="af" d="M80 76 L80 92 M80 98 L80 100" stroke="#ff6b4a" stroke-width="5" stroke-linecap="round"/>
+  </g>
+</svg>
