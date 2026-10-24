@@ -536,7 +536,8 @@ class CheckFailed(Exception):
 
 
 def page_title(body: str) -> str:
-    match = re.search(r"<title>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
+    # The pages translate their title client-side, so the tag carries attributes (<title data-i18n=...>).
+    match = re.search(r"<title\b[^>]*>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
     return html.unescape(match.group(1)).strip() if match else ""
 
 

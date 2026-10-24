@@ -774,3 +774,9 @@ def test_piped_output_is_switched_to_utf8_but_consoles_are_left_alone(monkeypatc
     launcher._utf8_output()
     assert pipe.reconfigured == {"encoding": "utf-8", "errors": "replace"}
     assert console.reconfigured == {}
+
+
+def test_page_title_accepts_attributes_on_the_title_tag() -> None:
+    assert launcher.page_title('<title data-i18n="page.title">Whiteboard Assistant</title>') == "Whiteboard Assistant"
+    assert launcher.page_title("<TITLE>Plain</TITLE>") == "Plain"
+    assert launcher.page_title("<header><titles>no</titles></header>") == ""
