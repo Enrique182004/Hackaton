@@ -1,49 +1,64 @@
-# CLAUDE.md — SAR Whiteboard Assistant (hackathon)
+# CLAUDE.md — SAR Whiteboard Math Assistant (hackathon)
 
 ## Project focus (read first)
-This repo builds ONE thing: the **SAR Whiteboard Assistant** — webcam + projector + whiteboard,
-with an animated 2D AI avatar that sees marker drawings and reacts (Sense → Think → Act),
-grounded by a local RAG knowledge base.
+This repo builds ONE thing: the **SAR Whiteboard Assistant** — webcam + projector + whiteboard, with an
+animated 2D AI avatar that sees marker work and reacts (Sense → Think → Act), grounded by a local RAG
+knowledge base. Its subject is chosen by `SAR_PROFILE`:
 
-**The full spec is [docs/sar_whiteboard_assistant_prompt.md](docs/sar_whiteboard_assistant_prompt.md).
-Read it before any work — it is the source of truth** for directory layout (`/biobench_sar`),
-stack, homography calibration, RAG ingestion, the VLM JSON schema, the frontend and the
-Environmental Biology (*Acanthamoeba* / Laguna de Bustillos) scenario. Where this file and the
-spec conflict on the project itself, the spec wins.
+- **`math` (default) — the math tutor.** [docs/sar_math_tutor_prompt.md](docs/sar_math_tutor_prompt.md) is
+  the **source of truth for the subject**: tutoring behaviour, the three modes (step-by-step help, similar
+  problems, quiz), phonetic TTS formatting and the JSON schema. Read it before any work.
+- **`biology` — kept as the second profile.** [docs/sar_whiteboard_assistant_prompt.md](docs/sar_whiteboard_assistant_prompt.md)
+  is the original spec: the *Acanthamoeba* / Laguna de Bustillos scenario, plus the module layout
+  (`/biobench_sar`), RAG ingestion formats and frontend rules that both profiles share.
 
-Non-negotiables from the spec:
-- **No monoliths** — build one module at a time (e.g. `core/vision_loop.py`); wait for the user to name it.
-- **Concurrency first** — camera loop stays at 30+ FPS no matter what the LLM is doing.
-- **Setup commands first** — give Windows PowerShell install commands (pip + system binaries like Tesseract) before Python code.
+Where this file and a spec conflict on the project itself, the spec wins. How the specs map onto modules,
+and every cross-module contract: [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md).
+
+Non-negotiables:
+- **Math is spoken in words** — never `^ / * =` in `spoken_text` ("two thirds", "x squared", "three x plus
+  five equals twelve"); `llm/mathspeak.py` is the safety net, not an excuse to skip it in the prompt.
+- **Help mode never gives the final answer** — only the next operation, pointing at that part of the ink.
+- **No monoliths** — build one module at a time in the `/biobench_sar` layout.
+- **Concurrency first** — the camera loop stays at ~30 FPS (hardware check passes at ≥ 28) whatever the LLM is doing.
+- **Setup commands first** — give install commands (pip + system binaries like Tesseract, PortAudio) before Python code.
 - **Defensive JSON parsing** — `try/except` around VLM output; strip markdown fences before `json.loads`.
 - VLM output schema: `{spoken_text, animation_state: idle|walking|pointing|celebrating|error, target_x, target_y}`.
 
 ## Stack
-- Backend: Python 3.10+, Flask, Flask-SocketIO
+- Backend: Python 3.10–3.12 (openai-whisper/torch lag the newest Python), Flask, Flask-SocketIO
 - Vision: opencv-python, numpy (`cv2.findHomography` / `cv2.warpPerspective`)
-- Audio/TTS: SpeechRecognition, pyaudio, openai-whisper (local), edge-tts / pyttsx3
+- Audio/TTS: pyaudio, openai-whisper (local), edge-tts / `say` / pyttsx3
 - RAG: chromadb (persistent, local), sentence-transformers `all-MiniLM-L6-v2`
 - Parsers: PyMuPDF, pandas, python-docx, python-pptx, pytesseract
-- Frontend: vanilla HTML/CSS/JS, pure `#000000` background
-- Tests: pytest
+- VLM: Ollama `qwen2.5vl:3b` by default (`SAR_VLM_BACKEND=openai|mock` for others)
+- Frontend: vanilla HTML/CSS/JS; the projector page (`templates/index.html`) has a pure `#000000` background
+  (black = invisible on the board); the dashboard is a normal light page
+- Tests: pytest; lint/format: ruff
 
 ## Commands
 ```bash
-python -m venv .venv
-pip install -r requirements.txt
-python app.py
-pytest
+bash scripts/setup_mac.sh --pull-model                      # first time on macOS (Windows: scripts/setup_windows.ps1)
+.venv/bin/python -m pip install -r requirements-dev.txt     # dev deps (pytest, ruff)
+.venv/bin/python -m biobench_sar                            # run (SAR_PROFILE=biology for the biology profile)
+SAR_VLM_BACKEND=mock SAR_TTS_BACKEND=none .venv/bin/python -m biobench_sar   # no model needed
+.venv/bin/python -m pytest -q
+.venv/bin/ruff check . && .venv/bin/ruff format --check .  # `ruff format .` fixes formatting
+.venv/bin/python scripts/hardware_check.py
+.venv/bin/python -m scripts.bench_vlm -n 3
 ```
 
 ## Code rules
 - Be terse. No preamble, no summaries unless asked. Output code only.
 - Python: type hints on public functions, small modules matching the spec's layout.
 - No blocking calls on the camera/WebSocket threads.
+- Every behaviour change ships with a test.
 - Show only changed sections + minimal context when editing.
 
 ## Token economy (hackathon — maximize the budget)
 - **Draft bulk/boilerplate with the local model**, then review: use `draft-with-ollama`
   (CRUD, scaffolding, config, test stubs, first-draft components). Free, zero Claude tokens.
+  `qwen2.5-coder:7b` is only for that drafting; the app itself runs `qwen2.5vl:3b`.
 - **Model tiers:** Opus only for architecture + hard bugs. Use `/model sonnet` for
   feature work, `/model haiku` for mechanical edits. Cheap subagents for grunt work.
 - **Plan before building:** `superpowers:brainstorming` → `superpowers:writing-plans`.

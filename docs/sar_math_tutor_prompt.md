@@ -1,0 +1,77 @@
+# SYSTEM DIRECTIVE: SAR Whiteboard Math Assistant (Hackathon Build)
+
+> Source of truth for the **math** subject profile (`SAR_PROFILE=math`, the default). The original
+> Environmental Biology directive, [sar_whiteboard_assistant_prompt.md](sar_whiteboard_assistant_prompt.md),
+> is kept as the `biology` profile and still describes the module layout and RAG ingestion formats.
+> How the spec maps onto code: [BUILD_PLAN.md](BUILD_PLAN.md) (contracts G–I and the math scenario cases).
+
+## 1. Project Overview & Operational Context
+
+You are tasked with building a Spatial Augmented Reality (SAR) Whiteboard Assistant designed to tutor middle
+and high school students in mathematics (e.g., fractions, equations, algebra). The system combines a physical
+whiteboard, a webcam, and a digital projector to create an embodied, animated 2D AI avatar that visually
+tracks, evaluates, and physically interacts with a user's dry-erase marker drawings in real-time.
+
+This is a local, self-hosted deployment. The core objective is to execute an asynchronous Multimodal Loop
+(Sense -> Think -> Act) driven by voice interactions and computer vision.
+
+## 2. Hardware Setup & Calibration
+
+- **Camera:** Standard webcam mounted on a tripod facing the whiteboard.
+- **Display:** Digital projector mounted adjacent to the webcam, pointing at the exact same surface.
+- **Homography Calibration:** The webcam and projector have different physical offsets. You must implement a
+  `cv2.findHomography` pipeline. A projected calibration grid must be captured by the webcam to map the
+  camera's spatial coordinates exactly to the projector's display plane.
+
+## 3. Technology Stack
+
+- **Backend:** Python 3, Flask, Flask-SocketIO (for WebSockets), `opencv-python`, `numpy`.
+- **Audio & TTS:** `pyaudio`, `edge-tts` (or local fallback), `openai-whisper` (local).
+- **RAG (Knowledge Base):** `chromadb`, `sentence-transformers`, `PyMuPDF`, `pandas`, `python-docx` for
+  ingesting math worksheets and quiz banks.
+- **Frontend:** Vanilla HTML5, CSS3, JavaScript.
+
+## 4. The Multimodal Interaction Loop
+
+The system runs non-blocking background threads to ensure the camera feed never freezes.
+
+1. **SENSE:** A background thread listens via PyAudio. Whisper transcribes the student's voice command.
+   OpenCV captures the current high-resolution frame of the physical whiteboard.
+2. **THINK:** The text transcript and the whiteboard image are fed into a Vision-Language Model (VLM). The
+   model evaluates the physical math equations and generates a structured JSON response.
+3. **ACT:** Flask routes the JSON's text output to the TTS engine for audio playback, while pushing X/Y
+   coordinates and animation states via WebSockets to the CSS sprite frontend.
+
+## 5. Math Tutor Logic & Strict TTS Formatting
+
+When generating the VLM prompt and backend logic, enforce these core tutoring behaviors:
+
+### A. Phonetic TTS Formatting (CRITICAL)
+
+- The VLM must write all math phonetically in its output so the voice engine reads it naturally.
+- NEVER use symbols like `^`, `/`, `*`, or `=` in the spoken output.
+- Write "two thirds" (not 2/3), "x squared" (not x^2), and "three x plus five equals twelve" (not 3x+5=12).
+
+### B. Pedagogical Modes
+
+- **Step-by-Step Solving:** If the user asks for help, the AI must NEVER give the final answer. It must
+  verbally explain only the next operation using simple vocabulary, project a highlight on the relevant part
+  of the equation, and wait for the student to write the next step.
+- **Generate Similar Problems:** If asked for more practice, the AI must read the current equation on the
+  board, swap variables/constants to maintain the same difficulty, and verbally dictate the new equation for
+  the student to write.
+- **Quiz Mode:** The AI queries the local ChromaDB for progressive math problems from uploaded worksheets,
+  dictates the problem, and evaluates the student's physical ink answer.
+
+## 6. Required JSON Output Schema
+
+The VLM must be rigidly prompted to return ONLY this JSON structure to prevent application crashes:
+
+```json
+{
+  "spoken_text": "Phonetically spelled, conversational response (e.g., 'Let us move the two x to the other side').",
+  "animation_state": "idle | walking | pointing | celebrating | error",
+  "target_x": 850,
+  "target_y": 420
+}
+```

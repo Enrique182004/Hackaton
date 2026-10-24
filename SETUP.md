@@ -3,7 +3,11 @@
 Run this once before the event. Order matters.
 
 ## Per machine (once)
-- [ ] **Ollama running** — open the Ollama app (model: `qwen2.5-coder:7b`).
+- [ ] **App setup** — `bash scripts/setup_mac.sh --pull-model` (Windows: `scripts/setup_windows.ps1`), then
+      `.venv/bin/python -m pip install -r requirements-dev.txt`. Check with `.venv/bin/python scripts/hardware_check.py`.
+- [ ] **Ollama running** — open the Ollama app. The app needs the vision model **`qwen2.5vl:3b`**
+      (`ollama pull qwen2.5vl:3b`, or the `--pull-model` flag above). `qwen2.5-coder:7b` is optional and only
+      used by the `draft-with-ollama` skill for drafting code.
 - [ ] **Headroom installed + running** — double-click `start-headroom.command`.
       Then start Claude through it: `ANTHROPIC_BASE_URL=http://localhost:8787 claude`
       (biggest raw token cut — 20% general, 60–95% on JSON/tool-heavy work).
@@ -11,8 +15,7 @@ Run this once before the event. Order matters.
       edits, Opus only for architecture/hard bugs.
 
 ## Per project (2 min each)
-- [ ] Copy `CLAUDE.md` into the repo root and fill in the Stack + Commands.
-- [ ] Copy `.claudeignore` into the repo root.
+- [x] `CLAUDE.md`, `AGENTS.md` and `.claudeignore` are already committed in the repo root — nothing to copy.
 - [ ] Run `/learn-codebase` once (claude-mem primes it — stops re-reading every session).
 
 ## Habits during the hackathon
