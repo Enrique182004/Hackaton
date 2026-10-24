@@ -1298,6 +1298,8 @@ def test_spanish_reply_goes_through_mathspeak_es_and_keeps_display_text() -> Non
         ("¿Cuánto vale x?", False),
         ("Resta cinco en ambos lados.", False),
         ("x más tres es igual a ocho.", False),
+        ("Recuerda que la respuesta es una fracción.", False),
+        ("Entonces x es igual a menos cuatro.", True),
     ],
 )
 def test_reveals_value_in_spanish(text: str, reveals: bool) -> None:

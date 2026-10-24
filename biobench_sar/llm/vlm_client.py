@@ -802,8 +802,9 @@ _NUMBER = (
     r"(?:\d|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|"
     r"seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)"
 )
+# "un" / "una" are left out like English "a": "la respuesta es una fracción" gives nothing away.
 _NUMBER_ES = (
-    r"(?:\d|cero|uno|una|un|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|"
+    r"(?:\d|cero|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|"
     r"dieci\w+|veinte|veinti\w+|treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa|cien|ciento|mil)"
 )
 # "So x equals five.", "The answer is 5", "x should be seven": the value of the letter said as a result. Not a step
