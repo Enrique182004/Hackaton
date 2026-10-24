@@ -1,14 +1,20 @@
 """Quiz answers graded in code, and the solution of a board problem worked out in code (sympy).
 
 parse_answers reads an answer as written or said ("x = 5", "5/2", "x = 5 or x = -3", "x = 5, y = 2", "(2, 3)",
-"x es igual a cinco") into a set of (letter, value) pairs, and grade compares a student's answer with the expected
-one: the model only copies the answer off the board, it never decides whether it is right. solve_text solves the
+"x es igual a cinco", one answer per line) into a set of (letter, value) pairs, and grade compares a student's answer
+with the expected one: the model only copies the answer off the board, it never decides whether it is right.
+Arithmetic not worked out yet ("1/2 + 1/3" copied off the board, "2/6 + 3/6") is no answer (unfinished), and a check
+or a reason written after an answer ("x = 5 (check: 3(5) + 5 = 20)", "because ...") is cut off. solve_text solves the
 problem itself (linear, quadratic, a system), so a help reply can be checked for stating the solution
 (solution_sentences) and a wrong quiz answer can get one hint for the next step (hint_for).
 
 Nothing here raises on bad input: unreadable text gives an empty set or None. The parser is our own (no eval), so a
-model's reply or an uploaded file can never run code. Without sympy, plain numbers and one-letter linear problems
-still work (quiz_bank.solve_problem); square roots, quadratics and systems then give None.
+model's reply or an uploaded file can never run code. Nothing here takes long either (it runs on the assistant
+thread, and a big-int power holds the GIL): the size of a power or a root and the degree of an equation are bounded
+before they are worked out (MAX_BITS, MAX_POWER_DEGREE, MAX_DEGREE), and only what solves fast is solved (systems
+with at most one quadratic, one letter up to a quadratic, what factors into them or a power "x^3 = 2"). Without
+sympy, plain numbers and one-letter linear problems still work (quiz_bank.solve_problem); square roots, quadratics
+and systems then give None.
 """
 
 from __future__ import annotations
@@ -32,8 +38,15 @@ MAX_CHARS = 240
 MAX_EXPONENT = 6
 MAX_LETTERS = 3
 MAX_DEGREE = 4
+# What a power or a root may come to, checked before it is worked out: a 37-character tower "((((9)^6)^6)^6)^6..."
+# is 9^(6^8), 1.6 million digits that a big-int pow works out holding the GIL (camera and sockets frozen for
+# seconds). 1024 bits is about 300 digits, far past any school answer, and still instant.
+MAX_BITS = 1024
+MAX_POWER_DEGREE = 2 * MAX_EXPONENT
 TOLERANCE = 1e-9
 _NONE: Answers = frozenset()
+# What a quiz problem is, for telling a check from the answer (_problem_kind).
+_Kind = tuple[bool, Any] | None
 
 
 @functools.lru_cache(maxsize=1)
@@ -65,6 +78,8 @@ _CHARS = str.maketrans(
         "，": ",",
     }
 )
+# One arrow for all: "->" is no minus sign and "=>" no "=" ("3(5) + 5 = 20 ->", "2x + 3 = 11 => x = 4").
+_ARROWS = str.maketrans({"⇒": "→", "⟹": "→", "⟶": "→", "➔": "→", "⇨": "→"})
 _BOLD = re.compile(r"(?<=[\w)])\*\*(?=[\w(])")
 
 _EN_SMALL = dict(
@@ -216,6 +231,7 @@ def _plain(text: Any) -> str:
     raw = "".join(c for c in unicodedata.normalize("NFD", raw) if not unicodedata.combining(c))
     raw = _BOLD.sub("^", raw).replace("**", "").replace("`", "").replace("$", "")
     raw = _DECIMAL_COMMA.sub(r"\1.\2", raw)
+    raw = raw.translate(_ARROWS).replace("-->", "→").replace("->", "→").replace("=>", "→")
     return raw.replace("+/-", "±").replace("+-", "±")
 
 
@@ -278,6 +294,8 @@ class _Words:
 
 def _words_to_math(text: str, language: str) -> str:
     words_of = _Words(language)
+    if language == "en":  # "twenty-five", "five-sixths": one number, not 20 - 5
+        text = _HYPHENATED.sub(lambda m: f"{m[1]} {m[2]}" if _number_word(m[1], m[2], words_of) else m[0], text)
     for pattern, replacement in _PHRASES[language]:
         text = re.sub(pattern, replacement, text)
     tokens = _WORD_TOKEN.findall(text)
@@ -320,6 +338,15 @@ def _words_to_math(text: str, language: str) -> str:
     return "".join(out)
 
 
+_HYPHENATED = re.compile(r"\b([a-z]+)-([a-z]+)\b")
+
+
+def _number_word(first: str, second: str, words_of: _Words) -> bool:
+    """Whether "first-second" is one number written with a hyphen: "twenty-five", "five-sixths", "one-half"."""
+    starts = first in words_of.small or first in words_of.tens or first == "a"
+    return starts and (second in words_of.small or second in words_of.fractions)
+
+
 def _space_after(tokens: list[str], at: list[int], i: int) -> str:
     """The whitespace that followed word i in the text ("" when the next token touches it)."""
     k = at[i] + 1
@@ -328,11 +355,12 @@ def _space_after(tokens: list[str], at: list[int], i: int) -> str:
 
 def to_math(text: Any, language: str | None = None) -> str:
     """Text as plain math: number words as digits and "equals" / "is" / "es igual a" / "vale" as "=", in `language`
-    ("en" | "es"; None tries English then Spanish words). Other words are kept."""
+    ("en" | "es"; None tries English then Spanish words). Other words are kept, and so are line breaks: two lines
+    are two answers ("x = 5" over "x = -3")."""
     plain = _plain(text)
     for lang in _languages(language):
         plain = _words_to_math(plain, lang)
-    return " ".join(plain.split())
+    return "\n".join(line for line in (" ".join(part.split()) for part in plain.splitlines()) if line)
 
 
 # ---- expressions: our own parser, no eval ----------------------------------------------------------------------
@@ -420,6 +448,9 @@ class _Parser:
             raise _Bad("exponent") from exc
         if whole != exponent or abs(whole) > MAX_EXPONENT:
             raise _Bad("exponent")
+        bits, degree = _size(base)
+        if bits * abs(whole) > MAX_BITS or degree * abs(whole) > MAX_POWER_DEGREE:
+            raise _Bad("too big")  # never worked out: each level of a tower is six times the last one
         if whole < 0:
             return _divide(1, base**-whole)
         return base**whole
@@ -435,13 +466,43 @@ class _Parser:
         if kind == "sqrt":
             if self.sp is None:
                 raise _Bad("root")
-            return self.sp.sqrt(self.atom())
+            inside = self.atom()
+            if _size(inside)[0] > MAX_BITS:
+                raise _Bad("too big")  # sympy looks for square factors of the number
+            return self.sp.sqrt(inside)
         if text == "(":
             value = self.expr()
             if self.take()[1] != ")":
                 raise _Bad("brackets")
             return value
         raise _Bad(f"unexpected {text!r}")
+
+
+def _size(value: Value) -> tuple[int, int]:
+    """(bits, degree): upper bounds on how big the numbers in `value` get and on its degree once multiplied out,
+    read off its tree without working anything out. A root counts as a letter: (√2 + √3)^6 multiplies out too."""
+    sp = _sympy()
+    if isinstance(value, (Fraction, int)):
+        exact = Fraction(value)
+        return abs(exact.numerator).bit_length() + exact.denominator.bit_length(), 0
+    if sp is None or not isinstance(value, sp.Basic):
+        return 0, 0
+    if value.is_Rational:
+        return abs(int(value.p)).bit_length() + int(value.q).bit_length(), 0
+    if value.is_Symbol:
+        return 1, 1
+    if value.is_Pow:
+        bits, degree = _size(value.base)
+        if value.exp.is_Integer:
+            n = abs(int(value.exp))
+            return bits * n, degree * n
+        return bits, max(degree, 1)
+    sizes = [_size(arg) for arg in value.args]
+    if not sizes:
+        return 1, 1
+    if value.is_Add:
+        return max(b for b, _ in sizes) + len(sizes), max(d for _, d in sizes)
+    return sum(b for b, _ in sizes), sum(d for _, d in sizes)
 
 
 def _divide(a: Value, b: Value) -> Value:
@@ -536,10 +597,11 @@ def _values(text: str) -> list[Value] | None:
 
 # ---- answers ---------------------------------------------------------------------------------------------------
 
-_PAIR = re.compile(r"\(\s*([^(),;]+?)\s*[,;]\s*([^(),;]+?)\s*\)")
-# "and" / "or" / "o" / "y" / "," between answers; a "y" followed by "=" is the letter y ("x = 5, y = 2").
+_PAIR = re.compile(r"\(\s*([^(),;=]+?)\s*[,;]\s*([^(),;=]+?)\s*\)")  # "(2, 3)"; "(x = 7, y = 3)" holds answers
+# "and" / "or" / "o" / "y" / "," between answers; a "y" next to "=" is the letter y ("x = 5, y = 2", "3 = y").
 _CLAUSES = re.compile(
-    r"\s*(?:,(?!\d)|;|\n|&|\bor\b|\band\b|\bthen\b|\bso\b|\bo\b|\bluego\b|\bentonces\b|\by\b(?!\s*=)|\.\s)\s*"
+    r"\s*(?:,(?!\d)|;|\n|&|\bor\b|\band\b|\bthen\b|\bso\b|\bo\b|\bluego\b|\bentonces\b|(?<!=)(?<!= )\by\b(?!\s*=)"
+    r"|\.\s)\s*"
 )
 _LABEL = re.compile(
     r"^\s*(?:(?:the|my|your|our|final|correct|la|mi|tu|el)\s+)*"
@@ -549,10 +611,35 @@ _LABEL = re.compile(
 )
 # A letter set to something: the letter is not a term of an expression ("3x = 15", "x + 4 = 10" are no answers).
 _ASSIGNED = re.compile(r"(?<![\w.])([a-z])\s*=\s*")
+# The letter alone on the right of the only "=": "3 = x" (from "7 - 2x = 1": "6 = 2x", then "3 = x"), also with a
+# mark after it ("3 = x ✓", "3 = x <-", "3 = x answer"); not "3 = x + 1", "3 = xy", "3 = x 2".
+_ASSIGNED_RIGHT = re.compile(r"=\s*([a-z])(?![a-z])(?=\s*$|\s+(?![\d.(+\-*/÷^√±]|[a-z](?![a-z]))[^\d=]*$)")
 _TERM_END = re.compile(r"[\d)^*/÷+\-]\s*$")
 # A single letter right after a value makes it an expression ("x = 2y + 1", "x = 5x"); "y luego" is a word.
 _VARIABLE_NEXT = re.compile(r"\s*[a-z]\s*(?:[=+\-*/^(]|\d|$)")
 _LEADING_WORDS = re.compile(r"^(?:(?:[a-z]{2,}|i)\s+)+")
+# A reason or a check written after an answer: "x = 4 because 2 times 4 is 8", "x = 6: subtract 9 from both sides,
+# then divide by 2", "x = 6 - divide by 2", "x = 5; check it". It runs up to the next answer ("..., y = 3") or the line
+# end. Not "3:4" (a ratio) and not "A1: x = 4" or "x = 5; y = 2" (a label, a letter).
+_NEXT_ANSWER = r"(?=(?:[,;\n]|\b(?:and|or|then|so|y|o|luego|entonces)\b)\s*[a-z]\s*=|\n|$)"
+_EXPLANATION = re.compile(
+    r"\s*(?:\b(?:because|since|cause|check(?:ing)?|proof|porque|pues|ya\s+que|dado\s+que|comprobacion|"
+    r"comprobando|comprueba|verificacion|verificando|verifica)\b(?!\s*:?\s*[a-z]\s*=)"
+    r"|(?:(?<=\d)(?<![a-z]\d)(?<![a-z]\d\d)|(?<=\)))\s*(?::|;|\s-)\s+(?=[a-z]{2,}))"
+    rf".*?{_NEXT_ANSWER}"
+)
+# Brackets that open on a word hold a check or a note: "x = 5 (check: 3(5) + 5 = 20)", "x = 6 (subtract nine)".
+_ASIDE = re.compile(r"[(\[]\s*(?!sqrt\b)(?=[a-z]{2,})")
+# "x = 5 x = -3", "x = 7 y = 3": answers next to each other with only a space between them; "3 = x 7 - 2(3) = 1" and
+# "x = 5 3(5) + 5 = 20": an answer and its check (not "x = 2 1/2 = 5/2", "x = 15 - 5 = 10", "x = 2 (3 + 1) = 8").
+_GAP = re.compile(
+    r"(=[^=;,\n]*?[\d)])\s+(?=[a-z]\s*=)|(=\s*[a-z])\s+(?=[\d√][^=;,\n]*=)"
+    r"|(=\s*-?\d+(?:\.\d+)?(?:\s*/\s*\d+)?)\s+(?=[\d√][^=;,\n]*?[-+*÷(][^=;,\n]*=)"
+)
+# A line that starts with "=" goes on from the one above it: "1/2 + 1/3" over "= 3/6 + 2/6" over "= 5/6".
+_GOES_ON = re.compile(r"\s*[;\n]\s*(?==)")
+# Subscripts of a root: "x₁ = 3, x₂ = 4" (and "x_1", or "x1 = 3" as a model copies it) are two values of x.
+_SUBSCRIPT = re.compile(r"(?<=[A-Za-z])(?:[₀-₉]+|_\d+)|(?<![\w.][A-Za-z])(?<=[A-Za-z])[1-3](?=\s*=)")
 
 
 def _value_run(text: str) -> tuple[str, str]:
@@ -563,28 +650,199 @@ def _value_run(text: str) -> tuple[str, str]:
     return found.group(), text[found.end() :]
 
 
+def _letter_next(run: str, after: str) -> bool:
+    """Whether a letter after a value run makes it a term: "2y + 1", "5x", and a letter touching it whatever follows
+    ("6 = 2x ✓", "x = 2y ok"). "5 y luego" (a word after a space) and "5cm" (a unit) are no term."""
+    touching = after[:1].isalpha() and not after[1:2].isalpha() and not run[-1:].isspace()
+    return touching or bool(_VARIABLE_NEXT.match(after))
+
+
+def _result_run(side: str) -> tuple[str, str]:
+    """(the value a line comes to, at the start of its last side; what follows it). A mark after it is no math:
+    "20 ✓", "20 ok", "20 :)", "20 →", and "20 √", a tick read as a root sign."""
+    run, after = _value_run(side.strip())
+    return re.sub(r"√\s*$", "", run), after
+
+
+def _bracket_end(text: str, start: int) -> int:
+    """Where the bracket opened at `start` closes (after it); an unclosed bracket runs to the end."""
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] in "([":
+            depth += 1
+        elif text[i] in ")]":
+            depth -= 1
+        if depth == 0:
+            return i + 1
+    return len(text)
+
+
+def _without_asides(text: str) -> str:
+    while (found := _ASIDE.search(text)) is not None:
+        text = f"{text[: found.start()]} ; {text[_bracket_end(text, found.start()) :]}"
+    # A check of plain math in brackets after an answer: "x = 5 (3(5) + 5 = 20)", not "(x = 7, y = 3)".
+    start = 0
+    while (opened := text.find("(", start)) >= 0:
+        end = _bracket_end(text, opened)
+        inside = text[opened + 1 : end - 1]
+        if "=" in inside and not re.search(r"[a-z]", inside) and re.search(r"[\d)]\s*$", text[:opened]):
+            text = f"{text[:opened]} ; {text[end:]}"
+            start = opened
+        else:
+            start = opened + 1
+    return text
+
+
+def _answer_text(text: Any) -> str:
+    """`text` as plain math with what is no answer cut off: checks and reasons ("x = 5 (check: ...)", "because ...",
+    ": subtract 9 ..."), and a clause break between answers on their own lines or side by side ("x = 5 x = -3"). A
+    line that starts with "=" goes on from the line above it."""
+    text = _SUBSCRIPT.sub("", text) if isinstance(text, str) else text
+    chained = re.sub(r"^\s*=\s*", "", _GOES_ON.sub(" ", to_math(text)))  # "= 5/6" alone: the bottom of a chain
+    math_text = _EXPLANATION.sub(" ; ", _without_asides(chained))
+    return _GAP.sub(lambda found: f"{next(g for g in found.groups() if g)} ; ", math_text)
+
+
 def _assignment(clause: str) -> tuple[str, list[Value]] | None:
     """("x", [5]) for "x = 5" / "so x = 15/3 = 5" / "i got x = 5 apples"; None when no lone letter is set to a value."""
     for found in _ASSIGNED.finditer(clause):
         before = clause[: found.start()]
         if _TERM_END.search(before):
             continue
-        rest = clause[found.end() :]
-        last = rest.rsplit("=", 1)[-1]  # "x = 15/3 = 5": the last value
-        run, after = _value_run(last.strip())
-        if not run.strip() or _VARIABLE_NEXT.match(after):
+        run, after = _value_run(clause[found.end() :].strip())
+        while after.startswith("="):  # "x = 15/3 = 5": the last value of the chain, never one after words
+            run, after = _value_run(after[1:].strip())
+        if not run.strip() or _letter_next(run, after):
             return None  # "x = 2y", "x = 5x": not a value
         values = _values(run)
         return (found.group(1), values) if values else None
     return None
 
 
-def parse_answers(text: Any) -> Answers:
+def _right_assignment(clause: str) -> tuple[str, list[Value]] | None:
+    """("x", [3]) for "3 = x" / "i got 3 = x": a value, then its letter alone on the right; None otherwise."""
+    found = _ASSIGNED_RIGHT.search(clause)
+    if found is None or clause.count("=") != 1:
+        return None
+    run, after = _result_run(_LEADING_WORDS.sub("", clause[: found.start()]))
+    values = _values(run) if run.strip() and not after.strip() else None
+    return (found.group(1), values) if values else None
+
+
+def _rational(value: Value) -> bool:
+    sp = _sympy()
+    if sp is not None and isinstance(value, sp.Basic):
+        return bool(value.is_Rational)
+    return isinstance(value, (Fraction, int))
+
+
+def _unworked(run: str) -> bool:
+    """Operations still to be done ("1/2 + 1/3", "2/6 + 3/6", "12 ÷ 4", "2^3", "1/2 +"): they come to one plain
+    number, so it is not the answer yet. One value ("5/6", "-3", "1 1/2", "2.5") or an exact root ("1 + √2") is."""
+    s = run.strip().rstrip(" .,;:!?")
+    try:
+        tokens = _tokens(s)
+    except _Bad:
+        return False
+    if len(tokens) > 1 and tokens[-1][1] in ("+", "-", "*", "/", "÷", "^", "("):
+        return True
+
+    def after_term(k: int) -> bool:
+        return k > 0 and (tokens[k - 1][0] == "num" or tokens[k - 1][1] == ")")
+
+    operations = [k for k, (_, t) in enumerate(tokens) if t in ("+", "-", "*", "÷", "^", "(") and after_term(k)]
+    if not operations and sum(t == "/" for _, t in tokens) < 2:
+        return False
+    value = _expression(s)
+    return value is not None and _rational(value)
+
+
+def _worked_value(clause: str) -> list[Value] | None:
+    """[5/6] for "1/2 + 1/3 = 5/6" (arithmetic and the value it comes to); [] when it is not worked out to one value
+    ("1/2 + 1/3 = 2/6 + 3/6", "12 ÷ 4 = ?"); None when it is no plain arithmetic (a letter in it, on either side: a
+    problem, a step or "3 = x")."""
+    *steps, last = _LEADING_WORDS.sub("", clause).split("=")
+    if not steps or any(_expression(s.strip()) is None for s in steps):
+        return None
+    run, after = _result_run(last)
+    if _letter_next(run, after):
+        return None  # the letter on the right: "6 = 2x" is a step, "3 = x" an answer (_right_assignment)
+    if not run.strip() or _unworked(run):
+        return []
+    return _values(run) or []
+
+
+def _problem_kind(problem: Any, expected: Answers | None = None) -> _Kind:
+    """(True, None) for a problem with a letter ("3x + 5 = 20", also with words around it: "Despeja x: 3x + 5 = 20",
+    "2x - 7 = 9. Find x."), (False, its value) for arithmetic ("1/2 + 1/3"). For a problem code can't read (a word
+    problem), the `expected` answer tells: (True, None) when it has a letter ("x = 5"), (False, None) when it is a
+    bare value ("12"). None without a problem, or when neither tells."""
+    if problem is None:
+        return None
+    parts = _equations(problem)
+    if parts and any(re.search(r"[a-z]", part.replace("sqrt", "")) for part in parts):
+        return True, None
+    value = _expression(parts[0]) if parts and len(parts) == 1 and "=" not in parts[0] else None
+    if value is not None and _number(value) is not None:
+        return False, value
+    if parts is None and _worded_equation(problem):
+        return True, None
+    if expected:
+        return any(letter for letter, _ in expected), None
+    return None
+
+
+def _worded_equation(problem: Any) -> bool:
+    """Whether a problem written with words holds an equation with a letter: "Despeja x: 3x + 5 = 20", "2x - 7 = 9.
+    Find x.", "Halla x en 3x + 5 = 20", "Resuelve la ecuación 7 - 2x = 1", "Solve for x in the equation 2x + 3 = 11"."""
+    text = to_math(_INSTRUCTION.sub("", _plain(problem).strip()))
+    for piece in _SENTENCE_BREAK.split(text):
+        math_text = _WORDS_AFTER.sub("", _WORDS_BEFORE.sub("", piece.strip())).strip()
+        parts = (_equations(math_text) if "=" in math_text else None) or []
+        lettered = any(re.search(r"[a-z]", part.replace("sqrt", "")) for part in parts)
+        if lettered and all(_sides(part) is not None for part in parts):
+            return True
+    return False
+
+
+def _is_check(clause: str, problem: _Kind, expected: Answers | None = None) -> bool:
+    """Whether a line of arithmetic with no letter is a check or scratch work, not the answer: every such line for a
+    problem with a letter ("3(5) + 5 = 20", "15 + 5 = 20", "3(4) + 5 = 17" for 3x + 5 = 20), and for arithmetic one
+    that does not start from the problem's value ("3 × 4 = 12" for 12 ÷ 4). "1/2 + 1/3 = 5/6" and "3/6 + 2/6 = 5/6"
+    are the problem 1/2 + 1/3 worked out: the answer. For a problem code can't read, a true line ("3(5) + 5 = 20")
+    is a check unless it comes to the `expected` value ("3 × 4 = 12" for a rectangle's area of 12); a false one
+    ("1/2 + 1/3 = 2/5") is an answer."""
+    if problem is None:
+        return False
+    *steps, last = _LEADING_WORDS.sub("", clause).split("=")
+    run, after = _result_run(last)  # what the line comes to, the same value _worked_value reads: "20" of "20 ✓"
+    if not steps or not run.strip() or _letter_next(run, after):
+        return False  # "3 = x", "6 = 2x": the letter on the right
+    sides = [_expression(side.strip()) for side in (*steps, run)]
+    if any(side is None for side in sides):
+        return False  # a letter in it (a step) or not worked out ("12 ÷ 4 = ?")
+    letters, value = problem
+    if letters:
+        return True
+    if value is not None:
+        return not _close(sides[0], value)
+    return _close(sides[0], sides[-1]) and not any(_close(sides[-1], v) for _, v in expected or ())
+
+
+def parse_answers(text: Any, problem: Any = None, expected: Answers | None = None) -> Answers:
     """A written or spoken answer as a set of (letter, value): "x = 5 or x = -3" -> {("x", 5), ("x", -3)},
-    "x = 5, y = 2" -> {("x", 5), ("y", 2)}, "5" -> {("", 5)}, "(2, 3)" -> {("#1", 2), ("#2", 3)}. Steps and problems
-    in the text ("3x + 5 = 20, x = 5") are skipped; an empty set when nothing reads as an answer."""
-    math_text = to_math(text)
-    if not math_text:
+    "x = 5, y = 2" -> {("x", 5), ("y", 2)}, "5" -> {("", 5)}, "(2, 3)" -> {("#1", 2), ("#2", 3)}, "1/2 + 1/3 = 5/6" ->
+    {("", 5/6)}. Answers on separate lines all count; a check or a reason after one ("x = 4 because 2 times 4 is 8")
+    does not. Steps and problems in the text ("3x + 5 = 20, x = 5") are skipped, and so is arithmetic not worked out
+    yet ("1/2 + 1/3", "2/6 + 3/6"); an empty set when nothing reads as an answer.
+
+    Given the `problem` it answers, a line of arithmetic with no letter is a check, never the answer ("x = 5 ;
+    3(5) + 5 = 20" is x = 5, "3(5) + 5 = 20" alone is nothing), unless it is that arithmetic problem worked out
+    ("1/2 + 1/3 = 5/6" for 1/2 + 1/3). The `expected` answer tells what a problem code can't read asks for: a letter's
+    value ("x = 5": every such line is a check) or a value (a true line counts only when it comes to it)."""
+    kind = _problem_kind(problem, expected)
+    math_text = _answer_text(text)
+    if not math_text.strip(" ;"):
         return _NONE
     answers: set[Answer] = set()
     pairs: list[tuple[str, str]] = []
@@ -599,23 +857,70 @@ def parse_answers(text: Any) -> Answers:
         if a and b and len(a) == len(b) == 1:
             answers |= {("#1", a[0]), ("#2", b[0])}
     letter = ""
+    worked: list[Value] = []
+    steps = False
     for raw in _CLAUSES.split(math_text):
         clause = _LABEL.sub("", raw.strip(" .:!?")).strip()
         if not clause:
             continue
-        assigned = _assignment(clause)
+        assigned = _assignment(clause) or _right_assignment(clause)
         if assigned is not None:
             letter = assigned[0]
             answers |= {(letter, v) for v in assigned[1]}
             continue
         if "=" in clause:
-            continue  # the problem or a step
+            if _is_check(clause, kind, expected):
+                continue
+            value = _worked_value(clause)
+            steps = steps or value is None  # the problem or a step ("3x + 5 = 20", "3x = 15")
+            worked = value or worked
+            continue
         run, after = _value_run(_LEADING_WORDS.sub("", clause))
-        if run.strip() and not _VARIABLE_NEXT.match(after):
+        if run.strip() and not _letter_next(run, after) and not _unworked(run):
             values = _values(run)
             if values:
                 answers |= {(letter, v) for v in values}
+    if not answers and worked and not steps:
+        # Only arithmetic worked out ("1/2 + 1/3 = 5/6"): its value. Next to a step with a letter, a line like
+        # "20 - 5 = 15" is scratch work, not the answer.
+        answers = {("", v) for v in worked}
     return frozenset(answers)
+
+
+def only_checks(text: Any, problem: Any, expected: Answers | None = None) -> bool:
+    """Whether `text` holds a check of the answer and no answer: "3(5) + 5 = 20" (or "15 + 5 = 20") for 3x + 5 = 20,
+    the bottom line under "x = 5" (`expected` as for parse_answers)."""
+    return bool(parse_answers(text)) and not parse_answers(text, problem, expected)
+
+
+def unfinished(text: Any) -> bool:
+    """Whether `text` is arithmetic still to be worked out, not an answer: "1/2 + 1/3", "2/6 + 3/6", "12 ÷ 4 =",
+    "one half plus one third". An answer ("5/6", "1/2 + 1/3 = 5/6"), an equation or a step ("3x = 15") is not."""
+    if parse_answers(text):
+        return False
+    for raw in _CLAUSES.split(_answer_text(text)):
+        clause = re.sub(r"=\s*[?_\s]*$", "", _LABEL.sub("", raw.strip(" .:!?")).strip()).strip()
+        if "=" in clause:
+            if _worked_value(clause) == []:
+                return True
+            continue
+        run, after = _value_run(_LEADING_WORDS.sub("", clause))
+        if run.strip() and not _letter_next(run, after) and _unworked(run):
+            return True
+    return False
+
+
+def _math_key(text: Any) -> str:
+    plain = _INSTRUCTION.sub("", _plain(text).strip())
+    math_text = re.sub(r"=\s*[?_\s]*$", "", to_math(plain).strip().rstrip(" ?.!"))
+    return re.sub(r"\s+", "", math_text)
+
+
+def same_problem(text: Any, problem: Any) -> bool:
+    """Whether `text` is `problem` copied back: the same math, spacing, an instruction ("Simplify") and a trailing
+    "= ?" aside ("6/8" for "Simplify 6/8", "1/2+1/3" for "1/2 + 1/3")."""
+    key = _math_key(text)
+    return bool(key) and key == _math_key(problem)
 
 
 def _letters(answers: Answers) -> set[str]:
@@ -704,7 +1009,12 @@ _INSTRUCTION = re.compile(
     r"^\s*(?:solve|simplify|evaluate|compute|calculate|work\s+out|find|what\s+is|resuelve|calcula|simplifica|"
     r"encuentra|halla|cuanto\s+es)\b(?:\s+(?:for|para)\s+[a-z]\b)?\s*[:,]?\s*"
 )
-_EQUATIONS = re.compile(r"\s*(?:,(?!\d)|;|\n|&|\band\b|(?<=[\w)])\s+y\s+(?=[\w(√-]))\s*")
+_EQUATIONS = re.compile(r"\s*(?:,(?!\d)|;|\n|&|→|\band\b|(?<=[\w)])\s+y\s+(?=[\w(√-]))\s*")
+# Around the math of a worded problem: its sentences ("2x - 7 = 9. Find x."), what comes before the math
+# ("despeja x:", "halla x en", "la ecuacion") and words after it ("3x + 5 = 20 para x").
+_SENTENCE_BREAK = re.compile(r"[.?!](?:\s+|$)|:")
+_WORDS_BEFORE = re.compile(r"^(?:(?:(?!sqrt\b)[a-z]{2,}|[a-z](?=\s+[a-z]{2,}))\s+)+")
+_WORDS_AFTER = re.compile(r"\s+(?!sqrt\b)[a-z]{2,}\b.*$")
 
 
 def _equations(problem: Any) -> list[str] | None:
@@ -755,27 +1065,43 @@ def _solve(parts: list[str], sp: Any) -> Answers | None:
     if len(parts) == 1 and "=" not in parts[0]:
         value = _expression(parts[0])
         return frozenset({("", sp.nsimplify(value))}) if value is not None and _number(value) is not None else None
-    equations: list[Any] = []
+    differences: list[Any] = []
     for part in parts:
         sides = _sides(part)
         if sides is None:
             return None
-        equations.append(sp.expand(sides[0] - sides[1]))
+        differences.append(sides[0] - sides[1])
     if len(parts) == 1:
         left, right = _sides(parts[0]) or (None, None)
         if isinstance(left, sp.Symbol) and _number(right) is not None:
             return None  # "x = 5": already solved
         if isinstance(right, sp.Symbol) and _number(left) is not None:
             return None
-    symbols = sorted(set().union(*(e.free_symbols for e in equations)), key=str)
-    if not symbols or len(symbols) > MAX_LETTERS or (len(equations) < len(symbols) and len(symbols) > 1):
+    symbols = sorted(set().union(*(d.free_symbols for d in differences)), key=str)
+    if not symbols or len(symbols) > MAX_LETTERS or (len(differences) < len(symbols) and len(symbols) > 1):
         return None
+    if any(_size(d)[1] > MAX_DEGREE for d in differences):
+        return None  # never multiplied out: "(((x + 1)^6)^6)^6 = 0" took seconds (a root counts as a letter here)
+    equations = [sp.expand(d) for d in differences]
+    degrees: list[int] = []
+    rational = True
     for equation in equations:
         try:
-            if sp.Poly(equation, *symbols).total_degree() > MAX_DEGREE:
-                return None
+            poly = sp.Poly(equation, *symbols)
         except sp.PolynomialError:
             return None
+        degree = poly.total_degree()
+        degrees.append(degree)
+        rational = rational and all(c.is_Rational for c in poly.coeffs())
+        unfactored = len(symbols) == 1 and degree > 2 and len(poly.terms()) > 2  # "x^3 = 2" is a power
+        if unfactored and any(factor.degree() > 2 for factor, _ in poly.factor_list()[1]):
+            return None  # a cubic or quartic that does not factor: its roots in radicals took a third of a second
+    # A system with at most one quadratic, the rest linear ("y = x^2 and x + y = 2"), and then whole-number
+    # coefficients: sympy took seconds on two quadratics with messy roots, and on "√2 x^2 + √3 y = √5 and √7 x - y = 1".
+    # One letter: up to a quartic that factors, or a power ("x^3 = 2").
+    curved = sum(degree > 1 for degree in degrees)
+    if len(symbols) > 1 and (max(degrees) > 2 or curved > 1 or (curved and not rational)):
+        return None
     found: set[Answer] = set()
     for solution in sp.solve(equations, symbols, dict=True):
         if set(solution) != set(symbols):
@@ -792,15 +1118,101 @@ def solved_form(text: Any) -> bool:
     return bool(parse_answers(text)) and solve_text(text) is None
 
 
+def board_solution(text: Any) -> Answers | None:
+    """The solution of the problem a board starts with, whatever else is copied with it: the student's own result
+    ("1/2 + 1/3 = 2/5" -> 5/6, worked out from its left side) or steps and an answer below it ("2x + 3 = 11 ; x = 5"
+    -> x = 4, "x + y = 10 ; x - y = 4 ; x = 8" -> x = 7 and y = 3). Answers before it are skipped. None when the
+    board holds no problem ("x = 5") or none code can solve."""
+    found = _board_problem(text)
+    return found[1] if found else None
+
+
+def board_problem(text: Any) -> str | None:
+    """The problem a board starts with, as plain math ("1/2 + 1/3" for "1/2 + 1/3 = 2/5", "2x + 3 = 11" for
+    "2x + 3 = 11 ; x = 5"); None as for board_solution."""
+    found = _board_problem(text)
+    return found[0] if found else None
+
+
+def _board_problem(text: Any) -> tuple[str, Answers] | None:
+    parts: list[str] = []
+    for raw in _EQUATIONS.split(to_math(_INSTRUCTION.sub("", _plain(text).strip()))):
+        clause = raw.strip(" .?!")
+        if "=" in clause and not re.search(r"[a-z]", clause.replace("sqrt", "")):
+            clause = clause.split("=")[0].strip()  # arithmetic: the problem is the left side, whatever follows
+        elif not parts and solved_form(clause):
+            continue
+        if clause:
+            parts.append(clause)
+    # One equation, or a system of as many as it has letters: the first that solves is the problem.
+    for count in range(1, min(len(parts), MAX_LETTERS) + 1):
+        problem = " ; ".join(parts[:count])
+        solved = solve_text(problem)
+        if solved:
+            return problem, solved
+    return None
+
+
 # ---- a reply that states the solution --------------------------------------------------------------------------
 
 _SENTENCES = re.compile(r"(?<=[.!?])\s+")
-_ANSWER_WORDS = re.compile(r"\b(?:answer|solution|result|respuesta|solucion|resultado)\s*(?:=|:)\s*")
+_ANSWER_WORDS = re.compile(
+    r"\b(?:answers?|solutions?|results?|roots?|zeros?|respuestas?|solucion(?:es)?|resultados?|raices|raiz)"
+    r"\s*(?:=|:|\bare\b|\bson\b)\s*"
+)
 _EQUALS = re.compile(r"=\s*")
+# A result said without "is": "divide 15 by 3 to get 5", "you should get five", "x turns out to be 5", "x ends up
+# being 5", "obtienes cinco", "te sale cinco", "x tiene que ser cinco". Marked "⇒": what follows is a result.
+_RESULT_WORDS = {
+    "en": re.compile(
+        r"\b(?:(?:to|you(?:'ll|\s+will|\s+should|\s+would|\s+can)?|we(?:'ll)?|should|will|would|then)\s+)?"
+        r"(?:get|gets|got)\b|\bgives?(?:\s+you)?\b|\bmakes?\b|\bturns?\s+out\s+to\s+be\b|"
+        r"\bends?\s+up\s+(?:being|as|at|with)\b|\bcomes?\s+(?:out\s+)?to\b|\bworks?\s+out\s+to\b|\bhas\s+to\s+be\b|"
+        r"\bleaves?(?:\s+you)?(?:\s+with)?\b"
+    ),
+    "es": re.compile(
+        r"\b(?:obtienes|obtenemos|obtiene|obtendras|sale|salen|da|dan|queda|quedan|resulta(?:\s+ser)?|"
+        r"tiene\s+que\s+ser|tendria\s+que\s+ser|"
+        r"(?:debe(?:ria)?s?|tiene\s+que|tendria\s+que|va\s+a)\s+(?:dar|salir|quedar)(?:te|nos)?)\b"
+    ),
+}
+# "That makes x five", "eso hace que x sea cinco": the letter's value.
+# "Five sixths is the answer": the value before it.
+_IS_THE_ANSWER = re.compile(
+    r"=\s*(?:(?:the|your|my|our|final|correct|right|real|la|el|tu|mi)\s+)*"
+    r"(?:answers?|solutions?|results?|respuestas?|solucion(?:es)?|resultados?)\b"
+)
+# What a sentence ends on: "so it is four", "it's actually five-sixths", "eso es cuatro", and "es cuatro" alone.
+_ENDS_ON = re.compile(
+    r"(?:\b(?:it|that|this|eso|esto)\s*(?:=|'s\b)|^\s*(?:(?:so|then|and|entonces|pues|asi\s+que)\s+)?(?:=|son\b))\s*"
+    r"(?:(?:actually|really|just|exactly|still|then|now|realmente|entonces|ahora|solo)\s+)?"
+)
+_MAKES_LETTER = re.compile(r"\b(?:makes?|hace\s+que)\s+([a-z])\s+(?:sea\s+|valga\s+)?(?=[-\d(√.])")
+_LEFT_MATH = re.compile(r"[\d\s.+\-*/÷^()√]*$")
+
+
+def _results(text: str, language: str | None) -> str:
+    text = _MAKES_LETTER.sub(r"\1 = ", text)
+    for lang in _languages(language):
+        text = _RESULT_WORDS[lang].sub(" ⇒ ", text)
+    return text
+
+
+def _worked_left(before: str) -> bool:
+    """Whether the text before an "=" ends in arithmetic on numbers ("15 / 3", "then 20 - 5"), not a term with a
+    letter ("3 x", "2(x + 1)", "x / 3")."""
+    run = _LEFT_MATH.search(before).group()  # type: ignore[union-attr]  # "*$" always matches
+    prefix = before[: len(before) - len(run)]
+    return not re.search(r"(?<![a-z])[a-z]$", prefix) and bool(re.search(r"\d\s*[-+*/÷^]\s*[\d(√.]", run))
 
 
 def _stated(sentence: str, solutions: Answers, language: str | None) -> bool:
-    text = to_math(sentence, language)
+    math_text = to_math(sentence, language)
+    if language != "en":  # "cinco y menos tres" is two values, not 5y - 3; "tres sextos mas dos sextos son ..." is "="
+        math_text = re.sub(r"(?<=\d)\s+y\s+(?=[-\d])", " ; ", math_text)
+        math_text = re.sub(r"(?<=[\d)])\s+son\b", " =", math_text)
+    marked = _results(math_text, language)
+    text = marked.replace("⇒", "=")  # same length: a match in one is at the same place in the other
     by_letter: dict[str, list[Value]] = {}
     for letter, value in solutions:
         by_letter.setdefault(letter, []).append(value)
@@ -808,12 +1220,23 @@ def _stated(sentence: str, solutions: Answers, language: str | None) -> bool:
     # An answer written without its letter ("8", "(7, 3)") is any letter's value: "x = 8" gives it away too.
     named = any(letter and not letter.startswith("#") for letter in by_letter)
 
-    def says(found: re.Match[str], wanted: list[Value]) -> bool:
+    def says(found: re.Match[str], wanted: list[Value], *, last: bool = False) -> bool:
         run, after = _value_run(text[found.end() :])
-        if not run.strip() or _VARIABLE_NEXT.match(after):
-            return False
+        if not run.strip() or _letter_next(run, after) or (re.search(r"[-+*/÷^(]\s*$", run) and after[:1].isalpha()):
+            return False  # "2 times x": a term
+        if last and after.strip(" .,;:!?"):
+            return False  # "it is 11 on the right": not what it comes to
         values = _values(run)
         return bool(values) and any(_close(v, w) for v in values for w in wanted)
+
+    for found in _IS_THE_ANSWER.finditer(text):
+        before = text[: found.start()]
+        run = _LEFT_MATH.search(before).group()  # type: ignore[union-attr]  # "*$" always matches
+        values = _values(run) if run.strip() and not re.search(r"(?<![a-z])[a-z]\s*$", before[: -len(run)]) else None
+        if values and any(_close(v, w) for v in values for w in every):
+            return True
+    if any(says(found, every, last=True) for found in _ENDS_ON.finditer(text)):
+        return True
 
     for found in _ASSIGNED.finditer(text):
         letter = found.group(1)
@@ -827,12 +1250,24 @@ def _stated(sentence: str, solutions: Answers, language: str | None) -> bool:
         return True
     if "" in by_letter:  # arithmetic: "... = 5/6" anywhere gives the result away
         return any(says(found, by_letter[""]) for found in _EQUALS.finditer(text))
+    # The letter's value without the letter: arithmetic worked out to it ("15 divided by 3 is 5", "quince entre tres
+    # es cinco") or a result ("divide 15 by 3 to get 5", "you should get five", "obtienes cinco").
+    for found in re.finditer(r"[=⇒]\s*", marked):
+        before = marked[: found.start()]
+        if found.group().startswith("⇒"):
+            if re.search(r"(?<![a-z])[a-z]\s*$", before):
+                continue  # "x ⇒ 5" is x's value, read above; "y ⇒ 5" is another letter's
+        elif not _worked_left(before):
+            continue  # "3 x = 15", "the constant = 5": a step or a word, not a result
+        if says(found, every):
+            return True
     return False
 
 
 def solution_sentences(text: Any, solutions: Answers | None, language: str | None = None) -> list[str]:
     """The sentences of a reply that state the problem's solution as an answer ("x = 5", "x is 5", "x equals five",
-    "la respuesta es cinco", "x es igual a 5"), as written; [] without solutions."""
+    "la respuesta es cinco", "x es igual a 5") or as a result ("15 divided by 3 is 5", "you should get five", "x turns
+    out to be 5", "obtienes cinco"), as written; [] without solutions."""
     if not solutions:
         return []
     sentences = [s.strip() for s in _SENTENCES.split(str(text or "").strip()) if s.strip()]
@@ -924,7 +1359,7 @@ def _hint(parts: list[str], texts: dict[str, str], sp: Any) -> str | None:
         return texts["eliminate"]
     left, right = pairs[0]
     symbols = sorted((left - right).free_symbols, key=str)
-    if len(symbols) != 1:
+    if len(symbols) != 1 or _size(left - right)[1] > MAX_DEGREE:
         return None
     letter = symbols[0]
     poly = sp.Poly(sp.expand(left - right), letter)

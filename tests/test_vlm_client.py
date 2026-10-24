@@ -383,7 +383,15 @@ def test_quiz_check_prompt() -> None:
     assert "make up" not in unknown, "the next problem is the tutor's, not the model's"
     invented = vc.quiz_task_text({**task, "problem": "4x - 3 = 13", "answer": None})
     assert "Expected answer" not in invented and "x = 4" not in invented, "code solves it, so it is graded in code"
+    # The bottom line, and every line of an answer that takes more than one: the model read only "x = 5" of "x = 5"
+    # over "x = -3". Asked for "every answer line" instead, it wrote the solution of a problem with no answer yet.
     assert "bottom line of the student's writing" in text and "not a problem from this message" in text
+    assert "more than one line (both roots, or x and y), copy each of them" in text and 'joined with " ; "' in text
+    spanish = vc.quiz_task_text(task, "es")
+    assert "última línea" in spanish and "más de una línea" in spanish and 'unidas con " ; "' in spanish
+    for language in ("en", "es"):
+        prompt = system_prompt("math", "quiz", language)
+        assert '" ; "' in prompt and ("the problem itself if no answer" in prompt or "el mismo problema" in prompt)
     defaults = vc.quiz_task_text({"kind": "quiz", "stage": "check", "number": "x", "total": None})
     assert "Problem 1 of 10" in defaults
 
@@ -856,6 +864,240 @@ def test_quiz_check_praise_without_a_readable_answer_is_not_approved(read: str |
     assert action.animation_state == "idle" and action.verdict is None and action.spoken_text == vc.NO_ANSWER_TEXT
 
 
+def _arithmetic_check(problem: str) -> dict[str, Any]:
+    return {"kind": "quiz", "stage": "check", "number": 1, "total": 5, "problem": problem, "answer": None}
+
+
+@pytest.mark.parametrize(
+    ("problem", "read"),
+    [
+        ("1/2 + 1/3", "1/2 + 1/3"),  # only the problem on the board: solved in code it was "correct"
+        ("3/4 - 1/2", "3/4 - 1/2"),
+        ("12 ÷ 4", "12 ÷ 4"),
+        ("2/3 × 3/4", "2/3 × 3/4"),
+        ("0.5 + 0.25", "0.5 + 0.25"),
+        ("1/5 + 2/5", "1/5 + 2/5"),  # the seeded starter
+        ("1/2 + 1/3", "2/6 + 3/6"),  # worked part of the way
+        ("1/2 + 1/3", "one half plus one third"),
+        ("12 ÷ 4 = ?", "12 ÷ 4 ="),
+        ("Simplify 6/8", "6/8"),  # the problem copied back, though it reads as one value
+    ],
+)
+def test_quiz_check_of_arithmetic_not_worked_out_is_not_graded(problem: str, read: str) -> None:
+    task = _arithmetic_check(problem)
+    for language in ("en", "es"):
+        action = vc.check_quiz_answer(CHEER, task, read, language=language)
+        assert action.verdict is None and action.animation_state == "idle"  # type: ignore[attr-defined]
+        assert action.spoken_text == vc.TEXTS[language]["unfinished"]
+        assert not grading.states_solution(action.spoken_text, vc.expected_answers(task), language)
+
+
+@pytest.mark.parametrize(
+    ("read", "verdict"),
+    [
+        ("5/6", "correct"),
+        ("1/2 + 1/3 = 5/6", "correct"),
+        ("2/6 + 3/6 = 5/6", "correct"),
+        ("10/12", "correct"),
+        ("1/2 + 1/3 = 2/5", "wrong"),
+        ("2/5", "wrong"),
+    ],
+)
+def test_quiz_check_of_worked_arithmetic_is_graded(read: str, verdict: str) -> None:
+    action = vc.check_quiz_answer(CHEER, _arithmetic_check("1/2 + 1/3"), read)
+    assert action.verdict == verdict  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("problem", "answer", "check"),
+    [
+        ("3x + 5 = 20", "x = 5", "3(5) + 5 = 20"),
+        ("3x + 5 = 20", "x = 5", "15 + 5 = 20"),
+        ("2x - 7 = 9", "x = 8", "2(8) - 7 = 9"),
+        ("x + 7 = 12", "x = 5", "5 + 7 = 12"),
+        ("5x + 4 = -11", "x = -3", "5(-3) + 4 = -11"),
+    ],
+)
+def test_quiz_check_of_a_substitution_check_on_the_bottom_line_is_never_wrong(
+    problem: str, answer: str, check: str
+) -> None:
+    task = {**QUIZ_CHECK, "problem": problem, "answer": answer}
+    for language in ("en", "es"):
+        for model in (PRAISE, HINT):
+            alone = vc.check_quiz_answer(model, task, check, language=language)
+            assert alone.verdict is None and alone.animation_state == "idle", "no point, no miss"  # type: ignore[attr-defined]
+            assert alone.spoken_text == vc.TEXTS[language]["reread"] and not getattr(alone, "hint_needed", False)
+        both = vc.check_quiz_answer(PRAISE, task, f"{answer} ; {check}", language=language)
+        assert both.verdict == "correct", "with the answer line copied too, that line is graded"  # type: ignore[attr-defined]
+        other = {**task, "answer": "x = 99"}
+        assert vc.check_quiz_answer(PRAISE, other, f"{answer} ; {check}", language=language).verdict == "wrong"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("problem", "answer", "check"),
+    [
+        ("Despeja x: 3x + 5 = 20", "x = 5", "3(5) + 5 = 20"),
+        ("2x - 7 = 9. Find x.", "x = 8", "2(8) - 7 = 9"),
+        ("Encuentra el valor de x: 5x + 4 = -11", "x = -3", "5(-3) + 4 = -11"),
+        ("Resuelve la ecuación 7 - 2x = 1", "x = 3", "7 - 2(3) = 1"),
+        ("A farmer has some hens. Three times the hens plus 5 is 20. How many?", "h = 5", "3(5) + 5 = 20"),
+        ("A farmer has some hens. Three times the hens plus 5 is 20. How many?", "5", "3(5) + 5 = 20"),
+    ],
+)
+def test_quiz_check_of_a_substitution_check_under_a_worded_problem_is_never_wrong(
+    problem: str, answer: str, check: str
+) -> None:
+    task = {**QUIZ_CHECK, "problem": problem, "answer": answer}
+    for language in ("en", "es"):
+        for model in (PRAISE, HINT):
+            alone = vc.check_quiz_answer(model, task, check, language=language)
+            assert alone.verdict is None and alone.animation_state == "idle", (problem, language)  # type: ignore[attr-defined]
+            assert alone.spoken_text == vc.TEXTS[language]["reread"] and not getattr(alone, "hint_needed", False)
+        both = vc.check_quiz_answer(PRAISE, task, f"{answer} ; {check}", language=language)
+        assert both.verdict == "correct", (problem, language)  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("mark", [" ✓", " ✔", " √", " true", " ok", " correct", " sí", " ✅", " →", " :)"])
+def test_quiz_check_of_a_check_line_with_a_tick_after_it_is_never_wrong(mark: str) -> None:
+    for check in ("3(5) + 5 = 20", "15 + 5 = 20", "20 = 20"):
+        for language in ("en", "es"):
+            action = vc.check_quiz_answer(HINT, QUIZ_CHECK, check + mark, language=language)
+            assert action.verdict is None and action.spoken_text == vc.TEXTS[language]["reread"], (check, mark)  # type: ignore[attr-defined]
+            both = vc.check_quiz_answer(PRAISE, QUIZ_CHECK, f"x = 5 ; {check}{mark}", language=language)
+            assert both.verdict == "correct"  # type: ignore[attr-defined]
+    fraction = vc.check_quiz_answer(PRAISE, _arithmetic_check("1/2 + 1/3"), "1/2 + 1/3 = 5/6" + mark)
+    assert fraction.verdict == "correct", "the arithmetic problem worked out, ticked"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("read", "verdict"),
+    [
+        ("1/2 + 1/3 ; = 3/6 + 2/6 ; = 5/6", "correct"),
+        ("1/2 + 1/3\n= 3/6 + 2/6\n= 5/6", "correct"),
+        ("= 5/6", "correct"),
+    ],
+)
+def test_quiz_check_of_a_vertical_chain_grades_its_bottom_line(read: str, verdict: str) -> None:
+    for language in ("en", "es"):
+        action = vc.check_quiz_answer(PRAISE, _arithmetic_check("1/2 + 1/3"), read, language=language)
+        assert action.verdict == verdict, (read, language)  # type: ignore[attr-defined]
+    wrong = vc.check_quiz_answer(PRAISE, _arithmetic_check("1/2 + 1/3"), "1/2 + 1/3 ; = 2/5")
+    assert wrong.verdict == "wrong"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("read", ["x = 5 (3(5) + 5 = 20)", "x = 5 3(5) + 5 = 20", "x=5 3(5)+5=20"])
+def test_quiz_check_of_an_answer_with_its_check_beside_it_grades_the_answer(read: str) -> None:
+    for language in ("en", "es"):
+        assert vc.check_quiz_answer(HINT, QUIZ_CHECK, read, language=language).verdict == "correct"  # type: ignore[attr-defined]
+    seven = {**QUIZ_CHECK, "problem": "7 - 2x = 1", "answer": "x = 3"}
+    assert vc.check_quiz_answer(HINT, seven, "x = 3 (7 - 2(3) = 1)").verdict == "correct"  # type: ignore[attr-defined]
+    assert vc.check_quiz_answer(HINT, seven, "x = 3 7 - 2(3) = 1").verdict == "correct"  # type: ignore[attr-defined]
+
+
+def test_a_check_under_a_worded_problem_asks_again_for_the_answer_line() -> None:
+    # Live, problem "3x + 5 = 20. Find x.": the first read was the check line in 2/2 runs, graded as a miss.
+    task = {**QUIZ_CHECK, "problem": "3x + 5 = 20. Find x."}
+    c = _math_client()
+    replies = _check_replies("3(5) + 5 = 20", "x = 5 ; 3(5) + 5 = 20", spoken="Not quite.", state="error")
+    with patch.object(c.session, "post", side_effect=replies) as post:
+        action = c.evaluate("Check my answer.", JPEG, [], REGIONS, SIZE, mode="quiz", task=task)
+    assert post.call_count == 2
+    assert vc.RETRY_NOTES["en"]["check_line"] in post.call_args.kwargs["json"]["messages"][1]["content"]
+    assert action.verdict == "correct"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("problem", "read", "verdict"),
+    [
+        ("7 - 2x = 1", "3 = x", "correct"),
+        ("7 - 2x = 1", "6 = 2x\n3 = x", "correct"),
+        ("7 - 2x = 1", "6 = 2x ; 3 = x", "correct"),
+        ("7 - 2x = 1", "4 = x", "wrong"),
+        ("2(3x - 4) = 4x + 6", "7 = x", "correct"),
+    ],
+)
+def test_quiz_check_of_an_answer_with_the_letter_on_the_right_is_graded(problem: str, read: str, verdict: str) -> None:
+    task = {**QUIZ_CHECK, "problem": problem, "answer": None}
+    for language in ("en", "es"):
+        action = vc.check_quiz_answer(PRAISE, task, read, language=language)
+        assert action.verdict == verdict, (read, language)  # type: ignore[attr-defined]
+        assert action.spoken_text != vc.TEXTS[language]["unfinished"]
+
+
+@pytest.mark.parametrize("tail", [" ✓", " ✔", " ok", " :)", " □", " ∎", " <-", " answer", " final"])
+def test_quiz_check_of_the_letter_on_the_right_with_a_mark_after_it_is_graded(tail: str) -> None:
+    task = {**QUIZ_CHECK, "problem": "7 - 2x = 1", "answer": "x = 3"}
+    for language in ("en", "es"):
+        for read, verdict in (("3 = x", "correct"), ("4 = x", "wrong"), ("3 = x 7 - 2(3) = 1", "correct")):
+            action = vc.check_quiz_answer(PRAISE, task, read + tail, language=language)
+            assert action.verdict == verdict, (read + tail, language)  # type: ignore[attr-defined]
+    roots = {**QUIZ_CHECK, "problem": "x^2 - 7x + 12 = 0", "answer": "x = 3 or x = 4"}
+    assert vc.check_quiz_answer(PRAISE, roots, "x₁ = 3, x₂ = 4").verdict == "correct"  # type: ignore[attr-defined]
+
+
+def test_quiz_check_of_a_step_with_the_letter_on_the_right_is_no_answer_yet() -> None:
+    task = {**QUIZ_CHECK, "problem": "7 - 2x = 1", "answer": "x = 3"}
+    for language in ("en", "es"):
+        action = vc.check_quiz_answer(PRAISE, task, "6 = 2x", language=language)
+        assert action.verdict is None and action.spoken_text == vc.TEXTS[language]["no_answer"]  # type: ignore[attr-defined]
+
+
+def test_evaluate_of_a_substitution_check_records_no_miss() -> None:
+    reply = {"board_answer": "3(5) + 5 = 20", **CHEER.to_dict()}
+    action, _ = _ask(_math_client(), reply, query="Check my answer.", mode="quiz", task=QUIZ_CHECK)
+    assert action.verdict is None and action.animation_state == "idle"  # type: ignore[attr-defined]
+    assert action.spoken_text == vc.TEXTS["en"]["reread"]
+
+
+@pytest.mark.parametrize(
+    ("language", "query", "praise"),
+    [("en", "Check my answer.", "Correct, great job!"), ("es", "Revisa mi respuesta.", "¡Correcto, muy bien!")],
+)
+def test_a_check_that_read_only_the_check_line_asks_again_for_the_answer_line(
+    language: str, query: str, praise: str
+) -> None:
+    # Live, qwen2.5vl:3b copied only the bottom line "3(5) + 5 = 20" of "x = 5" over its check, every time.
+    c = _math_client()
+    replies = _check_replies("3(5) + 5 = 20", "x = 5 ; 3(5) + 5 = 20", spoken=praise)
+    with patch.object(c.session, "post", side_effect=replies) as post:
+        action = c.evaluate(query, JPEG, [], REGIONS, SIZE, mode="quiz", task=QUIZ_CHECK, language=language)
+    assert post.call_count == 2
+    assert vc.RETRY_NOTES[language]["check_line"] in post.call_args.kwargs["json"]["messages"][1]["content"]
+    assert action.verdict == "correct"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_the_check_line_note_asks_for_every_answer_line_and_never_for_one_made_up(language: str) -> None:
+    # Live, a board with only the problem and its check was re-read as "3(5) + 5 = 20 ; x = 5" and given the point:
+    # the note asked for "the answer line (the letter and its value)", which the model then wrote itself.
+    note = vc.RETRY_NOTES[language]["check_line"]
+    every, none, invent = {
+        "en": ("every answer line", "If there is no answer line above the check, copy the check line only", "never"),
+        "es": ("cada línea de respuesta", "Si no hay ninguna línea de respuesta", "nunca escribas una respuesta"),
+    }[language]
+    assert every in note and none in note and invent in note
+    assert "the letter and its value" not in note and "la letra y su valor" not in note
+    assert '" ; "' in note
+
+
+def test_a_check_still_reading_only_the_check_line_is_not_graded() -> None:
+    c = _math_client()
+    replies = _check_replies("3(5) + 5 = 20", "15 + 5 = 20", spoken="Correct, great job!")
+    with patch.object(c.session, "post", side_effect=replies) as post:
+        action = c.evaluate("Check my answer.", JPEG, [], REGIONS, SIZE, mode="quiz", task=QUIZ_CHECK)
+    assert post.call_count == 2, "asked again once, never more"
+    assert action.verdict is None and action.spoken_text == vc.TEXTS["en"]["reread"]  # type: ignore[attr-defined]
+    for read in ("x = 5", "x = 4", "3x = 15", "x = 5 ; 3(5) + 5 = 20"):
+        assert not grading.only_checks(read, QUIZ_CHECK["problem"]), read
+
+
+def test_evaluate_never_approves_the_problem_read_back() -> None:
+    reply = {"board_answer": "1/2 + 1/3", **CHEER.to_dict()}
+    action, _ = _ask(_math_client(), reply, query="Check my answer.", mode="quiz", task=_arithmetic_check("1/2 + 1/3"))
+    assert action.verdict is None and action.animation_state == "idle"  # type: ignore[attr-defined]
+    assert "final answer" in action.spoken_text
+
+
 @pytest.mark.parametrize("read", ["x = something", "I can't tell", "x = 2y"])
 def test_quiz_check_of_an_unreadable_answer_asks_again(read: str) -> None:
     praise = AvatarAction("Correct, great job!", "celebrating", 1, 2)
@@ -976,6 +1218,15 @@ def test_good_replies_are_not_asked_again() -> None:
         ("Subtract five from both sides.", False),
         ("Is x equal to five?", False),
         ("If x equals five, what is three x?", False),
+        # the letter's value said another way
+        ("x turns out to be five.", True),
+        ("x ends up being five.", True),
+        ("That makes x five.", True),
+        ("x has to be five.", True),
+        ("The roots are five and negative three.", True),
+        ("What makes x alone on one side?", False),
+        ("Divide both sides by three.", False),
+        ("What do you get when you divide fifteen by three?", False),
     ],
 )
 def test_reveals_value(spoken: str, reveals: bool) -> None:
@@ -1177,6 +1428,8 @@ def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -
         *("CR", "CRW", "CRH", "CRHW"),
         *("EQCN", "EQWN", "QCN", "QWN", "HS", "EHS"),
         *("QQC", "QQW", "QQP", "QSC", "QSW", "EQQW"),
+        *("QQ2", "EQQ2", "QFN", "QFC"),
+        *("QK", "QT", "QXR", "HR", "EHR", "QS2", "EQS2", "QKW", "EQKW", "QKN"),
     }
     assert all(b.MATH_SCENARIOS[k].language == "es" for k in ("ELO", "ELE", "EH", "EHA", "EQD", "EQC", "EQW"))
     assert set(b.BIO_SCENARIOS) == {"A", "B", "AB", "BA"}
@@ -1349,6 +1602,11 @@ def test_spanish_reply_goes_through_mathspeak_es_and_keeps_display_text() -> Non
         ("x más tres es igual a ocho.", False),
         ("Recuerda que la respuesta es una fracción.", False),
         ("Entonces x es igual a menos cuatro.", True),
+        ("x tiene que ser cinco.", True),
+        ("Las raíces son cinco y menos tres.", True),
+        ("Eso hace que x sea cinco.", True),
+        ("Tienes que restar cinco en ambos lados.", False),
+        ("¿Cuánto tiene que ser x?", False),
     ],
 )
 def test_reveals_value_in_spanish(text: str, reveals: bool) -> None:
@@ -1631,6 +1889,55 @@ def test_spanish_check_that_copies_the_next_problem_is_asked_again_and_graded() 
     assert action.spoken_text == "¡Correcto, muy bien! Problema dos. dos x menos cuatro es igual a diez"
 
 
+MULTI_LINE = {"en": 'more than one line (both roots, or x and y), copy each of them, joined with " ; "'}
+MULTI_LINE["es"] = 'más de una línea (las dos raíces, o la x y la y), copia cada una, unidas con " ; "'
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_every_check_prompt_asks_for_every_answer_line(language: str) -> None:
+    # A system or two roots written one per line lost the point when only the bottom line was copied.
+    stage = " ".join(system_prompt("math", "quiz", language).split())
+    note = vc.quiz_task_text(QUIZ_CHECK, language)
+    retry = vc.RETRY_NOTES[language]["misread"]
+    for text in (stage, note, retry):
+        assert MULTI_LINE[language].lower() in " ".join(text.split()).lower(), text
+
+
+def _two_line_problems() -> list[tuple[str, str]]:
+    import csv
+
+    bank = Path(__file__).resolve().parent.parent / "biobench_sar" / "knowledge" / "math" / "quiz_bank.csv"
+    rows = list(csv.DictReader(bank.open(encoding="utf-8")))
+    return [(r["problem"], r["answer"]) for r in rows if re.search(r"\b(?:and|or)\b", r["answer"])]
+
+
+def test_two_line_answers_of_every_bundled_system_and_quadratic_get_the_point() -> None:
+    problems = _two_line_problems()
+    assert len(problems) == 7, "the 3 systems and 4 quadratics of the bundled bank"
+    for problem, answer in problems:
+        task = {**QUIZ_CHECK, "problem": problem, "answer": answer, "next_problem": None}
+        lines = re.split(r"\s+(?:and|or)\s+", answer)
+        for language in ("en", "es"):
+            # Copied joined with " ; ", or one per line, and a check line under them is no answer (R1).
+            for read in (" ; ".join(lines), "\n".join(lines), " ; ".join([*lines, "7 + 3 = 10"])):
+                action = vc.check_quiz_answer(PRAISE, task, read, language=language)
+                assert action.verdict == "correct", (problem, read, language)  # type: ignore[attr-defined]
+            half = vc.check_quiz_answer(PRAISE, task, lines[-1], language=language)
+            assert half.verdict == "wrong" and half.spoken_text == vc.TEXTS[language]["incomplete"]  # type: ignore[attr-defined]
+
+
+def test_a_misread_check_asks_again_for_every_answer_line_and_grades_them() -> None:
+    c = _math_client()
+    task = {**QUIZ_CHECK, "problem": "x + y = 10 and x - y = 4", "answer": "x = 7 and y = 3"}
+    replies = _check_replies("2x - 4 = 10", "x = 7 ; y = 3 ; 7 + 3 = 10", spoken="Correct, great job!")
+    with patch.object(c.session, "post", side_effect=replies) as post:
+        action = c.evaluate("Is it right?", JPEG, [], REGIONS, SIZE, mode="quiz", task=task)
+    assert post.call_count == 2
+    retry = post.call_args.kwargs["json"]["messages"][1]["content"]
+    assert vc.RETRY_NOTES["en"]["misread"] in retry and MULTI_LINE["en"] in retry
+    assert action.verdict == "correct"  # type: ignore[attr-defined]
+
+
 @pytest.mark.parametrize("language", ["en", "es"])
 def test_check_that_copies_the_next_problem_twice_stays_ungraded(language: str) -> None:
     c = _math_client()
@@ -1749,10 +2056,44 @@ def test_check_prompt_never_shows_an_expected_answer() -> None:
         ("¡Muy bien!", True, "es"),
         ("¡Correcto!", True, "es"),
         ("Casi. No es correcto todavía.", False, "es"),
+        ("Great!", True, "en"),
+        ("Right!", True, "en"),
+        ("You're right.", True, "en"),
+        ("You are right, x is five.", True, "en"),
+        ("The answer is right.", True, "en"),
+        ("Nice!", True, "en"),
+        ("Good!", True, "en"),
+        ("¡Buen trabajo!", True, "es"),
+        ("¡Bien!", True, "es"),
+        ("Está bien.", True, "es"),
+        ("Tienes razón.", True, "es"),
+        ("¡Genial!", True, "es"),
+        # a verdict against the answer, a step, a word that only looks like praise
+        ("Not quite.", False, "en"),
+        ("That's not right.", False, "en"),
+        ("That is not quite right, check the sign.", False, "en"),
+        ("Right, now subtract five from both sides.", False, "en"),
+        ("Look at the right side of the equation.", False, "en"),
+        ("Good question: what undoes times three?", False, "en"),
+        ("Is that right?", False, "en"),
+        ("Casi.", False, "es"),
+        ("Casi, no está bien.", False, "es"),
+        ("No está del todo bien.", False, "es"),
+        ("Revisa bien el signo.", False, "es"),
     ],
 )
 def test_praises(text: str, praise: bool, language: str) -> None:
     assert vc.praises(text, language) is praise
+
+
+def test_praise_is_left_out_of_a_hint_for_a_wrong_answer() -> None:
+    solutions = vc.expected_answers(QUADRATIC)
+    hint = vc.hint_after_wrong("Not quite. Great! Now factor it.", QUADRATIC, solutions=solutions)
+    assert hint == "Not quite. Now factor it."
+    es = vc.hint_after_wrong("Casi. ¡Buen trabajo! Ahora factoriza.", QUADRATIC, language="es", solutions=solutions)
+    assert es == "Casi. Ahora factoriza."
+    praised = AvatarAction("Not quite. You're right that it factors. Look for two numbers.", "error", 1, 2)
+    assert "right" not in vc.check_quiz_answer(praised, QUADRATIC, "x = 7 or x = -3").spoken_text
 
 
 def test_hint_after_wrong_cleans_the_models_hint() -> None:
@@ -1886,6 +2227,52 @@ def test_help_reply_still_stating_the_solution_loses_that_sentence() -> None:
     assert action.spoken_text == "Try factoring the left side."
 
 
+@pytest.mark.usefixtures("no_mathspeak")
+@pytest.mark.parametrize(
+    ("language", "query", "reply", "kept"),
+    [
+        (
+            "en",
+            "Is this right?",
+            "Not quite. One half plus one third equals five sixths, not two fifths. Find a common denominator first.",
+            "Not quite. Find a common denominator first.",
+        ),
+        (
+            "en",
+            "Is this right?",
+            "Not quite: 1/2 + 1/3 = 5/6. Find a common denominator.",
+            "Find a common denominator.",
+        ),
+        (
+            "es",
+            "¿Está bien?",
+            "Casi. Un medio más un tercio es igual a cinco sextos. Busca un denominador común.",
+            "Casi. Busca un denominador común.",
+        ),
+    ],
+)
+def test_help_reply_on_a_board_with_the_students_own_result_never_states_the_solution(
+    language: str, query: str, reply: str, kept: str
+) -> None:
+    c = _math_client()
+    leak = {**MATH_GOOD, "board_problem": "1/2 + 1/3 = 2/5", "spoken_text": reply}
+    with _posts(c, leak, leak) as post:
+        action = c.evaluate(query, JPEG, [], REGIONS, SIZE, language=language)
+    assert post.call_count == 2, "asked again once"
+    assert vc.RETRY_NOTES[language]["reveal"] in post.call_args.kwargs["json"]["messages"][1]["content"]
+    assert action.spoken_text == kept
+    assert not grading.states_solution(action.spoken_text, grading.parse_answers("5/6"), language)
+
+
+def test_help_reply_on_a_board_with_a_wrong_answer_below_never_states_the_solution() -> None:
+    c = _math_client()
+    leak = {**MATH_GOOD, "board_problem": "2x + 3 = 11\nx = 5", "spoken_text": "Not quite. You should get four."}
+    good = {**MATH_GOOD, "board_problem": "2x + 3 = 11\nx = 5", "spoken_text": "Check the subtraction step first."}
+    with _posts(c, leak, good) as post:
+        action = c.evaluate("Is this right?", JPEG, [], REGIONS, SIZE)
+    assert post.call_count == 2 and action.spoken_text == "Check the subtraction step first."
+
+
 def test_spanish_help_reply_stating_the_solution_is_removed() -> None:
     c = _math_client()
     leak = {
@@ -1907,6 +2294,77 @@ def test_help_on_a_board_already_solved_is_not_censored() -> None:
     assert post.call_count == 1 and action.spoken_text == reply["spoken_text"]
 
 
+@pytest.mark.parametrize(
+    ("leak", "language"),
+    [
+        ("Then divide 15 by 3 to get 5.", "en"),
+        ("Fifteen divided by three is five.", "en"),
+        ("You should get five.", "en"),
+        ("Quince entre tres es cinco.", "es"),
+        ("Obtienes cinco.", "es"),
+    ],
+)
+def test_help_reply_stating_the_solution_another_way_is_asked_again(leak: str, language: str) -> None:
+    """Said without the letter, the value is still the solution: code solves the board's problem and compares."""
+    c = _math_client()
+    step = "Divide both sides by three." if language == "en" else "Divide ambos lados entre tres."
+    first = {**MATH_GOOD, "board_problem": "3x = 15", "spoken_text": f"{step} {leak}"}
+    with _posts(c, first, first) as post:
+        action = c.evaluate("help", JPEG, [], REGIONS, SIZE, language=language)
+    assert post.call_count == 2, "asked again"
+    assert action.spoken_text == step, "what still states it is cut"
+
+
+@pytest.mark.parametrize(
+    ("board", "leak", "language"),
+    [
+        ("1/2 + 1/3 = 2/5", "Five sixths is the answer.", "en"),
+        ("1/2 + 1/3", "It is actually five-sixths.", "en"),
+        ("2x + 3 = 11", "So it is four.", "en"),
+        ("2x + 3 = 11 → x = 5", "So it is four.", "en"),
+        ("12 ÷ 4", "It's three.", "en"),
+        ("1/2 + 1/3", "Te debe dar cinco sextos.", "es"),
+        ("1/2 + 1/3 = 2/5", "Tres sextos más dos sextos son cinco sextos.", "es"),
+        ("2x + 3 = 11 → x = 5", "Eso es cuatro.", "es"),
+    ],
+)
+def test_help_reply_saying_what_it_comes_to_is_asked_again_and_cut(board: str, leak: str, language: str) -> None:
+    c = _math_client()
+    step = "Look at each step again." if language == "en" else "Revisa cada paso otra vez."
+    reply = {**MATH_GOOD, "board_problem": board, "spoken_text": f"{step} {leak}"}
+    with _posts(c, reply, reply) as post:
+        action = c.evaluate("Is this right?", JPEG, [], REGIONS, SIZE, language=language)
+    assert post.call_count == 2, "asked again"
+    assert action.spoken_text == step, "what still states it is cut"
+
+
+@pytest.mark.usefixtures("no_mathspeak")
+@pytest.mark.parametrize(
+    ("board", "leak", "language", "said"),
+    [
+        # Already solved on the board: the guard stays on (the model may have written that line), the text is a check.
+        ("x^2 - 2x - 15 = 0\nx = 5\nx = -3", "Yes, the roots are five and negative three.", "en", "check_it"),
+        ("1/2 + 1/3 = 5/6", "Yes, one half plus one third is five sixths.", "en", "check_it"),
+        ("x^2 - 2x - 15 = 0\nx = 5\nx = -3", "Sí, las raíces son cinco y menos tres.", "es", "check_it"),
+        # Not solved: one hint for the board's own problem, never the step about x on a fraction board.
+        ("1/2 + 1/3 = 2/5", "Five sixths is the answer.", "en", "Find a common denominator first."),
+        ("1/2 + 1/3 = 2/5", "Te debe dar cinco sextos.", "es", "Primero busca un denominador común."),
+        ("2x + 3 = 11\nx = 5", "So it is four.", "en", "Subtract 3 from both sides first."),
+    ],
+)
+def test_help_fallback_fits_the_board_when_the_whole_reply_states_the_solution(
+    board: str, leak: str, language: str, said: str
+) -> None:
+    c = _math_client()
+    reply = {**MATH_GOOD, "board_problem": board, "spoken_text": leak, "animation_state": "celebrating"}
+    with _posts(c, reply, reply) as post:
+        action = c.evaluate("Is this right?", JPEG, [], REGIONS, SIZE, language=language)
+    assert post.call_count == 2
+    assert action.spoken_text.startswith(vc.TEXTS[language].get(said, said)), action.spoken_text
+    assert action.spoken_text != vc.TEXTS[language]["step"], "no step about x"
+    assert not grading.states_solution(action.spoken_text, grading.board_solution(board), language)
+
+
 def test_quiz_hint_stating_the_solution_is_asked_again() -> None:
     c = _math_client()
     assert not vc.reveals_value("Divide and you get x = 5.")
@@ -1926,6 +2384,66 @@ def test_bench_graded_scenarios(monkeypatch: pytest.MonkeyPatch) -> None:
     assert b.MATH_SCENARIOS["QSC"].expected == "celebrating" and b.MATH_SCENARIOS["EQQW"].language == "es"
     board, regions = b.draw_board(["x = 5"], (1280, 800))
     assert board.shape == (800, 1280, 3) and regions[0]["x"] == 200
+
+
+def test_bench_answer_line_and_unfinished_scenarios(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = _bench(monkeypatch)
+    for key in ("QQ2", "EQQ2"):
+        two_lines = b.MATH_SCENARIOS[key]
+        assert two_lines.expected == "celebrating" and two_lines.task["answer"] == "x = 5 or x = -3"
+        _, regions = two_lines.board()
+        assert len(regions) == 3, "the problem and one root per line"
+    assert b.MATH_SCENARIOS["EQQ2"].language == "es"
+    problem_only = b.MATH_SCENARIOS["QFN"]
+    assert problem_only.expected == "idle" and problem_only.task["answer"] is None
+    assert problem_only.check(vc.TEXTS["en"]["unfinished"]) is None
+    assert problem_only.check("Correct, great job!") == "praised a problem with no answer"
+    assert problem_only.check("Not quite. It is five sixths.") == "gave the result"
+    assert b.MATH_SCENARIOS["QFC"].expected == "celebrating"
+    steps = [s.board for s in b.FLOWS["en"]] + [s.board for s in b.FLOWS["es"]]
+    assert steps.count([b.Q2, "x = 5", "x = -3"]) == 2, "both flows check a root per line"
+
+
+def test_bench_landing_review_scenarios(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = _bench(monkeypatch)
+    check_line = b.MATH_SCENARIOS["QK"]
+    assert check_line.expected == "celebrating", "a read of only the check is asked again for the answer line"
+    assert check_line.check(vc.TEXTS["en"]["reread"]) is None and check_line.check("Correct, great job!") is None
+    assert check_line.check("Not quite. Subtract 5 from both sides first.") == "graded the check line wrong"
+    assert b.MATH_SCENARIOS["QT"].check("Correct, great job!") and b.MATH_SCENARIOS["QT"].check("Ask me again.") is None
+    assert b.MATH_SCENARIOS["QXR"].expected == "celebrating" and b.MATH_SCENARIOS["QXR"].task["answer"] == "x = 3"
+    for key in ("HR", "EHR"):
+        sum_board = b.MATH_SCENARIOS[key]
+        assert sum_board.mode == "help" and sum_board.check("Not quite. It is five sixths.")
+        assert sum_board.check("Casi. Un medio más un tercio es igual a cinco sextos.") == "gave the result"
+    assert b.MATH_SCENARIOS["HR"].check("Not quite. Find a common denominator first.") is None
+    for key in ("QS2", "EQS2"):
+        _, regions = b.MATH_SCENARIOS[key].board()
+        assert len(regions) == 4, "two equations, then one value per line"
+    assert b.MATH_SCENARIOS["EQS2"].language == "es" and b.MATH_SCENARIOS["EHR"].language == "es"
+    for key in ("QKW", "EQKW"):
+        worded = b.MATH_SCENARIOS[key]
+        assert worded.expected == "celebrating" and worded.task["problem"] != b.EQUATION
+        assert grading.only_checks("3(5) + 5 = 20", worded.task["problem"], vc.expected_answers(worded.task))
+        assert "graded the check line wrong" in (worded.check("Not quite. Subtract 5 from both sides first.") or "")
+    no_answer = b.MATH_SCENARIOS["QKN"]
+    assert no_answer.expected == "idle" and len(no_answer.board()[1]) == 2
+    assert no_answer.check("Correct, great job!") == "praised an answer code cannot read"
+    assert no_answer.check(vc.TEXTS["en"]["reread"]) is None
+
+
+def test_bench_boards_of_four_lines_keep_every_line_on_the_board(monkeypatch: pytest.MonkeyPatch) -> None:
+    # QS2/EQS2 have four lines: the 4th ("y = 3") had its baseline on the image's bottom edge.
+    b = _bench(monkeypatch)
+    for size in ((1920, 1080), (1280, 800)):
+        for count in (4, 5):
+            img, regions = b.draw_board(["x + y = 10"] * count, size)
+            assert all(r["y"] + r["h"] <= 0.96 * size[1] for r in regions), (size, count)
+            tops = [r["y"] for r in regions]
+            assert all(r["y"] + r["h"] < top for r, top in zip(regions, tops[1:], strict=False)), "no overlap"
+            assert img.shape[:2] == (size[1], size[0])
+    three = [r["y"] for r in b.draw_board(["a", "b", "c"])[1]]
+    assert three[1] - three[0] == 260, "three lines or fewer keep their spacing"
 
 
 @pytest.mark.parametrize("language", ["en", "es"])

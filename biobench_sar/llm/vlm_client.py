@@ -64,9 +64,12 @@ TEXTS: dict[str, dict[str, str]] = {
         "no_answer": NO_ANSWER_TEXT,
         "wrong": WRONG_TEXT,
         "step": STEP_TEXT,
+        "check_it": "Check it: go over each step once more, or put your answer back into the problem.",
+        "next_step": "Look at your work one step at a time, and write the next step on the board.",
         "correct": "Correct, great job!",
         "not_quite": "Not quite.",
         "incomplete": "Not quite. That is only part of the answer: there is more to find.",
+        "unfinished": "I can't see your final answer yet. Finish working it out on the board, then ask me again.",
         "reread": "I couldn't read your answer clearly. Ask me to check it again.",
         "next": " Problem {number}. {problem}",
         "last": " That was the last problem. You finished the quiz!",
@@ -88,9 +91,13 @@ TEXTS: dict[str, dict[str, str]] = {
         "no_answer": "Todavía no veo tu respuesta. Escríbela en el pizarrón y luego pídeme que la revise.",
         "wrong": "Casi. Revisa tus pasos y vuelve a intentarlo.",
         "step": "Fíjate qué le están haciendo a la x y deshazlo en ambos lados. Escribe ese paso en el pizarrón.",
+        "check_it": "Compruébalo: revisa cada paso otra vez o pon tu respuesta en el problema.",
+        "next_step": "Revisa tu trabajo paso a paso y escribe el siguiente paso en el pizarrón.",
         "correct": "¡Correcto, muy bien!",
         "not_quite": "Casi.",
         "incomplete": "Casi. Esa es solo una parte de la respuesta: falta encontrar más.",
+        "unfinished": "Todavía no veo tu respuesta final. Termina de resolverlo en el pizarrón y luego pregúntame "
+        "otra vez.",
         "reread": "No pude leer bien tu respuesta. Pídeme que la revise otra vez.",
         "next": " Problema {number}. {problem}",
         "last": " Ese fue el último problema. ¡Terminaste el quiz!",
@@ -227,7 +234,8 @@ Do not solve it. board_answer "", "idle", target = screen center.
 - Stage hint: the student is stuck. Explain ONLY the next step of the given problem and ask them to write it. \
 NEVER say the answer. board_answer "", "pointing" at the ink to work on.
 - Stage check: FIRST look at the photo and copy the bottom line of the student's writing into board_answer, \
-exactly as written (the problem itself if no answer is written yet). Never solve the problem yourself.
+exactly as written (the problem itself if no answer is written yet). If the answer takes more than one line (both \
+roots, or x and y), copy each of them, joined with " ; ". Never solve the problem yourself.
   - Correct: "celebrating"; praise briefly. Do not read out any problem: the next one is read after you.
   - Wrong: "error"; say "Not quite" and give ONE short hint. NEVER say the correct answer.
   target = center of the answer's ink region.
@@ -320,7 +328,8 @@ No lo resuelvas. board_answer "", "idle", target = centro de la pantalla.
 - Etapa pista: el estudiante está atorado. Explica SOLO el siguiente paso del problema dado y pídele que lo escriba. \
 NUNCA digas la respuesta. board_answer "", "pointing" a la tinta que hay que trabajar.
 - Etapa revisar: PRIMERO mira la foto y copia en board_answer la última línea de lo que escribió el estudiante, \
-tal como está escrita (el mismo problema si todavía no hay respuesta). Nunca resuelvas tú el problema.
+tal como está escrita (el mismo problema si todavía no hay respuesta). Si la respuesta ocupa más de una línea (las \
+dos raíces, o la x y la y), copia cada una, unidas con " ; ". Nunca resuelvas tú el problema.
   - Correcta: "celebrating"; felicítalo brevemente. No leas ningún problema: el siguiente se lee después de ti.
   - Incorrecta: "error"; di "Casi" y da UNA pista corta. NUNCA digas la respuesta correcta.
   target = centro de la región de tinta de la respuesta.
@@ -565,6 +574,14 @@ def expected_answers(task: Mapping[str, Any] | None) -> grading.Answers:
     return grading.parse_answers(_clean(t.get("answer"))) or _solved(_clean(t.get("problem")))
 
 
+def given_answers(read: str | None, task: Mapping[str, Any] | None) -> grading.Answers:
+    """The student's answer as read off the board, for the task's problem: a check under it ("3(5) + 5 = 20" for
+    x = 5) is no answer, also for a problem written with words ("Despeja x: 3x + 5 = 20") or a word problem whose
+    answer has a letter (grading.parse_answers with the expected answer)."""
+    t = task or {}
+    return grading.parse_answers(read, _clean(t.get("problem")), expected_answers(t))
+
+
 def quiz_task_text(task: Mapping[str, Any] | None, language: str = "en") -> str:
     t = task or {}
     if normalize_reply_language(language) == "es":
@@ -592,8 +609,9 @@ def quiz_task_text(task: Mapping[str, Any] | None, language: str = "en") -> str:
         lines.append("This is the last problem: if the answer is correct, congratulate the student on finishing.")
     lines.append(
         "First copy the bottom line of the student's writing in the photo into board_answer, exactly as written "
-        '(not a problem from this message); do not solve anything yourself. If the answer is wrong: "error", one '
-        "hint, never the answer. If it is correct, praise briefly and do not read out any problem."
+        "(not a problem from this message); if the answer takes more than one line (both roots, or x and y), copy "
+        'each of them, joined with " ; ". Do not solve anything yourself. If the answer is wrong: "error", one hint, '
+        "never the answer. If it is correct, praise briefly and do not read out any problem."
     )
     return "\n".join(lines)
 
@@ -617,7 +635,8 @@ def _quiz_task_text_es(t: Mapping[str, Any]) -> str:
         lines.append("Este es el último problema: si la respuesta es correcta, felicita al estudiante por terminar.")
     lines.append(
         "Primero copia en board_answer la última línea de lo que escribió el estudiante en la foto, tal como está "
-        '(no un problema de este mensaje); no resuelvas nada tú. Si la respuesta está mal: "error", una pista, '
+        "(no un problema de este mensaje); si la respuesta ocupa más de una línea (las dos raíces, o la x y la y), "
+        'copia cada una, unidas con " ; ". No resuelvas nada tú. Si la respuesta está mal: "error", una pista, '
         "nunca la respuesta. Si está bien, felicítalo brevemente y no leas ningún problema."
     )
     return "\n".join(lines)
@@ -815,21 +834,29 @@ _NUMBER_ES = (
     r"(?:\d|cero|uno|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|once|doce|trece|catorce|quince|"
     r"dieci\w+|veinte|veinti\w+|treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa|cien|ciento|mil)"
 )
-# "So x equals five.", "The answer is 5", "x should be seven": the value of the letter said as a result. Not a step
-# such as "three x equals fifteen" (the letter has a number in front) and not a question.
+# "So x equals five.", "The answer is 5", "x should be seven", "x turns out to be five", "That makes x five", "The
+# roots are five and negative three": the value of the letter said as a result. Not a step such as "three x equals
+# fifteen" (the letter has a number in front) and not a question.
 _REVEAL_RE = re.compile(
     r"(?:^|[,;:]|\b(?:so|then|and|means|now|great|yes|correct|because)\b)\s*"
-    r"(?:x|y|n|the\s+(?:answer|solution|value\s+of\s+[a-z])|your\s+answer)\s+"
-    r"(?:=|equals|is(?:\s+equal\s+to)?|would\s+be|will\s+be|should\s+be|must\s+be)\s+"
+    r"(?:(?:x|y|n|the\s+(?:answer|solution|value\s+of\s+[a-z])|your\s+answer)\s+"
+    r"(?:=|equals|is(?:\s+equal\s+to)?|would\s+be|will\s+be|should\s+be|must\s+be|has\s+to\s+be|"
+    r"turns\s+out\s+to\s+be|ends\s+up\s+(?:being|as)|comes\s+out\s+to|works\s+out\s+to)"
+    r"|the\s+(?:roots|solutions|answers|values\s+of\s+[a-z])\s+are)\s+"
     rf"(?:negative\s+|minus\s+)?{_NUMBER}"
+    rf"|\bmakes\s+(?:x|y|n)\s+(?:negative\s+|minus\s+)?{_NUMBER}"
 )
-# The same in Spanish, on accent-free text: "Entonces x es igual a cinco.", "La respuesta es cinco", "x vale siete".
+# The same in Spanish, on accent-free text: "Entonces x es igual a cinco.", "La respuesta es cinco", "x vale siete",
+# "x tiene que ser cinco", "Las raíces son cinco y menos tres", "Eso hace que x sea cinco".
 _REVEAL_RE_ES = re.compile(
     r"(?:^|[,;:]|\b(?:asi\s+que|entonces|o\s+sea|por\s+lo\s+tanto|luego|y|es\s+decir|correcto|bien|si|porque|"
     r"ahora|queda|nos\s+queda|te\s+queda)\b)\s*"
-    r"(?:x|n|ye|la\s+(?:respuesta|solucion)|el\s+valor\s+de\s+(?:la\s+)?(?:x|ye|n|letra|incognita)|tu\s+respuesta)\s+"
-    r"(?:=|es\s+igual\s+a|es|vale|equivale\s+a|igual\s+a|seria|sera|debe\s+ser|deberia\s+ser|da|queda\s+en)\s+"
+    r"(?:(?:x|n|ye|la\s+(?:respuesta|solucion)|el\s+valor\s+de\s+(?:la\s+)?(?:x|ye|n|letra|incognita)|tu\s+respuesta)\s+"
+    r"(?:=|es\s+igual\s+a|es|vale|equivale\s+a|igual\s+a|seria|sera|debe\s+ser|deberia\s+ser|da|queda\s+en|"
+    r"tiene\s+que\s+ser|tendria\s+que\s+ser|resulta(?:\s+ser)?|sale)"
+    r"|las\s+(?:raices|soluciones|respuestas)\s+son)\s+"
     rf"(?:menos\s+|negativo\s+)?{_NUMBER_ES}\b"
+    rf"|\bhace\s+que\s+(?:x|n|ye)\s+(?:sea|valga)\s+(?:menos\s+|negativo\s+)?{_NUMBER_ES}\b"
 )
 _SENTENCE_RE = re.compile(r"[^.!?]+[.!?]*")
 # Sentences of text that may still hold notation: "3.5" is no sentence end, "Try 3.5 - x. Then..." is two.
@@ -997,17 +1024,27 @@ def copies_problem(read: str | None, problem: str | None, language: str = "en") 
     return len(wanted) >= 3 and any(_math_seq(part, language) == wanted for part in parts)
 
 
-# Praise in a reply to a wrong answer: the model graded it itself ("Correct, great job!"). "Not correct" is no praise.
+# Praise in a reply to a wrong answer: the model graded it itself ("Correct, great job!", "Great!", "You're right",
+# "¡Buen trabajo!", "Tienes razón"). "Not correct", "not right" and "no está bien" are no praise. A lone "great",
+# "right", "good" or "bien" counts only as a whole sentence ("Right!"): "Right, now..." and "the right side" are none.
 _PRAISE_RE = re.compile(
     r"\b(?:correct|great\s+(?:job|work)|good\s+(?:job|work)|well\s+done|perfect|excellent|awesome|you\s+got\s+it|"
-    r"that'?s\s+right|nice\s+work|exactly)\b",
+    r"that['’]?s\s+right|nice\s+(?:work|job)|exactly|you(?:['’]re|\s+are)\s+(?:so\s+|absolutely\s+)?right|"
+    r"(?:answer|it|that|this)\s+(?:is|was|looks)\s+(?:all\s+|exactly\s+)?right|looks\s+(?:good|great|right)|"
+    r"wonderful|fantastic|brilliant|bravo|nailed\s+it)\b"
+    r"|^\W*(?:great|nice|good|right|super|yay|yes)\W*$",
     re.I,
 )
 _PRAISE_RE_ES = re.compile(
-    r"\b(?:correct[oa]|muy\s+bien|excelente|perfecto|bien\s+hecho|lo\s+lograste|exacto|as[ií]\s+es|eso\s+es)\b", re.I
+    r"\b(?:correct[oa]|muy\s+bien|excelente|perfecto|bien\s+hecho|lo\s+lograste|exacto|as[ií]\s+es|eso\s+es|"
+    r"(?:muy\s+)?buen\s+trabajo|tienes\s+raz[oó]n|genial|est[aá]\s+bien|qu[eé]\s+bien|fant[aá]stico|bravo|s[uú]per)\b"
+    r"|^\W*(?:bien|eso|s[ií])\W*$",
+    re.I,
 )
 _NOT_PRAISE_RE = re.compile(
-    r"\b(?:not|isn'?t|no\s+es|no\s+está)\s+(?:quite\s+|del\s+todo\s+)?correct|\bincorrect", re.I
+    r"\b(?:not|isn['’]?t|is\s+not|no\s+es|no\s+est[aá])\s+(?:quite\s+|del\s+todo\s+|muy\s+)?(?:correct|right|bien)"
+    r"|\bincorrect",
+    re.I,
 )
 _OPENER_RE = re.compile(r"^\s*(?:not\s+quite|casi|no\s+exactamente|no\s+del\s+todo)\s*[.,!:;]*\s*", re.I)
 
@@ -1022,7 +1059,7 @@ def wrong_answer_text(task: Mapping[str, Any] | None, language: str = "en", read
     """What code says to a wrong answer: "Not quite." and one hint for the problem's first step (grading.hint_for),
     "only part of the answer" when some values are missing, else the generic WRONG_TEXT."""
     t = task or {}
-    if read and grading.incomplete(grading.parse_answers(read), expected_answers(t)):
+    if read and grading.incomplete(given_answers(read, t), expected_answers(t)):
         return text_for(language, "incomplete")
     hint = grading.hint_for(_clean(t.get("problem")), normalize_reply_language(language))
     return f"{text_for(language, 'not_quite')} {hint}" if hint else text_for(language, "wrong")
@@ -1052,7 +1089,13 @@ def check_quiz_answer(
     if copies_problem(read, upcoming, language):
         # The next problem is not on the board yet: this is no reading of the student's answer, so no grade either.
         return ungraded("reread")
-    given = grading.parse_answers(read)
+    problem = _clean(t.get("problem"))
+    # A check line under the answer ("3(5) + 5 = 20" for x = 5) is no answer: alone it is not graded ("ask again").
+    given = given_answers(read, t)
+    if read is not None and (grading.unfinished(read) or (given and grading.same_problem(read, problem))):
+        # The problem copied back ("1/2 + 1/3", worked out in code it is its own answer) or worked only part of the
+        # way ("2/6 + 3/6"): no final answer yet, so no point and no miss.
+        return ungraded("unfinished")
     if not given:
         # Nothing, the problem itself or a step of it ("3x = 15"): no answer yet. Anything else could not be read.
         return ungraded("no_answer" if read is None or grading.solve_text(read) is not None else "reread")
@@ -1278,7 +1321,12 @@ RETRY_NOTES = {
         "starter": "Your last reply did not dictate a problem. Dictate ONE easy problem on {topic} in words, with its "
         "numbers and operation, not a story.",
         "misread": "Your last board_answer was not what the student wrote. Look at the photo again and copy the bottom "
-        "line of the student's own writing into board_answer, exactly as written.",
+        "line of the student's own writing into board_answer, exactly as written; if the answer takes more than one "
+        'line (both roots, or x and y), copy each of them, joined with " ; ".',
+        "check_line": "Your last board_answer was the student's check of the answer, not the answer. Look at the photo "
+        "again and copy every answer line the student wrote above the check (both roots, or x and y, when there are "
+        'two), exactly as written, joined with " ; ". If there is no answer line above the check, copy the check line '
+        "only: never write an answer yourself.",
         "wrong_answer": 'The student\'s answer "{answer}" is WRONG (it was checked). Do not praise it. Give ONE short hint '
         "about the next step of this problem and ask them to try again. NEVER say the answer or the value of the letter.",
         "incomplete": "It is only part of the answer: tell them there is more to find.",
@@ -1295,7 +1343,12 @@ RETRY_NOTES = {
         "starter": "Tu respuesta anterior no dictó un problema. Dicta UN problema fácil de {topic} con palabras, con "
         "sus números y su operación, no una historia.",
         "misread": "Tu board_answer anterior no era lo que escribió el estudiante. Mira otra vez la foto y copia en "
-        "board_answer la última línea de lo que escribió el estudiante, tal como está.",
+        "board_answer la última línea de lo que escribió el estudiante, tal como está; si la respuesta ocupa más de "
+        'una línea (las dos raíces, o la x y la y), copia cada una, unidas con " ; ".',
+        "check_line": "Tu board_answer anterior era la comprobación del estudiante, no su respuesta. Mira otra vez la "
+        "foto y copia cada línea de respuesta que el estudiante escribió arriba de la comprobación (las dos raíces, o la "
+        'x y la y, si son dos), tal como está, unidas con " ; ". Si no hay ninguna línea de respuesta arriba de la '
+        "comprobación, copia solo la comprobación: nunca escribas una respuesta tú.",
         "wrong_answer": 'La respuesta del estudiante "{answer}" está MAL (ya se revisó). No la felicites. Da UNA pista '
         "corta sobre el siguiente paso de este problema y pídele que lo intente otra vez. NUNCA digas la respuesta ni "
         "el valor de la letra.",
@@ -1317,11 +1370,12 @@ def _states(action: AvatarAction, solutions: grading.Answers | None, language: s
 
 def solutions_for(kind: str, task: Mapping[str, Any] | None, board: str | None) -> grading.Answers | None:
     """The solution a reply must never state: the quiz problem's, or in help the one of the problem the model copied
-    off the board (board_problem), solved in code. None when there is none (or the board line is an answer already)."""
+    off the board (board_problem), solved in code. That is the problem's even when the student's own result is copied
+    with it ("1/2 + 1/3 = 2/5": five sixths, never said). None when there is none (the board holds only an answer)."""
     if kind == "quiz":
         return expected_answers(task) or None
-    if kind == "help" and board and not grading.solved_form(board):
-        return grading.solve_text(board)
+    if kind == "help" and board:
+        return grading.board_solution(board)
     return None
 
 
@@ -1337,11 +1391,17 @@ def _retry_note(
     solutions: grading.Answers | None = None,
 ) -> str | None:
     """Why a finished math reply must be asked for again, or None. Quiz dictation and grading are fixed in code; a
-    check is asked again only when what it read off the board (`read`) is the next problem instead. `solutions`:
-    the problem's solution, worked out in code; a help or hint reply that states it is asked again."""
+    check is asked again only when what it read off the board (`read`) is the next problem instead, or only the
+    student's check of the answer ("3(5) + 5 = 20": then for the answer line too). `solutions`: the problem's
+    solution, worked out in code; a help or hint reply that states it is asked again."""
     notes = RETRY_NOTES[normalize_reply_language(language)]
     if kind == "quiz" and quiz_stage(task) == "check":
-        return notes["misread"] if copies_problem(read, _clean((task or {}).get("next_problem")), language) else None
+        t = task or {}
+        if copies_problem(read, _clean(t.get("next_problem")), language):
+            return notes["misread"]
+        # Only the check under the answer ("3(5) + 5 = 20"), the bottom line: never graded, so read the answer too.
+        only_checks = read and grading.only_checks(read, _clean(t.get("problem")), expected_answers(t))
+        return notes["check_line"] if only_checks else None
     if kind == "quiz" and quiz_stage(task) != "hint":
         return None
     spoken = action.spoken_text
@@ -1404,12 +1464,31 @@ def _salvage(
         and not copied(s)
         and in_language(s, language)
     ]
-    out = " ".join(kept) if kept else fallback_text(kind, task, has_ink, language)
+    fallback = (_help_fallback(board, solutions, language) if kind == "help" else None) or fallback_text(
+        kind, task, has_ink, language
+    )
+    out = " ".join(kept) if kept else fallback
     if kind == "learn" and _starter_missing(replace(action, spoken_text=_spoken(out, language)), task, language):
         out = fallback_text(kind, task, has_ink, language)
     if kind == "learn" and learn_stage(task) == "offer":
         out = _with_offer_question(out, language)
     return replace(action, spoken_text=out)
+
+
+def _help_fallback(board: str | None, solutions: grading.Answers | None, language: str) -> str | None:
+    """What help says when no sentence of its reply could stay, for the problem on the board: a check when the board
+    already shows its solution ("x^2 - 2x - 15 = 0 ; x = 5 ; x = -3": never the value, the guard stays on, since the
+    model may have written that line itself), else one hint for its first step (grading.hint_for: a fraction board
+    gets a fraction hint, not the step about x). None when code can't tell (then the generic step)."""
+    problem = grading.board_problem(board) if board else None
+    if problem is None:
+        return None
+    if solutions and grading.compare(grading.parse_answers(board, problem), solutions):
+        return text_for(language, "check_it")
+    hint = grading.hint_for(problem, normalize_reply_language(language))
+    if hint is None and not re.search(r"[a-z]", problem.replace("sqrt", "")):
+        return text_for(language, "next_step")
+    return hint
 
 
 def _speech_function(language: str = "en") -> Callable[[str], str] | None:
@@ -1622,7 +1701,7 @@ class VLMClient:
         read = getattr(action, "board_answer", None) or ""
         notes = RETRY_NOTES[normalize_reply_language(language)]
         note = notes["wrong_answer"].format(answer=read.replace('"', "'"))
-        if grading.incomplete(grading.parse_answers(read), expected_answers(t)):
+        if grading.incomplete(given_answers(read, t), expected_answers(t)):
             note += " " + notes["incomplete"]
         step = grading.hint_for(_clean(t.get("problem")), normalize_reply_language(language))
         if step:
