@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import sys
 import threading
 import time
+import types
 
 import numpy as np
+import pytest
 
 from biobench_sar.core.audio_trigger import AudioTrigger
 
@@ -520,3 +523,141 @@ def test_injected_transcriber_decodes_never_overlap() -> None:
     t = AudioTrigger(lambda q: None, recorder=lambda s: AUDIO, transcriber=fake)
     assert _transcribe_concurrently(t) == ["ok"] * 6
     assert fake.calls == 6 and fake.max_active == 1
+
+
+class _FakeWhisper:
+    def __init__(self, text: str = " hola ", language: str | None = "es") -> None:
+        self.text, self.language = text, language
+        self.kwargs: list[dict[str, object]] = []
+
+    def transcribe(self, audio: np.ndarray, **kwargs: object) -> dict[str, object]:
+        self.kwargs.append(kwargs)
+        out: dict[str, object] = {"text": self.text}
+        if self.language is not None:
+            out["language"] = self.language
+        return out
+
+
+def _with_model(model: _FakeWhisper, language: str = "auto") -> AudioTrigger:
+    t = AudioTrigger(lambda q: None, recorder=lambda s: AUDIO, language=language)
+    t._model = model
+    return t
+
+
+def _fake_lang(monkeypatch: pytest.MonkeyPatch, result: str = "es") -> list[tuple[str, str]]:
+    calls: list[tuple[str, str]] = []
+    mod = types.ModuleType("biobench_sar.lang")
+
+    def detect_language(text: str, default: str = "en") -> str:
+        calls.append((text, default))
+        return result
+
+    mod.detect_language = detect_language  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "biobench_sar.lang", mod)
+    return calls
+
+
+def test_language_defaults_to_auto_and_english() -> None:
+    t = AudioTrigger(lambda q: None, recorder=lambda s: AUDIO, transcriber=lambda a: "")
+    assert t.language == "auto" and t.last_language == "en"
+
+
+def test_auto_lets_whisper_detect_the_language() -> None:
+    model = _FakeWhisper(" ¿y ahora? ", "es")
+    t = _with_model(model)
+    assert t.transcribe(AUDIO) == "¿y ahora?"
+    assert model.kwargs == [{"fp16": False, "language": None}]
+    assert t.last_language == "es"
+
+
+def test_forced_language_is_passed_to_whisper() -> None:
+    model = _FakeWhisper(" hello ", "en")
+    t = _with_model(model, language="es")
+    assert t.last_language == "es"
+    t.transcribe(AUDIO)
+    assert t.last_language == "es"
+    assert t.set_language("en") == "en"
+    t.transcribe(AUDIO)
+    assert [k["language"] for k in model.kwargs] == ["es", "en"]
+    assert all(k["fp16"] is False for k in model.kwargs)
+    assert t.last_language == "en"
+
+
+def test_set_language_normalizes_codes() -> None:
+    t = AudioTrigger(lambda q: None, recorder=lambda s: AUDIO, transcriber=lambda a: "")
+    assert t.set_language("ES_mx") == "es" and t.last_language == "es"
+    assert t.set_language("English") == "en"
+    assert t.set_language("Español") == "es"
+    assert t.set_language("fr") == "auto"
+    assert t.set_language(None) == "auto" and t.language == "auto"
+    assert t.last_language == "es"  # auto keeps following the last language heard
+
+
+def test_unexpected_whisper_language_falls_back_to_text_heuristic(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _fake_lang(monkeypatch, "es")
+    t = _with_model(_FakeWhisper(" ayuda ", "pt"))
+    t.transcribe(AUDIO)
+    assert t.last_language == "es"
+    assert calls == [("ayuda", "en")]
+
+
+def test_heuristic_without_lang_module_falls_back_to_english(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "biobench_sar.lang", None)  # import raises ImportError
+    t = _with_model(_FakeWhisper(" ayuda ", "gl"))
+    t.set_language("es")
+    t.set_language("auto")
+    t.transcribe(AUDIO)
+    assert t.last_language == "en"
+
+
+def test_heuristic_error_keeps_the_last_language(monkeypatch: pytest.MonkeyPatch) -> None:
+    mod = types.ModuleType("biobench_sar.lang")
+
+    def boom(text: str, default: str = "en") -> str:
+        raise RuntimeError("x")
+
+    mod.detect_language = boom  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "biobench_sar.lang", mod)
+    t = _with_model(_FakeWhisper(" x = 5 ", None))
+    t.set_language("es")
+    t.set_language("auto")
+    t.transcribe(AUDIO)
+    assert t.last_language == "es"
+
+
+def test_empty_transcript_keeps_the_last_language() -> None:
+    t = _with_model(_FakeWhisper("  ", "es"))
+    t.transcribe(np.zeros(16000, dtype=np.float32))  # warm-up on silence
+    assert t.last_language == "en"
+
+
+def test_injected_transcriber_language_comes_from_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _fake_lang(monkeypatch, "es")
+    t = AudioTrigger(lambda q: None, recorder=lambda s: AUDIO, transcriber=lambda a: " no entiendo ")
+    assert t.transcribe(AUDIO) == "no entiendo"
+    assert t.last_language == "es" and calls == [("no entiendo", "en")]
+
+
+def test_typed_text_updates_last_language(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_lang(monkeypatch, "es")
+    q: list[str] = []
+    t = AudioTrigger(q.append, recorder=lambda s: AUDIO, transcriber=lambda a: "")
+    t.submit_text(" ¿cómo despejo x? ")
+    assert q == ["¿cómo despejo x?"] and t.last_language == "es"
+    t.set_language("en")
+    t.submit_text("ayuda")
+    assert t.last_language == "en"  # a forced language wins over the heuristic
+
+
+def test_push_query_reports_its_language(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_lang(monkeypatch, "es")
+    seen: list[tuple[str, str]] = []
+    done = threading.Event()
+    t = AudioTrigger(
+        lambda q: (seen.append((q, t.last_language)), done.set()),
+        recorder=lambda s: AUDIO,
+        transcriber=lambda a: "el siguiente paso",
+    )
+    t.trigger()
+    _wait(done)
+    assert seen == [("el siguiente paso", "es")]

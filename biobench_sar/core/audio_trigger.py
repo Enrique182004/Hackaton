@@ -18,6 +18,30 @@ SILENCE_RMS = 0.01
 DIGITAL_SILENCE_RMS = 1e-4
 # Trimming a wake chunk by wall clock lags the audio a little; keep some of what came just before the click.
 PUSH_PREROLL_SECONDS = 0.5
+LANGUAGES = ("en", "es")
+
+
+def _normalize_language(code: str | None) -> str:
+    c = (code or "").strip().lower().replace("_", "-")
+    if c in ("en", "english", "inglés", "ingles") or c.startswith("en-"):
+        return "en"
+    if c in ("es", "spanish", "español", "espanol") or c.startswith("es-"):
+        return "es"
+    return "auto"
+
+
+def _guess_language(text: str, default: str = "en") -> str:
+    """Text heuristic from biobench_sar.lang; "en" when that module isn't installed."""
+    try:
+        from biobench_sar.lang import detect_language
+    except ImportError:
+        return "en"
+    try:
+        guess = detect_language(text, default=default)
+    except Exception:
+        log.exception("language detection failed")
+        return default
+    return guess if guess in LANGUAGES else default
 
 
 class AudioTrigger:
@@ -34,6 +58,7 @@ class AudioTrigger:
         wake_chunk_seconds: float = WAKE_CHUNK_SECONDS,
         should_listen: Callable[[], bool] | None = None,
         silence_rms: float = SILENCE_RMS,
+        language: str = "auto",
     ) -> None:
         self.on_query = on_query
         self.whisper_model = whisper_model
@@ -46,6 +71,9 @@ class AudioTrigger:
         self._transcriber = transcriber
         self._should_listen = should_listen or (lambda: True)
         self.silence_rms = silence_rms
+        self.language = _normalize_language(language)
+        # Language of the last non-empty transcript or typed query: the reply should use it.
+        self.last_language = self.language if self.language in LANGUAGES else "en"
         self._model = None
         self._model_lock = threading.Lock()
         self._infer_lock = threading.Lock()
@@ -126,26 +154,53 @@ class AudioTrigger:
         threading.Thread(target=self._run_push, daemon=True, name="push-to-talk").start()
         return True
 
+    def set_language(self, code: str | None) -> str:
+        """Force "en"/"es" (Whisper decodes in it, replies use it) or "auto" to follow the student."""
+        self.language = _normalize_language(code)
+        if self.language in LANGUAGES:
+            self.last_language = self.language
+        return self.language
+
     def submit_text(self, text: str) -> None:
         text = (text or "").strip()
         if text:
+            self._note_language(text, None)
             self.on_query(text)
+
+    def _note_language(self, text: str, detected: object) -> None:
+        if not text:
+            return  # silence/warm-up says nothing about the student's language
+        if self.language in LANGUAGES:
+            self.last_language = self.language
+        elif isinstance(detected, str) and detected.lower() in LANGUAGES:
+            self.last_language = detected.lower()
+        else:
+            self.last_language = _guess_language(text, self.last_language)
 
     def transcribe(self, audio: np.ndarray) -> str:
         # Whisper hangs a kv-cache on the shared model for each decode, so concurrent decodes (warm-up,
         # wake chunks, push-to-talk) corrupt each other. An injected transcriber gets the same guarantee.
         if self._transcriber is not None:
             with self._infer_lock:
-                return self._transcriber(audio).strip()
+                text = self._transcriber(audio).strip()
+                self._note_language(text, None)
+            return text
         with self._model_lock:
             if self._model is None:
                 import whisper
 
                 self._model = whisper.load_model(self.whisper_model)
             model = self._model
+        language = self.language
         with self._infer_lock:
-            result = model.transcribe(np.asarray(audio, dtype=np.float32), fp16=False, language="en")
-        return str(result.get("text", "")).strip()
+            result = model.transcribe(
+                np.asarray(audio, dtype=np.float32),
+                fp16=False,
+                language=language if language in LANGUAGES else None,  # None: Whisper detects it
+            )
+            text = str(result.get("text", "")).strip()
+            self._note_language(text, result.get("language"))
+        return text
 
     def _record(self, seconds: float) -> np.ndarray:
         if self._recorder is not None:
