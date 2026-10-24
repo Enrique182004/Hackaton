@@ -99,6 +99,8 @@ def _ingest_csv(path: Path, max_chars: int = 1000, *, drop_answers: bool = False
     df = pd.read_csv(path, dtype=str, keep_default_na=False)
     if drop_answers:
         df = df[[col for col in df.columns if not is_answer_column(str(col))]]
+        if df.columns.empty:
+            return []  # nothing but answers
     out: list[Chunk] = []
     group: list[str] = []
     first = 0

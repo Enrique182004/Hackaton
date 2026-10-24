@@ -964,16 +964,24 @@ def _problem_key(text: str) -> str:
     return re.sub(r"\s+", "", plain).rstrip(".?!")
 
 
+_READ_PARTS = re.compile(r"\s*(?:[,;]|\bthen\b|\bluego\b|\band\b|\by\b)\s*", re.I)
+
+
 def copies_problem(read: str | None, problem: str | None, language: str = "en") -> bool:
     """Whether what the model "read off the board" is `problem` (the quiz's next one), not the student's answer:
-    the same text ("2x - 4 = 10", "2x-4=10.") or the same numbers and operations said in words."""
+    all of it or one of its parts ("3x + 5 = 20, 2x - 4 = 10") is that problem, as written ("2x-4=10.") or said in
+    words. Whole parts only: a next problem "x + 5 = 20" is not in a read "3x + 5 = 20"."""
     read, problem = _clean(read), _clean(problem)
     if read is None or problem is None:
         return False
+    parts = [read, *(part for part in _READ_PARTS.split(read) if part)]
     key = _problem_key(problem)
-    if key and key in _problem_key(read):
+    if any(_problem_key(part) == key for part in parts):
         return True
-    return len(_math_seq(problem, language)) >= 3 and reads_back(read, problem, language)
+    if re.search(r"\d", read):
+        return False  # written with digits and still not the problem
+    wanted = _math_seq(problem, language)
+    return len(wanted) >= 3 and any(_math_seq(part, language) == wanted for part in parts)
 
 
 def check_quiz_answer(

@@ -305,6 +305,7 @@ def test_a_file_of_only_answers_stores_nothing_and_says_why(
     assert result["chunks"] == 0 and result["error"] == app_module.ONLY_ANSWERS_ERROR
     assert real_store.count() == 0
     assert _upload(client, "blank.md", "  \n")["error"] == app_module.NO_TEXT_ERROR
+    assert _upload(client, "key.csv", "answer,solution\nx = 6,x = 6\n")["error"] == app_module.ONLY_ANSWERS_ERROR
 
 
 def test_seeding_math_stores_no_answers(tmp_path: Path, real_store: VectorStore) -> None:

@@ -1562,6 +1562,13 @@ def test_copies_problem(read: str | None, copies: bool) -> None:
     assert vc.copies_problem(read, None) is False
 
 
+@pytest.mark.parametrize("read", ["3x + 5 = 20", "3x + 5 = 20, x = 5", "3x + 5 = 20 luego x = 5", "x = 5"])
+def test_copies_problem_needs_the_whole_problem(read: str) -> None:
+    # The next problem's text inside the current one's is no copy of it.
+    assert vc.copies_problem(read, "x + 5 = 20", "es") is False
+    assert vc.copies_problem("x + 5 = 20", "x + 5 = 20", "es") is True
+
+
 @pytest.mark.parametrize("language", ["en", "es"])
 def test_board_answer_that_is_the_next_problem_is_not_graded(language: str) -> None:
     praise = AvatarAction("¡Correcto!" if language == "es" else "Correct!", "celebrating", 1, 2)
