@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import functools
 import importlib
 import re
@@ -257,8 +258,9 @@ _SOLO = frozenset(["solo", "solos"])
 # Range policy for an unspaced "a-b" / "a–b" between two plain numbers. It is a minus unless every condition holds:
 #   1. the pair runs upward (a < b): "72-48 horas" subtracts;
 #   2. it is one of: followed by a word below or by "°" / "%" ("3–5 muestras", "25-37 °C"), right after
-#      "entre" / "de" / "del" ("entre 3 y 5", "de 3 a 5", "del 3 al 5"), or two four-digit years ("1990–2000");
-#   3. nothing vetoes it: a relation sign on the line, a group holding just the pair ("(10-4)", "2(3-5)"), an
+#      "entre" / "de" / "del", also before a "$" ("entre 3 y 5", "de 3 a 5", "del 3 al 5", "entre $5 y 10"), or
+#      two four-digit years ("1990–2000");
+#   3. nothing vetoes it: a relation sign in the sentence, a group holding just the pair ("(10-4)", "2(3-5)"), an
 #      operator or a variable touching it ("x + 3-5", "3-5 x"), or one of _RANGE_MINUS_WORDS right before it
 #      ("Réstale 3–8").
 # A range with no word after it (rule 2's second and third cases) also yields to a subtraction cue
@@ -352,7 +354,7 @@ _INCLUSIVE_PAREN = re.compile(r"(?<![\w(])([^\W\d_]{2,})\((as|os|a|o|es|s)\)(s?)
 _RANGE = re.compile(
     r"(?<![^\W\d_])((?:p[áa]gs?\.?|p[áa]ginas?|ejercicios?|problemas?|preguntas?|cap[íi]tulos?|incisos?|l[íi]neas?"
     r"|renglones|diapositivas?|lecciones|unidades|temas|pasos|secciones)[ \t]+)(\d+)[ \t]*[-–—‒][ \t]*(\d+)"
-    r"(?![\d.,]|[ \t]*[-+*/=^<>])",
+    r"(?!\d|[.,]\d|[ \t]*[-+*/=^<>])",
     re.I,
 )
 _DASH = re.compile("([ \t]*)[–—‒]([ \t]*)")
@@ -513,6 +515,8 @@ _NOUN_IS_VERB = re.compile(r"[ \t]+(?:-?[ \t]*\d|[b-df-hj-np-tv-xzB-DF-HJ-NP-TV-
 _LETTER_RUN = re.compile(r"(?<![^\W\d_])[a-z]{2,3}(?![^\W\d_])")
 _VARIABLE_Y = re.compile(r"(?<![^\W\d_])[yY](?![^\W\d_])")
 _PREV_WORD = re.compile(r"([^\W\d_]+)[ \t]+$")
+# The cue word before a range may sit before a currency sign: "entre $5-10".
+_RANGE_CUE = re.compile(r"([^\W\d_]+)[ \t]+\$?[ \t]?$")
 # Variable policy: a lone "y" is the conjunction ("i" to a Spanish voice) unless it touches math (a glued digit
 # "2y" / "y2", an operator or relation, an exponent, a group or function "f(y)", a root) or ends one of three fixed
 # phrases: "el valor de y", "despeja y", "cuánto vale y". The phrase counts only when the clause stops or goes on
@@ -710,15 +714,22 @@ def _space_thousands(m: re.Match[str]) -> str:
 
 
 def _number_ranges(text: str) -> str:
-    # One relation test per line keeps long input linear.
+    # The relation veto is per sentence: a reply reaches TTS as one line, so "x = 2" in one sentence must not turn
+    # "3-5 muestras" in another into a minus. One relation test per sentence keeps long input linear.
     if not _NUMBER_RANGE.search(text):
         return text
     lines = text.split("\n")
     for k, line in enumerate(lines):
         if _NUMBER_RANGE.search(line):
-            relation = any(c in line for c in _RELATIONS)
-            lines[k] = _NUMBER_RANGE.sub(functools.partial(_number_range, relation=relation), line)
+            ends = [b.start() for b in _BOUNDARY.finditer(line)]
+            relations = [any(c in part for c in _RELATIONS) for part in _BOUNDARY.split(line)]
+            lines[k] = _NUMBER_RANGE.sub(functools.partial(_sentence_range, ends=ends, relations=relations), line)
     return "\n".join(lines)
+
+
+def _sentence_range(m: re.Match[str], *, ends: list[int], relations: list[bool]) -> str:
+    # A pair never holds a boundary (a "." inside it is a decimal point), so its start names its sentence.
+    return _number_range(m, relation=relations[bisect.bisect_right(ends, m.start())])
 
 
 def _number_range(m: re.Match[str], *, relation: bool) -> str:
@@ -729,7 +740,7 @@ def _number_range(m: re.Match[str], *, relation: bool) -> str:
         return minus
     if _parenthesized(s, i, j) or _in_expression(s, i, j):
         return minus
-    before = _PREV_WORD.search(s, max(0, i - 24), i)
+    before = _RANGE_CUE.search(s, max(0, i - 24), i)
     word = before[1].lower() if before else ""
     if word in _RANGE_MINUS_WORDS and not (word == "menos" and _AT_LEAST.search(s, max(0, i - 24), i)):
         return minus
