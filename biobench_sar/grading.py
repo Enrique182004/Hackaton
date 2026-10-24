@@ -1084,6 +1084,7 @@ def _solve(parts: list[str], sp: Any) -> Answers | None:
         return None  # never multiplied out: "(((x + 1)^6)^6)^6 = 0" took seconds (a root counts as a letter here)
     equations = [sp.expand(d) for d in differences]
     degrees: list[int] = []
+    rational = True
     for equation in equations:
         try:
             poly = sp.Poly(equation, *symbols)
@@ -1091,12 +1092,15 @@ def _solve(parts: list[str], sp: Any) -> Answers | None:
             return None
         degree = poly.total_degree()
         degrees.append(degree)
+        rational = rational and all(c.is_Rational for c in poly.coeffs())
         unfactored = len(symbols) == 1 and degree > 2 and len(poly.terms()) > 2  # "x^3 = 2" is a power
         if unfactored and any(factor.degree() > 2 for factor, _ in poly.factor_list()[1]):
             return None  # a cubic or quartic that does not factor: its roots in radicals took a third of a second
-    # A system with at most one quadratic, the rest linear ("y = x^2 and x + y = 2"): sympy took seconds on two
-    # quadratics with messy roots. One letter: up to a quartic that factors, or a power ("x^3 = 2").
-    if len(symbols) > 1 and (max(degrees) > 2 or sum(degree > 1 for degree in degrees) > 1):
+    # A system with at most one quadratic, the rest linear ("y = x^2 and x + y = 2"), and then whole-number
+    # coefficients: sympy took seconds on two quadratics with messy roots, and on "√2 x^2 + √3 y = √5 and √7 x - y = 1".
+    # One letter: up to a quartic that factors, or a power ("x^3 = 2").
+    curved = sum(degree > 1 for degree in degrees)
+    if len(symbols) > 1 and (max(degrees) > 2 or curved > 1 or (curved and not rational)):
         return None
     found: set[Answer] = set()
     for solution in sp.solve(equations, symbols, dict=True):

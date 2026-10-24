@@ -893,6 +893,8 @@ def test_only_what_solves_fast_is_solved() -> None:
         "2x^3 - 3x + 7 = 0",
         "3x^2 + 5y^2 - 7xy = 11 and 2xy + 3y = 13",  # two quadratics: four seconds
         "x^4 + y^4 = 17 and x^3 y = 8",
+        "√2 x^2 + √3 y = √5 and √7 x - y = 1",  # one quadratic, root coefficients: four seconds
+        "x^2 + 3y = 7 and 2x - y^2 = 5",
         "(x+y+z+1)^6 * (x+y+z+2)^6 = 0",
         POLY_TOWER,
     ):
