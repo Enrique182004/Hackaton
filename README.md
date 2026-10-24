@@ -214,9 +214,14 @@ like worksheet problems.
   language each question is asked in. English or Español fixes it, and Whisper then listens only for that
   language. Over HTTP: `GET /api/language` and `PUT /api/language {"language": "auto"|"en"|"es"}`.
 - **Voice in.** Whisper decides between English and Spanish for each question. The wake word also answers to
-  "asistente".
-- **Voice out.** The online Edge voices are `en-US-AriaNeural` and `es-MX-DaliaNeural` (Mexican Spanish).
-  Offline (`SAR_TTS_BACKEND=say` or `pyttsx3`, or when Edge can't reach the internet), the assistant picks an
+  "asistente". When push-to-talk brings no words, the assistant says so instead of going quiet: "I can't hear the
+  microphone…" when it recorded only digital silence (the microphone is muted, or the app that started the
+  assistant may not use it), "I didn't catch that…" when it heard sound but no words. A microphone that sends only
+  silence also shows on the dashboard's Board checklist (checked at startup and on every recording) and fails
+  `scripts/hardware_check.py`; the server log says what to change.
+- **Voice out.** The assistant talks like a kid. The online Edge voices are `en-US-AnaNeural` (a child voice) and
+  `es-MX-DaliaNeural` (Mexican Spanish), pitched up (+15 Hz) and a little faster (+5 %) because Edge has no Mexican
+  child voice; any other voice set with `SAR_TTS_VOICE` plays as it is. Offline voices are adult voices. Offline (`SAR_TTS_BACKEND=say` or `pyttsx3`, or when Edge can't reach the internet), the assistant picks an
   installed Spanish voice, Mexican first. If Spanish comes out with an English voice, install one: on macOS,
   System Settings → Accessibility → Spoken Content → System voice → Manage Voices (e.g. *Paulina*); on Windows,
   Settings → Time & language → Language & region → add *Español (México)* with text-to-speech.
@@ -298,10 +303,10 @@ wins over the file. Desktop builds also look next to the app and in the data fol
 | `SAR_RECORD_SECONDS` | `5` | How long push-to-talk records |
 | `SAR_SILENCE_RMS` | `0.01` | Wake-word chunks quieter than this skip Whisper. Push-to-talk only skips digital silence |
 | `SAR_TTS_BACKEND` | `edge` | `edge` (online), `say` (macOS), `pyttsx3` (offline) or `none`. Falls back edge → say → pyttsx3 |
-| `SAR_TTS_VOICE` | `en-US-AriaNeural` | Edge voice for its own language. Spanish uses `es-MX-DaliaNeural` unless this names a Spanish voice |
+| `SAR_TTS_VOICE` | `en-US-AnaNeural` | Edge voice for its own language. Spanish uses `es-MX-DaliaNeural` (pitched up to sound like a kid) unless this names a Spanish voice |
 | **Server and phones** | | |
 | `SAR_HOST` | `127.0.0.1` (`0.0.0.0` with `SAR_LAN=1`) | Bind address. Anything other than `127.0.0.1`, `localhost` or `::1` turns the phone PIN gate on |
-| `SAR_PORT` | `5050` | Server port |
+| `SAR_PORT` | `5050` | Server port. The app won't start on a port browsers refuse to open (5060, 5061, 6000 and the rest of [the Fetch standard's list](https://fetch.spec.whatwg.org/#port-blocking)) |
 | `SAR_LAN` | off | `1` = phone mode: listen on the Wi-Fi, behind a six-digit PIN ([docs/MOBILE.md](docs/MOBILE.md)) |
 | `SAR_LAN_HOSTNAMES` | empty | Comma list of extra host names phones may use (e.g. `my-laptop.local`). IP addresses and `localhost` always work |
 | **Files** | | |
@@ -344,7 +349,7 @@ change goes through its own branch and PR (see [CONTRIBUTING.md](CONTRIBUTING.md
 | `biobench_sar/grading.py` | Quiz answers graded in code with sympy: `parse_answers`, `grade` |
 | `biobench_sar/lang.py` | English/Spanish detection and the Spanish tutor intents |
 | `biobench_sar/lan.py` | Phones on the Wi-Fi: addresses, the join PIN, device cookies, the Socket.IO gate |
-| `biobench_sar/config.py`, `envfile.py`, `paths.py`, `schemas.py` | Settings, `sar.env` loading, where files live (checkout or desktop build), shared types |
+| `biobench_sar/config.py`, `envfile.py`, `paths.py`, `ports.py`, `schemas.py` | Settings, `sar.env` loading, where files live (checkout or desktop build), ports browsers refuse to open, shared types |
 | `biobench_sar/core/` | Camera loop and ink detection, high-resolution ink crop, glare check, homography calibration, mic and wake word |
 | `biobench_sar/rag/` | Document ingestion (answer keys stripped for math), ChromaDB store, quiz bank parser and problem generator |
 | `biobench_sar/llm/` | VLM client (prompts per profile, mode and language + JSON schema), math-to-speech in English and Spanish, text-to-speech |

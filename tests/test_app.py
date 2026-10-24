@@ -77,6 +77,7 @@ def test_status_shape(built: Any) -> None:
         "mode",
     } <= set(data)
     assert data["state"] == "idle" and data["audio_available"] is True
+    assert data["mic_silent"] is False, "a microphone nobody has recorded from yet is not reported silent"
     assert (data["profile"], data["mode"]) == ("math", "help")
     assert data["active_documents"] == 0 and data["total_documents"] == 0
 
@@ -1268,3 +1269,52 @@ def test_ui_rects_socket_event_is_forwarded(built: Any) -> None:
     app.config["SAR_ASSISTANT"].set_ui_rects = seen.append
     socketio.test_client(app).emit("ui_rects", {"rects": [[0, 0, 200, 300]]})
     assert seen == [[[0.0, 0.0, 200.0, 300.0]]]
+
+
+def test_create_app_wires_unheard_push_to_talk_to_the_assistant(
+    settings: Settings, fakes: app_module.Services, templates_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def build(settings: Settings, on_query: Any, on_state: Any, should_listen: Any = None, on_unheard: Any = None):
+        seen["on_unheard"] = on_unheard
+        return fakes
+
+    monkeypatch.setattr(app_module, "build_services", build)
+    flask_app, _ = app_module.create_app(settings, template_folder=str(templates_dir))
+    assert seen["on_unheard"] == flask_app.config["SAR_ASSISTANT"].on_unheard
+
+
+def test_status_reports_a_microphone_that_sends_only_silence(built: Any, fakes: app_module.Services) -> None:
+    app, _ = built
+    fakes.audio.mic_silent = True  # type: ignore[attr-defined]
+    assert app.test_client().get("/api/status").get_json()["mic_silent"] is True
+
+
+class _ProbedAudio:
+    def __init__(self, available: bool) -> None:
+        self.available = available
+        self.probed = 0
+
+    def check_signal(self) -> bool:
+        self.probed += 1
+        return True
+
+    def transcribe(self, audio: Any) -> str:
+        return ""
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_warm_up_checks_the_microphone_gives_sound(available: bool, caplog: pytest.LogCaptureFixture) -> None:
+    audio = _ProbedAudio(available)
+    app_module._warm_up(types.SimpleNamespace(vlm=object(), audio=audio))  # type: ignore[arg-type]
+    assert audio.probed == (1 if available else 0)
+    assert ("microphone sends only silence" in caplog.text) is available
+
+
+def test_warm_up_leaves_the_mic_check_to_the_wake_listener(caplog: pytest.LogCaptureFixture) -> None:
+    # Its chunks tell whether the microphone gives sound; a second recording at the same time is not needed.
+    audio = _ProbedAudio(True)
+    audio.mode = "wake"  # type: ignore[attr-defined]
+    app_module._warm_up(types.SimpleNamespace(vlm=object(), audio=audio))  # type: ignore[arg-type]
+    assert audio.probed == 0

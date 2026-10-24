@@ -78,8 +78,14 @@ Budget about 45 minutes, and do part A the day before.
     - Camera gives 1280x720 → it is on a hub, or it is another camera. Plug it in directly.
     - The 1080p camera is not index 1 → set `SAR_CAMERA_INDEX` in `sar.env` to the index that showed
       1920x1080, then restart the assistant.
-    - Microphone FAIL on a Mac → allow the microphone for Terminal (or the app) in System Settings →
-      Privacy & Security → Microphone. Do the same for Camera.
+    - On a Mac, the first run asks whether Terminal may use the camera and the microphone: click **OK**.
+      Only the camera's first try can bring up that question, so if you missed it, allow it in System
+      Settings as below.
+    - Microphone FAIL on a Mac (`only digital silence`), or Pip says "I can't hear the microphone" every time →
+      allow the microphone for the app that started the assistant (Terminal, or Claude if you started it from
+      Claude's Terminal panel) in System Settings → Privacy & Security → Microphone, then restart the
+      assistant. If you started it from Claude's Terminal panel and it still records silence, start it from
+      Terminal instead. Do the same for Camera.
     - Camera or microphone dark on Windows → *Settings → Privacy & security → Camera* (and *Microphone*) →
       turn on **Let desktop apps access your camera**.
     - No `projector` line, or `displays ... skipped` → check by eye that the display settings show the
@@ -120,6 +126,7 @@ Ask from the dashboard (**Ask** tab: type, or press **Talk**) or press **Space**
 | "Quiz me" | A quiz starts. Problem 1 of 10 is read out and shown in a card at the top left of the projector. Write the answer, then say "check my answer". The code grades what you wrote: a right answer gets 🎉 and the next problem, and a wrong one gets an amber hint (never the answer) with the outline around your answer. An answer it can't read gets "I couldn't read your answer clearly. Ask me to check it again." |
 | "I'm stuck" (during the quiz) | One hint on the same problem. The quiz and the score stay as they are. |
 | "I want to learn how to solve fractions" (empty board) | A short intro, then "Do you have an exercise in mind, or should I make one up for you?" Answer "make one up" and a starter problem is dictated. |
+| Press **Talk** and say nothing | Pip says "I didn't catch that. Please say it again, a little closer to the microphone." If it says "I can't hear the microphone…" instead, the microphone sent only silence: see the microphone fixes in step 10. |
 | "Stop the quiz" | Pip asks "Do you want to end the quiz? Say yes to stop, or keep going." Say "yes" and you hear your score. Anything else keeps the quiz going. The dashboard's **Stop quiz** button stops at once. |
 
 ✅ The voice never reads symbols ("three x plus five equals twenty", not "3x+5=20").
@@ -134,6 +141,7 @@ Switch the dashboard language to **Español** (or leave **Auto** and just speak 
 | "Dame un problema parecido" | Dicta una ecuación nueva en palabras ("dos x más tres es igual a once"). |
 | "Hazme un quiz" (o "Examíname") | Empieza el quiz en español. Una respuesta escrita como "x = 5" o "x es igual a cinco" se califica igual. |
 | "Quiero aprender a resolver fracciones" | Una introducción corta y la pregunta «¿Tienes un ejercicio en mente o quieres que invente uno?»; responde «invéntame uno». |
+| Press **Hablar** and say nothing | «No te entendí. Dilo otra vez, un poco más cerca del micrófono.» If it says «No puedo oír el micrófono…» instead, the microphone sent only silence: see step 10. |
 | "Termina el quiz" | «¿Quieres terminar el quiz? Di «sí» para terminar o sigue con tu respuesta.» Responde «sí». |
 
 ✅ The Spanish voice is a Mexican voice and reads math in Spanish words.
@@ -177,4 +185,5 @@ test cases). File anything that went wrong as a new issue with the photos.
 | "I couldn't read your answer clearly" again and again | Write the answer alone on the bottom line, large, as `x = 5`. |
 | Washed-out spot on the board in the camera view | Glare: see step 13. |
 | No sound | Click once on the projector page and check the laptop's output device. |
+| Pip says "I can't hear the microphone", or the Board checklist says "The microphone sends only silence" | The microphone records only zeros: allow it for the app that started the assistant (step 10), then restart the assistant. |
 | Spanish sounds like an English voice (offline) | Install a Spanish (Mexico) voice (step 6). |

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sys
 import threading
 import time
 import unicodedata
@@ -18,13 +19,38 @@ SILENCE_RMS = 0.01
 # Explicit queries (push-to-talk, wake follow-up) are only dropped when the mic delivered digital zeros:
 # a quiet speaker must still be heard.
 DIGITAL_SILENCE_RMS = 1e-4
+# How long the startup check records to tell a working microphone from one that only sends zeros.
+MIC_PROBE_SECONDS = 0.5
 # Trimming a wake chunk by wall clock lags the audio a little; keep some of what came just before the click.
 PUSH_PREROLL_SECONDS = 0.5
 LANGUAGES = ("en", "es")
 # Spanish speakers say the wake word in Spanish.
 WAKE_ALIASES = {"assistant": ("asistente",)}
+# PortAudio's set-up and tear-down (PyAudio(), open, close, terminate) are not thread-safe, and PyAudio releases the
+# GIL around them: the startup mic check, the wake listener and push-to-talk must take turns, or the process crashes.
+_PORTAUDIO_LOCK = threading.Lock()
 _EN_NAMES = frozenset({"en", "eng", "english", "ingles"})
 _ES_NAMES = frozenset({"es", "spa", "spanish", "espanol", "castellano"})
+
+
+def _rms(audio: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(np.square(audio)))) if audio.size else 0.0
+
+
+def mic_silence_hint(platform: str = sys.platform) -> str:
+    """What to do about a microphone that sends only zeros: on macOS that is what a process without mic access gets."""
+    if platform == "darwin":
+        return (
+            "allow the microphone for the app that started the assistant (the assistant itself, Terminal, or "
+            "Claude if you started it from Claude's Terminal panel) in System Settings > Privacy & Security > "
+            "Microphone, then restart the assistant"
+        )
+    if platform.startswith("win"):
+        return (
+            'turn on "Let desktop apps access your microphone" in Settings > Privacy & security > Microphone and '
+            "check the microphone isn't muted, then restart the assistant"
+        )
+    return "check the microphone isn't muted and is the default input, then restart the assistant"
 
 
 def _strip_accents(text: str) -> str:
@@ -79,6 +105,13 @@ class AudioTrigger:
     the avatar's own voice, warm-up) leave it alone. on_query may return False to refuse a query (busy):
     last_language then goes back. Another thread reading it later may already see a newer query's language,
     so snapshot it inside on_query.
+
+    on_unheard(reason, language) runs after a push-to-talk that brought no words, once the state is back to idle:
+    "silent" (digital zeros, or the microphone could not be opened: muted, or this app may not use it), "unclear"
+    (sound, but Whisper found no words) or "error" (Whisper failed). language is last_language.
+
+    mic_silent says whether the last recording was digital silence or could not be made (None before the first);
+    check_signal() records briefly to find out.
     """
 
     def __init__(
@@ -95,8 +128,11 @@ class AudioTrigger:
         should_listen: Callable[[], bool] | None = None,
         silence_rms: float = SILENCE_RMS,
         language: str = "auto",
+        on_unheard: Callable[[str, str], Any] | None = None,
     ) -> None:
         self.on_query = on_query
+        self.on_unheard = on_unheard
+        self.mic_silent: bool | None = None
         self.whisper_model = whisper_model
         self.wake_word = wake_word
         self.mode = mode
@@ -123,31 +159,48 @@ class AudioTrigger:
         self._stop = threading.Event()
         self._wake_thread: threading.Thread | None = None
         self._available: bool | None = None
+        self._available_lock = threading.Lock()
+
+    @property
+    def push_active(self) -> bool:
+        """A push-to-talk is requested, recording or being transcribed: it reports its own states."""
+        with self._busy_lock:
+            return self._push_state != "idle"
 
     @property
     def available(self) -> bool:
         if self._recorder is not None:
             return True
-        if self._available is None:
-            self._available = self._probe_mic()
-        return self._available
+        with self._available_lock:
+            if self._available is None:
+                self._available = self._probe_mic()
+            return self._available
 
     @staticmethod
     def _probe_mic() -> bool:
         try:
             import pyaudio
 
-            pa = pyaudio.PyAudio()
-            try:
-                return any(
-                    int(pa.get_device_info_by_index(i).get("maxInputChannels", 0)) > 0
-                    for i in range(pa.get_device_count())
-                )
-            finally:
-                pa.terminate()
+            with _PORTAUDIO_LOCK:
+                pa = pyaudio.PyAudio()
+                try:
+                    return any(
+                        int(pa.get_device_info_by_index(i).get("maxInputChannels", 0)) > 0
+                        for i in range(pa.get_device_count())
+                    )
+                finally:
+                    pa.terminate()
         except Exception as exc:
             log.info("audio unavailable: %s", exc)
             return False
+
+    def _unheard(self, reason: str, language: str) -> None:
+        if self.on_unheard is None:
+            return
+        try:
+            self.on_unheard(reason, language)
+        except Exception:
+            log.exception("on_unheard callback failed")
 
     def _state(self, name: str) -> None:
         if self.on_state is None:
@@ -260,34 +313,59 @@ class AudioTrigger:
         last = self.last_language
         return max(LANGUAGES, key=lambda code: (float(probs.get(code, 0.0)), code == last))
 
+    def check_signal(self, seconds: float = MIC_PROBE_SECONDS) -> bool:
+        """Record briefly; True when the microphone gives no sound at all (digital zeros, or it can't be opened)."""
+        try:
+            self._record(seconds)
+        except Exception as exc:
+            log.warning("the microphone could not record: %s", exc)
+        return bool(self.mic_silent)
+
     def _record(self, seconds: float) -> np.ndarray:
+        try:
+            audio = np.asarray(self._capture(seconds), dtype=np.float32)
+        except Exception:
+            self.mic_silent = True
+            raise
+        self.mic_silent = _rms(audio) < DIGITAL_SILENCE_RMS
+        return audio
+
+    def _capture(self, seconds: float) -> np.ndarray:
         if self._recorder is not None:
             return self._recorder(seconds)
         import pyaudio
 
-        pa = pyaudio.PyAudio()
-        try:
-            stream = pa.open(format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE, input=True, frames_per_buffer=1024)
+        with _PORTAUDIO_LOCK:
+            pa = pyaudio.PyAudio()
             try:
-                n = int(SAMPLE_RATE * seconds)
-                frames = []
-                got = 0
-                while got < n:
-                    count = min(1024, n - got)
-                    frames.append(stream.read(count, exception_on_overflow=False))
-                    got += count
-            finally:
-                stream.stop_stream()
-                stream.close()
+                stream = pa.open(
+                    format=pyaudio.paInt16, channels=1, rate=SAMPLE_RATE, input=True, frames_per_buffer=1024
+                )
+            except BaseException:
+                pa.terminate()
+                raise
+        try:
+            n = int(SAMPLE_RATE * seconds)
+            frames = []
+            got = 0
+            while got < n:
+                count = min(1024, n - got)
+                frames.append(stream.read(count, exception_on_overflow=False))
+                got += count
         finally:
-            pa.terminate()
+            with _PORTAUDIO_LOCK:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                finally:
+                    pa.terminate()
         pcm = np.frombuffer(b"".join(frames), dtype=np.int16)
         return pcm.astype(np.float32) / 32768.0
 
     def _heard(self, audio: np.ndarray, min_rms: float) -> tuple[str, str]:
         """Transcribe unless the clip's RMS is below min_rms (saves CPU; Whisper hallucinates text on silence)."""
         arr = np.asarray(audio, dtype=np.float32)
-        if arr.size == 0 or float(np.sqrt(np.mean(np.square(arr)))) < min_rms:
+        if _rms(arr) < min_rms:
             return "", self.last_language
         return self._transcribe(arr)
 
@@ -306,18 +384,32 @@ class AudioTrigger:
             self._push_state = "recording"
         self._push_requested.clear()
         text, language = "", self.last_language
+        reason = "silent"  # until a recording comes back
         try:
-            audio = np.asarray(self._record(self.record_seconds), dtype=np.float32)
+            audio = self._record(self.record_seconds)
             if lead is not None:
                 audio = np.concatenate([lead, audio])
             self._state("transcribing")
-            text, language = self._heard(audio, DIGITAL_SILENCE_RMS)
+            level = _rms(audio)
+            if level < DIGITAL_SILENCE_RMS:
+                log.warning("push-to-talk recorded digital silence (RMS %.6f): %s", level, mic_silence_hint())
+            else:
+                reason = "error"  # until Whisper answers
+                heard, heard_language = self._transcribe(audio)
+                reason = "unclear"
+                # Whisper's language guess for a clip without words means nothing; on_unheard gets last_language.
+                if heard:
+                    text, language = heard, heard_language
+                if not text:
+                    log.info("push-to-talk heard sound but no words (RMS %.4f)", level)
         except Exception:
             log.exception("push-to-talk failed")
         finally:
             self._state("idle")
             with self._busy_lock:
                 self._push_state = "idle"
+        if not text:
+            self._unheard(reason, language)
         return text, language
 
     def _deliver(self, text: str, language: str, swallow: bool = True) -> None:
@@ -365,6 +457,8 @@ class AudioTrigger:
                         rest = self.extract_after_wake(heard) if heard and self._should_listen() else None
                         if rest is not None:
                             if not rest:
+                                # Nothing said after the wake word stays quiet (no on_unheard): a misheard wake
+                                # word must not make the assistant speak up on its own.
                                 listened = True
                                 self._state("listening")
                                 rest, language = self._heard(self._record(self.record_seconds), DIGITAL_SILENCE_RMS)

@@ -271,20 +271,31 @@ class AudioTrigger:
                  wake_chunk_seconds: float = WAKE_CHUNK_SECONDS,
                  should_listen: Callable[[], bool] | None = None,  # False pauses the wake loop (avatar speaking)
                  silence_rms: float = SILENCE_RMS,  # wake chunks quieter than this skip Whisper
-                 language: str = "auto") -> None    # "auto": one Whisper language-ID pass limited to en/es
+                 language: str = "auto",             # "auto": one Whisper language-ID pass limited to en/es
+                 on_unheard: Callable[[str, str], Any] | None = None) -> None
+        # on_unheard(reason, last_language) after a push-to-talk with no words, once the state is idle:
+        # "silent" (digital zeros or no microphone), "unclear" (sound, no words), "error" (Whisper failed).
+        # Assistant.on_unheard says the matching TEXTS line (en/es) unless a question or its answer is still
+        # going; it sends no status while push_active, and doesn't change the reply language. The wake word's
+        # follow-up stays quiet: a misheard wake word must not make the avatar speak up.
     def start(self) -> None; def stop(self) -> None   # "wake" mode starts a background listener
     def trigger(self) -> bool                          # push-to-talk (non-blocking); False if already recording
     def submit_text(self, text: str) -> None           # typed query -> on_query
     def transcribe(self, audio: np.ndarray) -> str     # float32 mono 16 kHz; lazy-loads whisper
     def set_language(self, setting: str) -> None       # the dashboard switch; en/es force the decode language
     available: bool                                    # False if no mic / pyaudio -> app falls back to text
+    mic_silent: bool | None                            # last recording was digital zeros or failed; None before one
+    def check_signal(self, seconds: float = 0.5) -> bool  # short recording at startup (app._warm_up) -> mic_silent
+    push_active: bool                                  # a push is requested, recording or being transcribed
     last_language: str                                 # "en" / "es" of the query being delivered
+def mic_silence_hint(platform: str = sys.platform) -> str  # what to change; used by logs and hardware_check
 WAKE_ALIASES = {"assistant": ("asistente",)}
 class TTSEngine:
-    def __init__(self, backend: str = "edge", voice: str = "en-US-AriaNeural", out_dir: Path = ...,
+    def __init__(self, backend: str = "edge", voice: str = "en-US-AnaNeural", out_dir: Path = ...,
                  voices: dict[str, str] | None = None) -> None
     def speak(self, text: str, lang: str | None = None) -> str | None
-        # edge: writes mp3 to out_dir, returns file name for browser playback (en-US-AriaNeural / es-MX-DaliaNeural);
+        # edge: writes mp3 to out_dir, returns file name for browser playback (en-US-AnaNeural, a child voice /
+        # es-MX-DaliaNeural pitched +15Hz and +5% faster to sound like a kid: EDGE_PROSODY);
         # say/pyttsx3: plays locally (non-blocking) with the best installed voice for lang (es_MX first), returns None;
         # falls back edge → say → pyttsx3 → none
 ```
@@ -442,7 +453,7 @@ HTTP (F implements, E calls). Every `/api/*` response sends `Cache-Control: no-s
 | GET | `/api/search?q=&k=` | `{"results": [{"text", "source", "score"}]}`, k clamped 1–10 |
 | GET | `/api/ink` | `{"regions": [InkRegion], "size": [w, h]}`; 503 without a frame |
 | POST | `/api/upload` | multipart `files[]` → `{"files": [{"name", "chunks", "replaced"?, "error"?}], "total_chunks": int}`; with an explicit selection, uploaded files become active |
-| GET | `/api/status` | `{"fps", "camera_running", "calibrated", "doc_chunks", "active_documents", "total_documents", "vlm_backend", "vlm_model", "audio_available", "tts_backend", "listen_mode", "state", "busy", "last_latency_s", "uptime_s", "profile", "mode", "language", "current_language", "glare"}`. `glare` = `null` or `{"fraction", "hotspots": [[x, y, w, h]], "severe": bool}` (severe above 1 % of the board) |
+| GET | `/api/status` | `{"fps", "camera_running", "calibrated", "doc_chunks", "active_documents", "total_documents", "vlm_backend", "vlm_model", "audio_available", "mic_silent", "tts_backend", "listen_mode", "state", "busy", "last_latency_s", "uptime_s", "profile", "mode", "language", "current_language", "glare"}`. `glare` = `null` or `{"fraction", "hotspots": [[x, y, w, h]], "severe": bool}` (severe above 1 % of the board) |
 | GET | `/api/tutor` | `TutorSession.to_dict()`, including `"confirm_stop": bool` |
 | PUT | `/api/tutor/mode` | `{"mode": "help" \| "practice" \| "quiz"}` → `to_dict()`; 400 otherwise. Quiz mode starts a quiz on the next question or via `POST /api/tutor/quiz/start` |
 | POST | `/api/tutor/quiz/start` | → `to_dict()`; starts even with 0 problems (the code invents them); `total` = number of problems in the ticked files capped at `SAR_QUIZ_LENGTH`, or `SAR_QUIZ_LENGTH` (default 10) when they have none |
@@ -471,7 +482,8 @@ on the form POST and `block_cross_origin` would refuse it. The cross-origin guar
 error, check, pointing). It is carried by `avatar_update`, `speak` and history items.
 
 Socket.IO events (server → client): `avatar_update {animation_state, target_x, target_y, spoken_text,
-display_text, language, highlight}`, `speak {url: str | null, text, display_text, language, highlight}`,
+display_text, language, highlight}` (a line the assistant says on its own, like "I didn't catch that", has no
+target or highlight: the avatar stays where it is), `speak {url: str | null, text, display_text, language, highlight}`,
 `status {state: "idle"|"listening"|"transcribing"|"thinking"|"speaking", detail?}`, `transcript {text}`,
 `show_calibration {url}`, `hide_calibration {}`, `interaction {...history item}`,
 `documents_changed {...GET /api/documents body}` (after upload, delete and selection changes),

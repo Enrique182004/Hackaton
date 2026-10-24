@@ -900,6 +900,38 @@ assert.match(checks(), /Camera not found Check the camera is plugged in and not 
 
 
 @needs_node
+def test_checklist_flags_a_microphone_that_sends_only_silence(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+installFetch();
+const { renderStatus } = await import("./dashboard/status.js");
+const base = { camera_running: true, calibrated: true, total_documents: 1, active_documents: 1, audio_available: true };
+const checks = () => $("checks").children.map(text).join("\\n");
+renderStatus({ ...base, mic_silent: false });
+assert.match(checks(), /Microphone ready/);
+renderStatus({ ...base, mic_silent: true, host_os: "mac" });
+assert.match(checks(), /The microphone sends only silence .*Terminal, or Claude.*System Settings → Privacy & Security → Microphone.*restart the assistant/);
+assert.doesNotMatch(checks(), /Microphone ready|Let desktop apps/);
+renderStatus({ ...base, mic_silent: true, host_os: "windows" });
+assert.match(checks(), /The microphone sends only silence .*“Let desktop apps access your microphone”/);
+assert.doesNotMatch(checks(), /System Settings/);
+renderStatus({ ...base, mic_silent: true, host_os: "other" });
+assert.match(checks(), /The microphone sends only silence Check the microphone isn't muted/);
+renderStatus({ ...base, mic_silent: true });
+assert.match(checks(), /The microphone sends only silence .*On a Mac, .*On Windows, /);
+// No microphone at all is still its own message.
+renderStatus({ ...base, audio_available: false, mic_silent: true });
+assert.match(checks(), /No microphone found/);
+assert.doesNotMatch(checks(), /sends only silence/);
+""",
+    )
+
+
+@needs_node
 def test_calibration_errors_point_at_the_projector_page(tmp_path: Path) -> None:
     run_node(
         tmp_path,

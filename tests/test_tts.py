@@ -20,10 +20,12 @@ class FakeComm:
     calls = 0
     partial = False
     voices: ClassVar[list[str]] = []
+    prosody: ClassVar[list[tuple[str, str]]] = []
 
-    def __init__(self, text: str, voice: str) -> None:
+    def __init__(self, text: str, voice: str, rate: str = "+0%", pitch: str = "+0Hz") -> None:
         self.text, self.voice = text, voice
         FakeComm.voices.append(voice)
+        FakeComm.prosody.append((rate, pitch))
 
     async def save(self, path: str) -> None:
         FakeComm.calls += 1
@@ -42,6 +44,7 @@ def fake_edge(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeComm.calls = 0
     FakeComm.partial = False
     FakeComm.voices = []
+    FakeComm.prosody = []
     mod = types.ModuleType("edge_tts")
     mod.Communicate = FakeComm  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "edge_tts", mod)
@@ -199,12 +202,29 @@ def test_edge_voice_follows_the_language(tmp_path: Path, no_lang_module: None) -
     eng.speak("hola", "Español")
     eng.speak("bonjour", "fr")  # unsupported: guessed from the text, English without the lang module
     assert FakeComm.voices == [
-        "en-US-AriaNeural",
+        "en-US-AnaNeural",
         "es-MX-DaliaNeural",
         "es-MX-DaliaNeural",
         "es-MX-DaliaNeural",
-        "en-US-AriaNeural",
+        "en-US-AnaNeural",
     ]
+
+
+def test_default_voices_sound_like_a_kid(tmp_path: Path) -> None:
+    # Ana is a child voice; Edge has no Mexican child voice, so Dalia is pitched up and a little faster.
+    # +15 Hz, not +30: the bigger shift made her sound robotic in long tutoring sentences.
+    eng = TTSEngine("edge", out_dir=tmp_path)
+    eng.speak("hello", "en")
+    eng.speak("hola", "es")
+    assert FakeComm.voices == ["en-US-AnaNeural", "es-MX-DaliaNeural"]
+    assert FakeComm.prosody == [("+0%", "+0Hz"), ("+5%", "+15Hz")]
+
+
+def test_other_voices_keep_their_own_sound(tmp_path: Path) -> None:
+    eng = TTSEngine("edge", "en-GB-SoniaNeural", tmp_path, voices={"es": "es-MX-JorgeNeural"})
+    eng.speak("hi", "en")
+    eng.speak("hola", "es")
+    assert FakeComm.prosody == [("+0%", "+0Hz"), ("+0%", "+0Hz")]
 
 
 def test_edge_voices_can_be_overridden(tmp_path: Path) -> None:
@@ -218,13 +238,13 @@ def test_edge_voices_can_be_overridden(tmp_path: Path) -> None:
 
 def test_voice_languages_use_the_shared_normalizer(tmp_path: Path) -> None:
     eng = TTSEngine("edge", out_dir=tmp_path, voices={"spanish": "es-MX-JorgeNeural"})
-    assert eng.voices == {"en": "en-US-AriaNeural", "es": "es-MX-JorgeNeural"}
+    assert eng.voices == {"en": "en-US-AnaNeural", "es": "es-MX-JorgeNeural"}
     # Unknown keys are ignored instead of replacing the English voice.
     eng = TTSEngine("edge", out_dir=tmp_path, voices={"fr": "fr-FR-DeniseNeural", "auto": "x", "estonian": "y"})
     assert eng.voices == tts_engine.EDGE_VOICES
     assert eng.edge_voice("Español") == "es-MX-DaliaNeural"
     assert eng.edge_voice("ES_mx") == "es-MX-DaliaNeural"
-    assert eng.edge_voice("estonian") == "en-US-AriaNeural"  # not "es" just because it starts with it
+    assert eng.edge_voice("estonian") == "en-US-AnaNeural"  # not "es" just because it starts with it
 
 
 def test_auto_language_is_guessed_from_the_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -232,7 +252,7 @@ def test_auto_language_is_guessed_from_the_text(tmp_path: Path, monkeypatch: pyt
     eng = TTSEngine("edge", out_dir=tmp_path)
     eng.speak("¿Cuánto es un medio más un tercio?", "auto")
     eng.speak("What is one half plus one third?", "auto")
-    assert FakeComm.voices == ["es-MX-DaliaNeural", "en-US-AriaNeural"]
+    assert FakeComm.voices == ["es-MX-DaliaNeural", "en-US-AnaNeural"]
 
 
 def test_legacy_spanish_voice_keeps_serving_calls_without_a_language(
@@ -241,11 +261,11 @@ def test_legacy_spanish_voice_keeps_serving_calls_without_a_language(
     # SAR_TTS_VOICE=es-MX-JorgeNeural used to make all speech Spanish; speak(text) must still do that.
     eng = TTSEngine("edge", "es-MX-JorgeNeural", tmp_path)
     assert eng.edge_voice("es") == "es-MX-JorgeNeural"
-    assert eng.edge_voice("en") == "en-US-AriaNeural"
+    assert eng.edge_voice("en") == "en-US-AnaNeural"
     assert eng.default_language == "es"
     eng.speak("hola")
     eng.speak("hi", "en")
-    assert FakeComm.voices == ["es-MX-JorgeNeural", "en-US-AriaNeural"]
+    assert FakeComm.voices == ["es-MX-JorgeNeural", "en-US-AnaNeural"]
     FakeComm.fail = True
     monkeypatch.setattr(tts_engine.subprocess, "run", _Run())
     procs = _no_say(monkeypatch)
@@ -258,7 +278,7 @@ def test_legacy_voice_in_another_language_serves_only_calls_without_a_language(t
     eng.speak("bonjour")
     eng.speak("hi", "en")
     eng.speak("hola", "es")
-    assert FakeComm.voices == ["fr-FR-DeniseNeural", "en-US-AriaNeural", "es-MX-DaliaNeural"]
+    assert FakeComm.voices == ["fr-FR-DeniseNeural", "en-US-AnaNeural", "es-MX-DaliaNeural"]
     assert eng.default_language == "en"
 
 
@@ -399,7 +419,7 @@ def test_bad_spanish_voice_does_not_turn_edge_off_for_english(tmp_path: Path, mo
     name = eng.speak("hi", "en")
     assert name and name.endswith(".mp3")
     assert eng.speak("otra vez", "es") is None
-    assert FakeComm.voices == ["es-MX-NoSuchNeural", "en-US-AriaNeural"]  # the bad voice is cooling down
+    assert FakeComm.voices == ["es-MX-NoSuchNeural", "en-US-AnaNeural"]  # the bad voice is cooling down
     assert [p.args for p in procs] == [["say", "-v", "Paulina", "hola"], ["say", "-v", "Paulina", "otra vez"]]
 
 
