@@ -36,12 +36,17 @@ def _compile(*patterns: str) -> tuple[re.Pattern[str], ...]:
     return tuple(re.compile(p) for p in patterns)
 
 
+# "No, don't stop the quiz" / "I'm not done with the quiz" say to keep going: a negation right before the verb voids it.
+_NOT_BEFORE = (
+    r"(?<!n't )(?<!dont )(?<!not )(?<!never )(?<!n't want to )(?<!dont want to )(?<!not want to )(?<!n't wanna )"
+    r"(?<!dont wanna )"
+)
 _STOP_QUIZ = _compile(
-    r"\b(?:stop|end|quit|exit|cancel|finish|leave)\s+(?:the\s+|this\s+|my\s+)?quiz\b",
+    rf"\b{_NOT_BEFORE}(?:stop|end|quit|exit|cancel|finish|leave)\s+(?:the\s+|this\s+|my\s+)?quiz\b",
     r"\bno\s+more\s+quiz",
     r"\bquiz\s+(?:is\s+)?over\b",
-    r"\bdone\s+with\s+(?:the\s+|this\s+|my\s+)?quiz",
-    r"\bstop\s+quizzing\b",
+    rf"\b{_NOT_BEFORE}done\s+with\s+(?:the\s+|this\s+|my\s+)?quiz",
+    rf"\b{_NOT_BEFORE}stop\s+quizzing\b",
 )
 _QUIZ = _compile(
     r"\bquiz\s+me\b",
@@ -96,9 +101,10 @@ def is_quiz_stop(text: str) -> bool:
     return _any(_STOP_QUIZ, _norm(text))
 
 
-# Mid-quiz, these ask to stop too; the assistant asks to confirm first, so a plain "stop" is enough.
+# Mid-quiz, these ask to stop too; the assistant asks to confirm first, so a plain "stop" is enough. A soft word in
+# front ("fine, stop", "okay fine, end it") still says stop, and answers "Do you want to end the quiz?" as a yes.
 _STOP_INTENT = _compile(
-    r"^(?:please\s+|ok\s+|okay\s+|can\s+we\s+|let's\s+|lets\s+)?(?:stop|quit|exit|cancel|end\s+it|stop\s+it)"
+    r"^(?:(?:please|fine|ok|okay)\s+)*(?:can\s+we\s+|let's\s+|lets\s+)?(?:stop|quit|exit|cancel|end\s+it|stop\s+it)"
     r"(?:\s+(?:please|now|here|it|this|that|for\s+now|for\s+today))*$",
     r"\b(?:i|we)\s+(?:want|wanna|would\s+like|need|have)\s+to\s+(?:stop|quit|end\s+this|leave)\b",
     r"\b(?:i|we)\s+(?:don't|dont|do\s+not)\s+want\s+to\s+(?:do\s+this|play|continue|keep\s+going)\b",
@@ -353,9 +359,11 @@ def is_quiz_stop_any(text: str) -> bool:
     return is_quiz_stop(text) or bool(_spanish("is_quiz_stop_es", text, False))
 
 
+# As in English, a soft word in front ("bueno, termínalo", "porfa, para", "bueno, ya no") still says stop.
 _STOP_INTENT_ES = _compile(
-    r"^(?:ya\s+)?(?:para|paremos|alto|basta|ya\s+basta|detente|deten|termina|terminemos|terminalo|salir|salte|"
-    r"cancela|cancelalo)(?:\s+(?:ya|por\s+favor|porfa|aqui|ahi|ahora))*$",
+    rf"^(?:{_SOFT_YES_WORDS_ES}\s+)*(?:ya\s+)?(?:para|paremos|alto|basta|ya\s+basta|detente|deten|termina|terminemos|"
+    r"terminalo|salir|salte|cancela|cancelalo)(?:\s+(?:ya|por\s+favor|porfa|aqui|ahi|ahora))*$",
+    rf"^(?:{_SOFT_YES_WORDS_ES}\s+)+ya\s+no(?:\s+(?:por\s+favor|porfa|gracias))*$",  # a lone "ya no" is unclear
     r"\b(?:quiero|queremos|podemos|vamos\s+a|me\s+gustaria)\s+(?:parar|terminar|salir|dejarlo|acabar|detenerlo)\b"
     r"(?!\s+(?:el|la|este|esta|mi)\s+(?:problema|ejercicio|ecuacion|paso|respuesta|tarea))",
     r"\bya\s+no\s+quiero\s+(?:seguir|continuar|jugar|hacer\s+esto)\b",

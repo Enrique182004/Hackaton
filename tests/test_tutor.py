@@ -557,6 +557,32 @@ def test_is_repeat_request_any(text: str, repeat: bool) -> None:
         ("x = 5", False),
         ("stop sign", False),
         ("ya", False),  # "ya lo escribí": done writing, not stop
+        # A soft word before an explicit stop still stops; alone it says nothing (test_is_yes_any).
+        ("fine, stop", True),
+        ("fine, stop it", True),
+        ("fine, end it", True),
+        ("okay fine, stop", True),
+        ("bueno, termínalo", True),
+        ("bueno, para", True),
+        ("porfa, para", True),
+        ("por favor termínalo", True),
+        ("bueno ya no", True),
+        ("bueno, ya termínalo", True),
+        ("fine", False),
+        ("bueno", False),
+        ("ya no", False),
+        ("pues para", True),
+        ("pues para resolverlo", False),
+        # Saying not to stop is not stopping.
+        ("no, don't stop the quiz", False),
+        ("don't stop the quiz", False),
+        ("do not end the quiz", False),
+        ("never stop the quiz", False),
+        ("I'm not done with the quiz", False),
+        ("fine, don't stop", False),
+        ("no, no termines el quiz", False),
+        ("I want to stop the quiz", True),
+        ("don't worry, stop the quiz", True),
     ],
 )
 def test_is_stop_intent_any(text: str, stop: bool) -> None:
