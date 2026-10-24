@@ -137,6 +137,22 @@ def test_heading_after_answer_key_starts_new_problems() -> None:
     ]
 
 
+def test_worksheet_answers_with_their_check_grade_the_value() -> None:
+    """The key keeps its line whole ("x = 5 (check: ...)"); grading cuts the check, so the check's 20 is no answer."""
+    from biobench_sar.grading import grade
+
+    text = (
+        "Worksheet\n1. 3x + 5 = 20\nAnswer: x = 5 (check: 3(5) + 5 = 20)\n2. 2x = 8\nAnswer: x = 4 because 2 times 4 "
+        "is 8\n3. 2x + 9 = 21\nAnswer: x = 6: subtract 9 from both sides, then divide by 2\n"
+        "4. x - 3 = 2\nRespuesta: x = 5 porque 5 menos 3 es 2\n"
+    )
+    problems = parse_worksheet_text(text, "w.md")
+    assert len(problems) == 4 and problems[0].answer == "x = 5 (check: 3(5) + 5 = 20)"
+    right, wrong = ["x = 5", "x = 4", "x = 6", "x = 5"], ["x = 20", "x = 8", "x = 2", "x = 2"]
+    assert [grade(r, p.answer) for r, p in zip(right, problems, strict=True)] == [True] * 4
+    assert [grade(w, p.answer) for w, p in zip(wrong, problems, strict=True)] == [False] * 4
+
+
 def test_spanish_worksheet() -> None:
     text = "# Hoja de ejercicios\nProblema 1: 2x + 1 = 9\nRespuesta: x = 4\n"
     assert [(p.problem, p.answer) for p in parse_worksheet_text(text, "e.md")] == [("2x + 1 = 9", "x = 4")]

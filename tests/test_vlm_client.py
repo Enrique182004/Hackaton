@@ -856,6 +856,57 @@ def test_quiz_check_praise_without_a_readable_answer_is_not_approved(read: str |
     assert action.animation_state == "idle" and action.verdict is None and action.spoken_text == vc.NO_ANSWER_TEXT
 
 
+def _arithmetic_check(problem: str) -> dict[str, Any]:
+    return {"kind": "quiz", "stage": "check", "number": 1, "total": 5, "problem": problem, "answer": None}
+
+
+@pytest.mark.parametrize(
+    ("problem", "read"),
+    [
+        ("1/2 + 1/3", "1/2 + 1/3"),  # only the problem on the board: solved in code it was "correct"
+        ("3/4 - 1/2", "3/4 - 1/2"),
+        ("12 ÷ 4", "12 ÷ 4"),
+        ("2/3 × 3/4", "2/3 × 3/4"),
+        ("0.5 + 0.25", "0.5 + 0.25"),
+        ("1/5 + 2/5", "1/5 + 2/5"),  # the seeded starter
+        ("1/2 + 1/3", "2/6 + 3/6"),  # worked part of the way
+        ("1/2 + 1/3", "one half plus one third"),
+        ("12 ÷ 4 = ?", "12 ÷ 4 ="),
+        ("Simplify 6/8", "6/8"),  # the problem copied back, though it reads as one value
+    ],
+)
+def test_quiz_check_of_arithmetic_not_worked_out_is_not_graded(problem: str, read: str) -> None:
+    task = _arithmetic_check(problem)
+    for language in ("en", "es"):
+        action = vc.check_quiz_answer(CHEER, task, read, language=language)
+        assert action.verdict is None and action.animation_state == "idle"  # type: ignore[attr-defined]
+        assert action.spoken_text == vc.TEXTS[language]["unfinished"]
+        assert not grading.states_solution(action.spoken_text, vc.expected_answers(task), language)
+
+
+@pytest.mark.parametrize(
+    ("read", "verdict"),
+    [
+        ("5/6", "correct"),
+        ("1/2 + 1/3 = 5/6", "correct"),
+        ("2/6 + 3/6 = 5/6", "correct"),
+        ("10/12", "correct"),
+        ("1/2 + 1/3 = 2/5", "wrong"),
+        ("2/5", "wrong"),
+    ],
+)
+def test_quiz_check_of_worked_arithmetic_is_graded(read: str, verdict: str) -> None:
+    action = vc.check_quiz_answer(CHEER, _arithmetic_check("1/2 + 1/3"), read)
+    assert action.verdict == verdict  # type: ignore[attr-defined]
+
+
+def test_evaluate_never_approves_the_problem_read_back() -> None:
+    reply = {"board_answer": "1/2 + 1/3", **CHEER.to_dict()}
+    action, _ = _ask(_math_client(), reply, query="Check my answer.", mode="quiz", task=_arithmetic_check("1/2 + 1/3"))
+    assert action.verdict is None and action.animation_state == "idle"  # type: ignore[attr-defined]
+    assert "final answer" in action.spoken_text
+
+
 @pytest.mark.parametrize("read", ["x = something", "I can't tell", "x = 2y"])
 def test_quiz_check_of_an_unreadable_answer_asks_again(read: str) -> None:
     praise = AvatarAction("Correct, great job!", "celebrating", 1, 2)

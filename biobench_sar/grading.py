@@ -1,8 +1,10 @@
 """Quiz answers graded in code, and the solution of a board problem worked out in code (sympy).
 
 parse_answers reads an answer as written or said ("x = 5", "5/2", "x = 5 or x = -3", "x = 5, y = 2", "(2, 3)",
-"x es igual a cinco") into a set of (letter, value) pairs, and grade compares a student's answer with the expected
-one: the model only copies the answer off the board, it never decides whether it is right. solve_text solves the
+"x es igual a cinco", one answer per line) into a set of (letter, value) pairs, and grade compares a student's answer
+with the expected one: the model only copies the answer off the board, it never decides whether it is right.
+Arithmetic not worked out yet ("1/2 + 1/3" copied off the board, "2/6 + 3/6") is no answer (unfinished), and a check
+or a reason written after an answer ("x = 5 (check: 3(5) + 5 = 20)", "because ...") is cut off. solve_text solves the
 problem itself (linear, quadratic, a system), so a help reply can be checked for stating the solution
 (solution_sentences) and a wrong quiz answer can get one hint for the next step (hint_for).
 
@@ -328,11 +330,12 @@ def _space_after(tokens: list[str], at: list[int], i: int) -> str:
 
 def to_math(text: Any, language: str | None = None) -> str:
     """Text as plain math: number words as digits and "equals" / "is" / "es igual a" / "vale" as "=", in `language`
-    ("en" | "es"; None tries English then Spanish words). Other words are kept."""
+    ("en" | "es"; None tries English then Spanish words). Other words are kept, and so are line breaks: two lines
+    are two answers ("x = 5" over "x = -3")."""
     plain = _plain(text)
     for lang in _languages(language):
         plain = _words_to_math(plain, lang)
-    return " ".join(plain.split())
+    return "\n".join(line for line in (" ".join(part.split()) for part in plain.splitlines()) if line)
 
 
 # ---- expressions: our own parser, no eval ----------------------------------------------------------------------
@@ -553,6 +556,20 @@ _TERM_END = re.compile(r"[\d)^*/÷+\-]\s*$")
 # A single letter right after a value makes it an expression ("x = 2y + 1", "x = 5x"); "y luego" is a word.
 _VARIABLE_NEXT = re.compile(r"\s*[a-z]\s*(?:[=+\-*/^(]|\d|$)")
 _LEADING_WORDS = re.compile(r"^(?:(?:[a-z]{2,}|i)\s+)+")
+# A reason or a check written after an answer: "x = 4 because 2 times 4 is 8", "x = 6: subtract 9 from both sides,
+# then divide by 2", "x = 6 - divide by 2", "x = 5; check it". It runs up to the next answer ("..., y = 3") or the line
+# end. Not "3:4" (a ratio) and not "A1: x = 4" or "x = 5; y = 2" (a label, a letter).
+_NEXT_ANSWER = r"(?=(?:[,;\n]|\b(?:and|or|then|so|y|o|luego|entonces)\b)\s*[a-z]\s*=|\n|$)"
+_EXPLANATION = re.compile(
+    r"\s*(?:\b(?:because|since|cause|check(?:ing)?|proof|porque|pues|ya\s+que|dado\s+que|comprobacion|"
+    r"comprobando|comprueba|verificacion|verificando|verifica)\b(?!\s*:?\s*[a-z]\s*=)"
+    r"|(?:(?<=\d)(?<![a-z]\d)(?<![a-z]\d\d)|(?<=\)))\s*(?::|;|\s-)\s+(?=[a-z]{2,}))"
+    rf".*?{_NEXT_ANSWER}"
+)
+# Brackets that open on a word hold a check or a note: "x = 5 (check: 3(5) + 5 = 20)", "x = 6 (subtract nine)".
+_ASIDE = re.compile(r"[(\[]\s*(?!sqrt\b)(?=[a-z]{2,})")
+# "x = 5 x = -3", "x = 7 y = 3": answers next to each other with only a space between them.
+_GAP = re.compile(r"(=[^=;,\n]*?[\d)])\s+(?=[a-z]\s*=)")
 
 
 def _value_run(text: str) -> tuple[str, str]:
@@ -563,15 +580,37 @@ def _value_run(text: str) -> tuple[str, str]:
     return found.group(), text[found.end() :]
 
 
+def _without_asides(text: str) -> str:
+    while (found := _ASIDE.search(text)) is not None:
+        depth, end = 0, len(text)  # an unclosed bracket runs to the end
+        for i in range(found.start(), len(text)):
+            if text[i] in "([":
+                depth += 1
+            elif text[i] in ")]":
+                depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+        text = f"{text[: found.start()]} ; {text[end:]}"
+    return text
+
+
+def _answer_text(text: Any) -> str:
+    """`text` as plain math with what is no answer cut off: checks and reasons ("x = 5 (check: ...)", "because ...",
+    ": subtract 9 ..."), and a clause break between answers on their own lines or side by side ("x = 5 x = -3")."""
+    math_text = _EXPLANATION.sub(" ; ", _without_asides(to_math(text)))
+    return _GAP.sub(r"\1 ; ", math_text)
+
+
 def _assignment(clause: str) -> tuple[str, list[Value]] | None:
     """("x", [5]) for "x = 5" / "so x = 15/3 = 5" / "i got x = 5 apples"; None when no lone letter is set to a value."""
     for found in _ASSIGNED.finditer(clause):
         before = clause[: found.start()]
         if _TERM_END.search(before):
             continue
-        rest = clause[found.end() :]
-        last = rest.rsplit("=", 1)[-1]  # "x = 15/3 = 5": the last value
-        run, after = _value_run(last.strip())
+        run, after = _value_run(clause[found.end() :].strip())
+        while after.startswith("="):  # "x = 15/3 = 5": the last value of the chain, never one after words
+            run, after = _value_run(after[1:].strip())
         if not run.strip() or _VARIABLE_NEXT.match(after):
             return None  # "x = 2y", "x = 5x": not a value
         values = _values(run)
@@ -579,12 +618,54 @@ def _assignment(clause: str) -> tuple[str, list[Value]] | None:
     return None
 
 
+def _rational(value: Value) -> bool:
+    sp = _sympy()
+    if sp is not None and isinstance(value, sp.Basic):
+        return bool(value.is_Rational)
+    return isinstance(value, (Fraction, int))
+
+
+def _unworked(run: str) -> bool:
+    """Operations still to be done ("1/2 + 1/3", "2/6 + 3/6", "12 ÷ 4", "2^3", "1/2 +"): they come to one plain
+    number, so it is not the answer yet. One value ("5/6", "-3", "1 1/2", "2.5") or an exact root ("1 + √2") is."""
+    s = run.strip().rstrip(" .,;:!?")
+    try:
+        tokens = _tokens(s)
+    except _Bad:
+        return False
+    if len(tokens) > 1 and tokens[-1][1] in ("+", "-", "*", "/", "÷", "^", "("):
+        return True
+
+    def after_term(k: int) -> bool:
+        return k > 0 and (tokens[k - 1][0] == "num" or tokens[k - 1][1] == ")")
+
+    operations = [k for k, (_, t) in enumerate(tokens) if t in ("+", "-", "*", "÷", "^", "(") and after_term(k)]
+    if not operations and sum(t == "/" for _, t in tokens) < 2:
+        return False
+    value = _expression(s)
+    return value is not None and _rational(value)
+
+
+def _worked_value(clause: str) -> list[Value] | None:
+    """[5/6] for "1/2 + 1/3 = 5/6" (arithmetic and the value it comes to); [] when it is not worked out to one value
+    ("1/2 + 1/3 = 2/6 + 3/6", "12 ÷ 4 = ?"); None when it is no plain arithmetic (a letter in it: a problem or a step)."""
+    *steps, last = _LEADING_WORDS.sub("", clause).split("=")
+    if not steps or any(_expression(s.strip()) is None for s in steps):
+        return None
+    run, after = _value_run(last.strip())
+    if not run.strip() or _VARIABLE_NEXT.match(after) or _unworked(run):
+        return []
+    return _values(run) or []
+
+
 def parse_answers(text: Any) -> Answers:
     """A written or spoken answer as a set of (letter, value): "x = 5 or x = -3" -> {("x", 5), ("x", -3)},
-    "x = 5, y = 2" -> {("x", 5), ("y", 2)}, "5" -> {("", 5)}, "(2, 3)" -> {("#1", 2), ("#2", 3)}. Steps and problems
-    in the text ("3x + 5 = 20, x = 5") are skipped; an empty set when nothing reads as an answer."""
-    math_text = to_math(text)
-    if not math_text:
+    "x = 5, y = 2" -> {("x", 5), ("y", 2)}, "5" -> {("", 5)}, "(2, 3)" -> {("#1", 2), ("#2", 3)}, "1/2 + 1/3 = 5/6" ->
+    {("", 5/6)}. Answers on separate lines all count; a check or a reason after one ("x = 4 because 2 times 4 is 8")
+    does not. Steps and problems in the text ("3x + 5 = 20, x = 5") are skipped, and so is arithmetic not worked out
+    yet ("1/2 + 1/3", "2/6 + 3/6"); an empty set when nothing reads as an answer."""
+    math_text = _answer_text(text)
+    if not math_text.strip(" ;"):
         return _NONE
     answers: set[Answer] = set()
     pairs: list[tuple[str, str]] = []
@@ -599,6 +680,8 @@ def parse_answers(text: Any) -> Answers:
         if a and b and len(a) == len(b) == 1:
             answers |= {("#1", a[0]), ("#2", b[0])}
     letter = ""
+    worked: list[Value] = []
+    steps = False
     for raw in _CLAUSES.split(math_text):
         clause = _LABEL.sub("", raw.strip(" .:!?")).strip()
         if not clause:
@@ -609,13 +692,50 @@ def parse_answers(text: Any) -> Answers:
             answers |= {(letter, v) for v in assigned[1]}
             continue
         if "=" in clause:
-            continue  # the problem or a step
+            value = _worked_value(clause)
+            steps = steps or value is None  # the problem or a step ("3x + 5 = 20", "3x = 15")
+            worked = value or worked
+            continue
         run, after = _value_run(_LEADING_WORDS.sub("", clause))
-        if run.strip() and not _VARIABLE_NEXT.match(after):
+        if run.strip() and not _VARIABLE_NEXT.match(after) and not _unworked(run):
             values = _values(run)
             if values:
                 answers |= {(letter, v) for v in values}
+    if not answers and worked and not steps:
+        # Only arithmetic worked out ("1/2 + 1/3 = 5/6"): its value. Next to a step with a letter, a line like
+        # "20 - 5 = 15" is scratch work, not the answer.
+        answers = {("", v) for v in worked}
     return frozenset(answers)
+
+
+def unfinished(text: Any) -> bool:
+    """Whether `text` is arithmetic still to be worked out, not an answer: "1/2 + 1/3", "2/6 + 3/6", "12 ÷ 4 =",
+    "one half plus one third". An answer ("5/6", "1/2 + 1/3 = 5/6"), an equation or a step ("3x = 15") is not."""
+    if parse_answers(text):
+        return False
+    for raw in _CLAUSES.split(_answer_text(text)):
+        clause = re.sub(r"=\s*[?_\s]*$", "", _LABEL.sub("", raw.strip(" .:!?")).strip()).strip()
+        if "=" in clause:
+            if _worked_value(clause) == []:
+                return True
+            continue
+        run, after = _value_run(_LEADING_WORDS.sub("", clause))
+        if run.strip() and not _VARIABLE_NEXT.match(after) and _unworked(run):
+            return True
+    return False
+
+
+def _math_key(text: Any) -> str:
+    plain = _INSTRUCTION.sub("", _plain(text).strip())
+    math_text = re.sub(r"=\s*[?_\s]*$", "", to_math(plain).strip().rstrip(" ?.!"))
+    return re.sub(r"\s+", "", math_text)
+
+
+def same_problem(text: Any, problem: Any) -> bool:
+    """Whether `text` is `problem` copied back: the same math, spacing, an instruction ("Simplify") and a trailing
+    "= ?" aside ("6/8" for "Simplify 6/8", "1/2+1/3" for "1/2 + 1/3")."""
+    key = _math_key(text)
+    return bool(key) and key == _math_key(problem)
 
 
 def _letters(answers: Answers) -> set[str]:

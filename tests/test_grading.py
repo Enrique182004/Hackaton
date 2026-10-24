@@ -354,3 +354,148 @@ def test_an_answer_written_without_its_letter_is_still_the_letters_value() -> No
     assert states_solution("So x = 7.", pair) and not states_solution("Add the two equations.", pair)
     named = parse_answers("x = 5")
     assert not states_solution("y = 5", named), "another letter of a named answer is not its value"
+
+
+# ---- arithmetic not worked out yet is no answer ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "1/2 + 1/3",
+        "3/4 - 1/2",
+        "12 ÷ 4",
+        "2/3 × 3/4",
+        "0.5 + 0.25",
+        "1/5 + 2/5",
+        "2/6 + 3/6",  # worked part of the way for 1/2 + 1/3
+        "1/2 + 1/3 = 2/6 + 3/6",
+        "12 ÷ 4 = ?",
+        "1/2 + 1/3 =",
+        "2^3",
+        "one half plus one third",
+        "un medio más un tercio",
+    ],
+)
+def test_arithmetic_not_worked_out_is_no_answer(text: str) -> None:
+    assert parse_answers(text) == frozenset(), "worked out in code it is its own answer: never graded as one"
+    assert grading.unfinished(text)
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ("1/2 + 1/3 = 5/6", Fraction(5, 6)),  # the value after the last "=", no letter on the left
+        ("2/6 + 3/6 = 5/6", Fraction(5, 6)),
+        ("1/2 + 1/3 = 2/6 + 3/6 = 5/6", Fraction(5, 6)),
+        ("12 ÷ 4 = 3", 3),
+        ("5/6", Fraction(5, 6)),
+        ("0.75", Fraction(3, 4)),
+        ("1 1/2", Fraction(3, 2)),
+        ("-3", -3),
+        ("10/12", Fraction(5, 6)),
+    ],
+)
+def test_worked_arithmetic_and_single_values_are_answers(text: str, value: object) -> None:
+    assert _plain(parse_answers(text)) == {("", Fraction(str(value)))}
+    assert not grading.unfinished(text)
+
+
+def test_letters_and_exact_roots_are_not_unfinished() -> None:
+    for text in ("3x + 5 = 20", "3x = 15", "x = 5", "x = 15/3", "x = 1 + √2", "", None, "hello"):
+        assert not grading.unfinished(text), text
+    assert grade("x = 15/3", "x = 5") is True and grade("x = 5", "x = 5") is True
+    assert len(parse_answers("x = 1 + √2 or 1 - √2")) == 2, "an exact root with a + is a value, not unworked"
+    assert grade("1/2 + 1/3 = 5/6", "5/6") is True and grade("1/2 + 1/3 = 2/5", "5/6") is False
+    assert grade("1/2 + 1/3", "5/6") is None, "the problem itself is not graded"
+
+
+def test_scratch_arithmetic_next_to_a_step_is_not_the_answer() -> None:
+    assert _plain(parse_answers("20 - 5 = 15\nx = 5")) == {("x", 5)}
+    assert parse_answers("20 - 5 = 15\n3x = 15") == frozenset()
+    assert _plain(parse_answers("15 - 9 = 6, so x = 6")) == {("x", 6)}
+
+
+def test_same_problem() -> None:
+    assert grading.same_problem("1/2+1/3", "1/2 + 1/3")
+    assert grading.same_problem("6/8", "Simplify 6/8") and grading.same_problem("12 ÷ 4", "12 ÷ 4 = ?")
+    assert grading.same_problem("one half plus one third", "1/2 + 1/3")
+    assert not grading.same_problem("5/6", "1/2 + 1/3") and not grading.same_problem("6/8", "3/4")
+    assert not grading.same_problem("", "1/2 + 1/3") and not grading.same_problem("5", None)
+
+
+# ---- a check or a reason after an answer -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("x = 5 (check: 3(5) + 5 = 20)", {("x", 5)}),
+        ("x = 4 because 2 times 4 is 8", {("x", 4)}),
+        ("x = 6: subtract 9 from both sides, then divide by 2", {("x", 6)}),
+        ("x = 6 - subtract 9 from both sides", {("x", 6)}),
+        ("x = 6 — subtract nine, then divide by two", {("x", 6)}),
+        ("x = 6; divide both sides by 2", {("x", 6)}),
+        ("x = 5 since 15/3 = 5", {("x", 5)}),
+        ("x = 5, check: 3(5) + 5 = 20", {("x", 5)}),
+        ("x = 6 (subtract nine first)", {("x", 6)}),
+        ("x = 7 because 7 + 3 = 10, y = 3 because 7 - 3 = 4", {("x", 7), ("y", 3)}),
+        ("x = 5 or x = -3 (both make it 0)", {("x", 5), ("x", -3)}),
+        ("x = 4 porque 2 por 4 es 8", {("x", 4)}),
+        ("x = 4 ya que 2 por 4 es 8", {("x", 4)}),
+        ("x = 5 (comprobación: 3(5) + 5 = 20)", {("x", 5)}),
+        ("5/6 (common denominator 6)", {("", Fraction(5, 6))}),
+        # kept: answers, pairs, letters, labels
+        ("x = 5; y = 2", {("x", 5), ("y", 2)}),
+        ("x = 5 y y = 2", {("x", 5), ("y", 2)}),
+        ("x = 5 o x = -3", {("x", 5), ("x", -3)}),
+        ("(2, 3)", {("#1", 2), ("#2", 3)}),
+        ("A1: x = 4", {("x", 4)}),
+        ("check: x = 5", {("x", 5)}),
+    ],
+)
+def test_explanations_after_an_answer_are_cut(text: str, expected: set[tuple[str, object]]) -> None:
+    assert _plain(parse_answers(text)) == {(letter, Fraction(str(value))) for letter, value in expected}
+
+
+def test_an_answer_key_with_a_check_grades_its_value() -> None:
+    key = "x = 5 (check: 3(5) + 5 = 20)"
+    assert grade("x = 5", key) is True and grade("x = 20", key) is False
+    because = "x = 4 because 2 times 4 is 8"
+    assert grade("x = 4", because) is True and grade("x = 8", because) is False
+    assert grade("x = 6", "x = 6: subtract 9 from both sides, then divide by 2") is True
+    assert grade(because, "x = 4") is True, "a student's reason is cut too"
+
+
+# ---- answers on several lines or side by side --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("x = 5\nx = -3", {("x", 5), ("x", -3)}),
+        ("x = 5 x = -3", {("x", 5), ("x", -3)}),
+        ("x = 7 y = 3", {("x", 7), ("y", 3)}),
+        ("x = 7\ny = 3", {("x", 7), ("y", 3)}),
+        ("x^2 - 2x - 15 = 0\nx = 5\nx = -3", {("x", 5), ("x", -3)}),
+        ("x = 5 ; x = -3", {("x", 5), ("x", -3)}),
+        ("3x + 5 = 20 x = 5", {("x", 5)}),
+        ("x + y = 10\nx - y = 4\nx = 7, y = 3", {("x", 7), ("y", 3)}),
+    ],
+)
+def test_answers_on_several_lines_or_side_by_side(text: str, expected: set[tuple[str, object]]) -> None:
+    assert _plain(parse_answers(text)) == {(letter, Fraction(str(value))) for letter, value in expected}
+
+
+def test_several_lines_grade_as_one_answer() -> None:
+    assert grade("x = 5\nx = -3", "x = 5 or x = -3") is True
+    assert grade("x = 5 x = -3", "x = 5 or x = -3") is True
+    assert grade("x = 7 y = 3", "x = 7 and y = 3") is True
+    assert grade("x = 5\nx = 3", "x = 5 or x = -3") is False
+    for step in ("2 x = 10", "two x equals ten", "3x = 15"):
+        assert parse_answers(step) == frozenset(), "a step is still no answer"
+
+
+def test_to_math_keeps_line_breaks() -> None:
+    assert to_math("x  =  5\n\n x = -3 ") == "x = 5\nx = -3"
+    assert solve_text("x + y = 10\nx - y = 4") == solve_text("x + y = 10 and x - y = 4")

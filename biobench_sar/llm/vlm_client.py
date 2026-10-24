@@ -67,6 +67,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "correct": "Correct, great job!",
         "not_quite": "Not quite.",
         "incomplete": "Not quite. That is only part of the answer: there is more to find.",
+        "unfinished": "I can't see your final answer yet. Finish working it out on the board, then ask me again.",
         "reread": "I couldn't read your answer clearly. Ask me to check it again.",
         "next": " Problem {number}. {problem}",
         "last": " That was the last problem. You finished the quiz!",
@@ -91,6 +92,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "correct": "¡Correcto, muy bien!",
         "not_quite": "Casi.",
         "incomplete": "Casi. Esa es solo una parte de la respuesta: falta encontrar más.",
+        "unfinished": "Todavía no veo tu respuesta final. Termina de resolverlo en el pizarrón y luego pregúntame "
+        "otra vez.",
         "reread": "No pude leer bien tu respuesta. Pídeme que la revise otra vez.",
         "next": " Problema {number}. {problem}",
         "last": " Ese fue el último problema. ¡Terminaste el quiz!",
@@ -1053,6 +1056,12 @@ def check_quiz_answer(
         # The next problem is not on the board yet: this is no reading of the student's answer, so no grade either.
         return ungraded("reread")
     given = grading.parse_answers(read)
+    if read is not None and (
+        grading.unfinished(read) or (given and grading.same_problem(read, _clean(t.get("problem"))))
+    ):
+        # The problem copied back ("1/2 + 1/3", worked out in code it is its own answer) or worked only part of the
+        # way ("2/6 + 3/6"): no final answer yet, so no point and no miss.
+        return ungraded("unfinished")
     if not given:
         # Nothing, the problem itself or a step of it ("3x = 15"): no answer yet. Anything else could not be read.
         return ungraded("no_answer" if read is None or grading.solve_text(read) is not None else "reread")
