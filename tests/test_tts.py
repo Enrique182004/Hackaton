@@ -612,15 +612,18 @@ def test_edge_rate_scales_each_voices_own_pace(tmp_path: Path) -> None:
     eng.set_rate(1.0)
     eng.speak("normal again", "en")
     eng.speak("otra vez normal", "es")
+    # The speed never touches the pitch: Dalia keeps whatever kid pitch EDGE_PROSODY gives her.
+    own_rate, pitch = tts_engine.EDGE_PROSODY["es-MX-DaliaNeural"]
+    assert own_rate == "+5%", "the rates below are worked out from Dalia's own +5%"
     assert FakeComm.prosody == [
         ("+0%", "+0Hz"),
-        ("+5%", "+30Hz"),  # at 1.0 every voice sounds exactly as it does without the setting
+        ("+5%", pitch),  # at 1.0 every voice sounds exactly as it does without the setting
         ("-25%", "+0Hz"),
-        ("-21%", "+30Hz"),  # Dalia's own +5% at 0.75: 1.05 * 0.75 = 0.7875; the kid pitch stays
+        ("-21%", pitch),  # Dalia's own +5% at 0.75: 1.05 * 0.75 = 0.7875
         ("+25%", "+0Hz"),
-        ("+31%", "+30Hz"),  # 1.05 * 1.25 = 1.3125
+        ("+31%", pitch),  # 1.05 * 1.25 = 1.3125
         ("+0%", "+0Hz"),
-        ("+5%", "+30Hz"),
+        ("+5%", pitch),
     ]
 
 
