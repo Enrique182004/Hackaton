@@ -3,6 +3,9 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from collections.abc import Callable, Mapping
+from dataclasses import replace
+from typing import Any
 
 import cv2
 import numpy as np
@@ -21,6 +24,12 @@ logger = logging.getLogger(__name__)
 MAX_CHUNK_CHARS = 800
 KEEP_ALIVE = "30m"
 NUM_PREDICT = 200
+TEMPERATURE = 0.2
+# A repeated "another one" should not get the same problem back.
+MODE_TEMPERATURE = {"practice": 0.6}
+PROFILES = ("biology", "math")
+MODES = ("help", "practice", "quiz")
+DEFAULT_QUIZ_TOTAL = 10
 
 SYSTEM_PROMPT = """You are an expert environmental-biology research assistant, shown as an animated avatar \
 projected on a whiteboard. You support a thesis on identifying Acanthamoeba in Laguna de Bustillos and on the \
@@ -59,29 +68,200 @@ Query: "Why is the lake water turbid?"
 {"spoken_text": "Runoff carries fine sediment from Leptosol soils into the lake.", "animation_state": "idle", "target_x": 960, "target_y": 540}"""
 
 
+MATH_BASE = """You are a friendly math tutor for middle and high school students (fractions, equations, algebra), \
+shown as an animated avatar projected on a whiteboard. The student writes with a marker; you see a photo of the board.
+
+spoken_text is read aloud by a text-to-speech voice: at most 3 short sentences, simple words, no markdown.
+CRITICAL: write ALL math in words, numbers too. NEVER use symbols like ^ / * = + - < > or digits in spoken_text.
+Say "two thirds" not 2/3, "x squared" not x^2, "three x plus five equals twelve" not 3x+5=12, "negative four" not -4.
+
+Respond with ONLY a JSON object:
+{"spoken_text": str, "animation_state": "idle|walking|pointing|celebrating|error", "target_x": int, "target_y": int}
+target_x / target_y are projector pixels within the given width and height."""
+
+MATH_HELP = """MODE: step-by-step help.
+- Read the equation on the board and the student's latest step.
+- Explain ONLY the next single operation in simple words, e.g. "subtract five from both sides".
+- NEVER give the final answer or the value of the variable, even if the student asks for it.
+- If the latest step has a mistake, say gently what to fix.
+- animation_state "pointing"; target = center of the ink region with the part of the equation to work on.
+- End by asking the student to write the next step.
+- If nothing is written yet, ask the student to write the problem: "idle", target = screen center.
+
+Examples (JSON only):
+Board (ink center 700,400): 2x + 3 = 11. Query: "Help me."
+{"spoken_text": "First get the x term alone. Subtract three from both sides, then write that step.", "animation_state": "pointing", "target_x": 700, "target_y": 400}
+Board (ink center 900,500): 1/2 + 1/3. Query: "I'm stuck."
+{"spoken_text": "To add one half and one third, find a common denominator. What number do two and three both go into?", "animation_state": "pointing", "target_x": 900, "target_y": 500}
+Board (ink center 650,620): x^2 = 49. Query: "Just tell me x."
+{"spoken_text": "You can do it! Undo x squared by taking the square root of both sides. Write that step.", "animation_state": "pointing", "target_x": 650, "target_y": 620}"""
+
+MATH_PRACTICE = """MODE: similar problem.
+- Read the equation on the board.
+- Make ONE new problem of the same type and difficulty: change the numbers (and maybe the letter). \
+It must be different from the board's problem.
+- Dictate it in words so the student can write it. Do not solve it.
+- animation_state "idle"; target = screen center.
+- If the board is empty, make up a simple one-step equation.
+
+Examples (JSON only, 1920x1080 screen):
+Board: 2x + 3 = 11. Query: "Give me a similar problem."
+{"spoken_text": "Try this one. Four x plus seven equals nineteen. Write it down and solve it.", "animation_state": "idle", "target_x": 960, "target_y": 540}
+Board: 3/4 - 1/2. Query: "Another one like this."
+{"spoken_text": "Here is a new one. Five sixths minus one third. Give it a try.", "animation_state": "idle", "target_x": 960, "target_y": 540}"""
+
+MATH_QUIZ = """MODE: quiz. The message gives the quiz stage and the problem.
+- Stage dictate: say the problem number and read the problem in words, then ask the student to write the answer \
+on the board. Do not solve it. "idle", target = screen center.
+- Stage check: read the student's answer on the board and compare its value with the expected answer.
+  - Same value: "celebrating", target = center of the answer's ink region; praise briefly. If a next problem is \
+given, also read it in words in the same spoken_text.
+  - Different value or nothing written: "error", target = center of the answer's ink region; give ONE short hint. \
+NEVER say the correct answer and do not read the next problem.
+
+Examples (JSON only, 1920x1080 screen):
+Quiz stage: dictate. Problem 1 of 5: x + 4 = 10
+{"spoken_text": "Problem one of five. x plus four equals ten. Write your answer on the board.", "animation_state": "idle", "target_x": 960, "target_y": 540}
+Quiz stage: check. Problem 1 of 5: x + 4 = 10. Expected answer: x = 6. Next problem: 2x = 14. Board (ink center 800,600): x = 9
+{"spoken_text": "Not quite, nine is not right. What can you subtract from both sides to get x alone?", "animation_state": "error", "target_x": 800, "target_y": 600}
+Quiz stage: check. Problem 1 of 5: x + 4 = 10. Expected answer: x = 6. Next problem: 2x = 14. Board (ink center 800,600): x = 6
+{"spoken_text": "Correct, great job! Problem two. Two x equals fourteen.", "animation_state": "celebrating", "target_x": 800, "target_y": 600}"""
+
+MATH_PROMPTS = {
+    mode: f"{MATH_BASE}\n\n{rules}"
+    for mode, rules in (("help", MATH_HELP), ("practice", MATH_PRACTICE), ("quiz", MATH_QUIZ))
+}
+
+MODE_LABELS = {"help": "help (step-by-step)", "practice": "practice (similar problem)", "quiz": "quiz"}
+
+
+def normalize_profile(profile: str | None) -> str:
+    return "biology" if str(profile or "").strip().lower() == "biology" else "math"
+
+
+def normalize_mode(mode: str | None) -> str:
+    mode = str(mode or "").strip().lower()
+    return mode if mode in MODES else "help"
+
+
+def resolve_mode(mode: str | None, task: Mapping[str, Any] | None) -> str:
+    """The task's kind is more specific than the session mode, so it wins when they disagree."""
+    kind = task.get("kind") if isinstance(task, Mapping) else None
+    return kind if kind in MODES else normalize_mode(mode)
+
+
+def system_prompt(profile: str, mode: str) -> str:
+    if normalize_profile(profile) == "biology":
+        return SYSTEM_PROMPT
+    return MATH_PROMPTS[normalize_mode(mode)]
+
+
+def _ink_text(ink_regions: list[InkRegion]) -> str:
+    if not ink_regions:
+        return "Ink regions detected on the whiteboard: none."
+    lines = [
+        f"{i}. box x={r['x']} y={r['y']} w={r['w']} h={r['h']}, center=({r['cx']}, {r['cy']})"
+        for i, r in enumerate(ink_regions, 1)
+    ]
+    return "Ink regions detected on the whiteboard:\n" + "\n".join(lines)
+
+
+def _context_text(context: list[RetrievedChunk]) -> str:
+    if not context:
+        return "Reference context: none."
+    blocks = [f"[{i}] (source: {c.source})\n{c.text[:MAX_CHUNK_CHARS]}" for i, c in enumerate(context, 1)]
+    return "Reference context:\n" + "\n\n".join(blocks)
+
+
+def _as_int(value: Any, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _clean(value: Any) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+def quiz_task_text(task: Mapping[str, Any] | None) -> str:
+    t = task or {}
+    stage = "check" if t.get("stage") == "check" else "dictate"
+    number = _as_int(t.get("number"), 1)
+    total = _as_int(t.get("total"), DEFAULT_QUIZ_TOTAL)
+    problem, answer, upcoming = _clean(t.get("problem")), _clean(t.get("answer")), _clean(t.get("next_problem"))
+    head = f"Quiz stage: {stage}. Problem {number} of {total}: "
+    if stage == "dictate":
+        if problem:
+            return f"{head}{problem}\nRead this problem out in words. Do not solve it."
+        return (
+            f"{head}no worksheet problem is available, so make up one yourself (problem one is the easiest, each "
+            "next problem a little harder). Read it out in words. Do not solve it."
+        )
+    lines = [head + (problem or "the problem written on the board (you made it up earlier).")]
+    if answer:
+        lines.append(f"Expected answer: {answer}. The student's answer is correct ONLY if its value is the same.")
+    else:
+        lines.append("Expected answer: not given, solve the problem yourself.")
+    if upcoming:
+        lines.append(f"Next problem: {upcoming}\nOnly if the answer is correct, also read the next problem in words.")
+    elif number >= total:
+        lines.append("This is the last problem: if the answer is correct, congratulate the student on finishing.")
+    elif not problem:
+        lines.append(f"If the answer is correct, also make up problem {number + 1}, a little harder, and read it out.")
+    lines.append('If the answer is wrong: "error", one hint, never the answer.')
+    return "\n".join(lines)
+
+
 def build_prompt(
     query: str,
     context: list[RetrievedChunk],
     ink_regions: list[InkRegion],
     projector_size: tuple[int, int],
+    *,
+    profile: str = "biology",
+    mode: str = "help",
+    task: Mapping[str, Any] | None = None,
 ) -> str:
     width, height = projector_size
-    parts = [f"User query: {query}", f"Projector size: {width}x{height} pixels (origin top-left)."]
-    if ink_regions:
-        lines = [
-            f"{i}. box x={r['x']} y={r['y']} w={r['w']} h={r['h']}, center=({r['cx']}, {r['cy']})"
-            for i, r in enumerate(ink_regions, 1)
-        ]
-        parts.append("Ink regions detected on the whiteboard:\n" + "\n".join(lines))
-    else:
-        parts.append("Ink regions detected on the whiteboard: none.")
-    if context:
-        blocks = [f"[{i}] (source: {c.source})\n{c.text[:MAX_CHUNK_CHARS]}" for i, c in enumerate(context, 1)]
-        parts.append("Reference context:\n" + "\n\n".join(blocks))
-    else:
-        parts.append("Reference context: none.")
-    parts.append("Answer with the JSON object only.")
+    size = f"Projector size: {width}x{height} pixels (origin top-left)."
+    if normalize_profile(profile) == "biology":
+        parts = [f"User query: {query}", size, _ink_text(ink_regions), _context_text(context)]
+        return "\n\n".join([*parts, "Answer with the JSON object only."])
+    mode = resolve_mode(mode, task)
+    parts = [f"Mode: {MODE_LABELS[mode]}."]
+    if mode == "quiz":
+        parts.append(quiz_task_text(task))
+    parts += [
+        f"Student said: {query}",
+        f"{size} Screen center: ({width // 2}, {height // 2}).",
+        _ink_text(ink_regions),
+        _context_text(context),
+        "Answer with the JSON object only. Write all math in words.",
+    ]
     return "\n\n".join(parts)
+
+
+def _math_to_speech() -> Callable[[str], str] | None:
+    try:
+        from biobench_sar.llm.mathspeak import to_speech
+    except ImportError:
+        return None
+    return to_speech
+
+
+def speakable(action: AvatarAction) -> AvatarAction:
+    """Spell out any notation the model left in (2/3, x^2, 3x+5=12) so the TTS voice reads it naturally."""
+    to_speech = _math_to_speech()
+    if to_speech is None:
+        return action
+    try:
+        spoken = str(to_speech(action.spoken_text)).strip()
+    except Exception as exc:
+        logger.warning("mathspeak failed, speaking the raw text: %s", exc)
+        return action
+    return replace(action, spoken_text=spoken) if spoken else action
 
 
 class VLMClient:
@@ -92,7 +272,9 @@ class VLMClient:
         base_url: str,
         api_key: str | None = None,
         timeout: float = 90,
+        *,
         max_image_side: int = 1024,
+        profile: str = "biology",
     ) -> None:
         self.backend = backend.lower()
         self.model = model
@@ -100,6 +282,7 @@ class VLMClient:
         self.api_key = api_key
         self.timeout = timeout
         self.max_image_side = max_image_side
+        self.profile = normalize_profile(profile)
         self.session = requests.Session()
 
     def warmup(self) -> None:
@@ -143,16 +326,37 @@ class VLMClient:
         context: list[RetrievedChunk],
         ink_regions: list[InkRegion],
         projector_size: tuple[int, int],
+        *,
+        mode: str = "help",
+        task: Mapping[str, Any] | None = None,
+    ) -> AvatarAction:
+        action = self._evaluate(query, image_jpeg, context, ink_regions, projector_size, mode, task)
+        return speakable(action) if self.profile == "math" else action
+
+    def _evaluate(
+        self,
+        query: str,
+        image_jpeg: bytes | None,
+        context: list[RetrievedChunk],
+        ink_regions: list[InkRegion],
+        projector_size: tuple[int, int],
+        mode: str,
+        task: Mapping[str, Any] | None,
     ) -> AvatarAction:
         try:
             if self.backend == "mock":
                 return self._mock(query, context, ink_regions, projector_size)
-            prompt = build_prompt(query, context, ink_regions, projector_size)
+            mode = resolve_mode(mode, task)
+            prompt = build_prompt(
+                query, context, ink_regions, projector_size, profile=self.profile, mode=mode, task=task
+            )
+            system = system_prompt(self.profile, mode)
+            temperature = MODE_TEMPERATURE.get(mode, TEMPERATURE) if self.profile == "math" else TEMPERATURE
             image_jpeg = self._prepare_image(image_jpeg)
             if self.backend == "ollama":
-                text = self._ollama(prompt, image_jpeg)
+                text = self._ollama(prompt, image_jpeg, system, temperature)
             elif self.backend == "openai":
-                text = self._openai(prompt, image_jpeg)
+                text = self._openai(prompt, image_jpeg, system, temperature)
             else:
                 return error_action(f"Unknown VLM backend '{self.backend}'.", projector_size)
             return parse_vlm_response(text, projector_size)
@@ -169,23 +373,27 @@ class VLMClient:
             logger.exception("Unexpected VLM failure: %s", exc)
             return error_action("Something went wrong while thinking. Please try again.", projector_size)
 
-    def _ollama(self, prompt: str, image_jpeg: bytes | None) -> str:
+    def _ollama(
+        self, prompt: str, image_jpeg: bytes | None, system: str = SYSTEM_PROMPT, temperature: float = TEMPERATURE
+    ) -> str:
         user: dict[str, object] = {"role": "user", "content": prompt}
         if image_jpeg:
             user["images"] = [base64.b64encode(image_jpeg).decode("ascii")]
         payload = {
             "model": self.model,
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT}, user],
+            "messages": [{"role": "system", "content": system}, user],
             "stream": False,
             "format": "json",
             "keep_alive": KEEP_ALIVE,
-            "options": {"temperature": 0.2, "num_predict": NUM_PREDICT},
+            "options": {"temperature": temperature, "num_predict": NUM_PREDICT},
         }
         resp = self.session.post(f"{self.base_url}/api/chat", json=payload, timeout=self.timeout)
         resp.raise_for_status()
         return str(resp.json()["message"]["content"])
 
-    def _openai(self, prompt: str, image_jpeg: bytes | None) -> str:
+    def _openai(
+        self, prompt: str, image_jpeg: bytes | None, system: str = SYSTEM_PROMPT, temperature: float = TEMPERATURE
+    ) -> str:
         content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
         if image_jpeg:
             b64 = base64.b64encode(image_jpeg).decode("ascii")
@@ -193,10 +401,10 @@ class VLMClient:
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": content},
             ],
-            "temperature": 0.2,
+            "temperature": temperature,
             "response_format": {"type": "json_object"},
         }
         path = "/chat/completions" if self.base_url.endswith("/v1") else "/v1/chat/completions"
