@@ -1,0 +1,154 @@
+name: desktop builds
+
+# Windows installer (.exe) and macOS app (.zip) built with PyInstaller, smoke-tested with --self-test.
+# Tags "v*" also publish both to a GitHub release. Local equivalents: scripts/build_windows.ps1 and
+# scripts/build_macos.sh; details in docs/DESKTOP_BUILDS.md.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bundle_whisper:
+        description: Bundle the Whisper "base" model (~140 MB) instead of downloading it on first use
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - "packaging/**"
+      - "biobench_sar/paths.py"
+      - "scripts/build_*"
+      - ".github/workflows/build.yml"
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows x64
+            artifact: windows-installer
+          - os: macos-14
+            label: macOS arm64
+            artifact: macos-app
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: PortAudio for pyaudio (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install portaudio
+          echo "CFLAGS=-I$(brew --prefix portaudio)/include" >> "$GITHUB_ENV"
+          echo "LDFLAGS=-L$(brew --prefix portaudio)/lib" >> "$GITHUB_ENV"
+
+      - name: Python packages
+        # CPU-only torch: classroom laptops have no CUDA, and it keeps the bundle far smaller.
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt pyinstaller
+
+      - name: Version
+        id: version
+        run: |
+          version=$(python -c "import biobench_sar; print(biobench_sar.__version__)")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match biobench_sar.__version__ ($version)"
+            exit 1
+          fi
+
+      - name: Cache bundled models
+        uses: actions/cache@v4
+        with:
+          path: packaging/models
+          key: models-${{ runner.os }}-${{ hashFiles('packaging/fetch_models.py') }}-whisper-${{ inputs.bundle_whisper == true }}
+
+      - name: Fetch models
+        run: python packaging/fetch_models.py ${{ inputs.bundle_whisper == true && '--whisper' || '' }}
+
+      - name: PyInstaller
+        run: pyinstaller packaging/sar.spec --noconfirm
+
+      - name: Smoke test the built app
+        timeout-minutes: 5
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            app="dist/SAR Whiteboard Assistant/SAR Whiteboard Assistant.exe"
+          else
+            app="dist/SAR Whiteboard Assistant.app/Contents/MacOS/SAR Whiteboard Assistant"
+          fi
+          "$app" --self-test --no-browser
+          du -sh dist/*
+
+      - name: Installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh  # Git Bash would rewrite /DAppVersion=... into a file path
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { $iscc = (Get-Command iscc.exe -ErrorAction Stop).Source }
+          & $iscc "/DAppVersion=$env:VERSION" packaging\windows\installer.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Zip the app (macOS)
+        if: runner.os == 'macOS'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ditto -c -k --keepParent "dist/SAR Whiteboard Assistant.app" \
+            "dist/SAR-Whiteboard-Assistant-$VERSION-macOS-arm64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/SAR-Whiteboard-Assistant-*.exe
+            dist/SAR-Whiteboard-Assistant-*.zip
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0  # installer and zip are compressed already
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
