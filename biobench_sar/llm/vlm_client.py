@@ -394,6 +394,12 @@ def turns_text(recent_turns: Sequence[Mapping[str, Any]] | None, speaker: str = 
     return "Conversation so far (oldest first):\n" + "\n".join(lines) if lines else None
 
 
+_CHECK_RE = re.compile(
+    r"\b(?:check|verify|correct|right|complete|wrong|missing|ok(?:ay)?|good|look\s+right|is\s+(?:this|it)\s+fine)\b",
+    re.I,
+)
+
+
 def build_prompt(
     query: str,
     context: list[RetrievedChunk],
@@ -409,9 +415,10 @@ def build_prompt(
     size = f"Projector size: {width}x{height} pixels (origin top-left)."
     if normalize_profile(profile) == "biology":
         parts = [f"User query: {query}", size, _ink_text(ink_regions), _context_text(context)]
-        history = turns_text(recent_turns, speaker="User")
+        # A check is judged on the current board alone: shown an earlier verdict, the 3B model repeats it
+        # (an earlier "not yet" failed a corrected chart, an earlier "complete" passed a broken one).
+        history = None if _CHECK_RE.search(query or "") else turns_text(recent_turns, speaker="User")
         if history:
-            # After the board, not before it: an earlier "Not yet, no autoclave" must not decide a re-check.
             parts.append(f"{history}\nEarlier turns are only for follow-up questions: judge the CURRENT board.")
         return "\n\n".join([*parts, "Answer with the JSON object only."])
     mode = resolve_mode(mode, task)

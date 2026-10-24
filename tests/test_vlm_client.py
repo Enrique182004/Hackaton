@@ -442,9 +442,15 @@ def test_biology_prompt_unchanged_and_takes_recent_turns() -> None:
     assert prompt.startswith("User query: and then?")
     history = "Conversation so far (oldest first):\nUser: why turbid?\nYou: Runoff.\nEarlier turns are only for"
     assert history in prompt and "judge the CURRENT board" in prompt
-    # After the board and the notes: an earlier "Not yet" must not decide the re-check of a corrected chart.
-    assert prompt.index("Reference context") < prompt.index("Conversation so far")
+    assert prompt.index("Reference context") < prompt.index("Conversation so far"), "after the board and notes"
     assert "Mode:" not in prompt
+
+
+@pytest.mark.parametrize("query", ["Check my flowchart.", "Is the procedure correct and complete?", "Is this right?"])
+def test_biology_check_is_judged_on_the_current_board_only(query: str) -> None:
+    """Shown an earlier verdict, the 3B model repeated it: AB 1/6 with the history first, BA 1/6 with it last."""
+    turns = [{"q": "Check it.", "a": "Not yet. There is no autoclave step."}]
+    assert build_prompt(query, [], [], SIZE, recent_turns=turns) == build_prompt(query, [], [], SIZE)
 
 
 def test_profile_kwarg_is_normalized() -> None:
@@ -1135,7 +1141,8 @@ def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -
     assert set(b.MATH_SCENARIOS) == {
         *("H", "HA", "P", "PF", "QD", "QH", "QC", "QW", "QN", "QDI", "QCI", "QWI", "LO", "LE", "HF")
     }
-    assert set(b.BIO_SCENARIOS) == {"A", "B", "AB"} and b.BIO_SCENARIOS["AB"].turns
+    assert set(b.BIO_SCENARIOS) == {"A", "B", "AB", "BA"}
+    assert b.BIO_SCENARIOS["AB"].turns and b.BIO_SCENARIOS["BA"].turns
     follow_up = b.MATH_SCENARIOS["HF"]
     assert follow_up.turns and follow_up.check("Add them to get three fourths.") == "gave the final answer"
     assert follow_up.check("Find a common denominator first. What do two and four both go into?") is None

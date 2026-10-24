@@ -281,6 +281,13 @@ BIO_SCENARIOS = {
         "celebrating",
         turns=[MISSING_STEP_TURN],
     ),
+    "BA": Scenario(
+        "missing sterile step after an earlier 'complete'",
+        SCENARIO_QUERY,
+        lambda: make_flowchart(STEPS),
+        "error",
+        turns=[{"q": SCENARIO_QUERY, "a": "Every sterile step is present and in order. Great work!"}],
+    ),
 }
 
 
