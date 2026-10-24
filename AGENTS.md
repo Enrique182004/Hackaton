@@ -17,3 +17,5 @@ This repo builds ONE thing: the **SAR Whiteboard Assistant** (hackathon) — by 
    ```
    (dev deps: `.venv/bin/python -m pip install -r requirements-dev.txt`; run the app with
    `.venv/bin/python -m biobench_sar`).
+7. Before opening a PR, run the cleanup pass in [CONTRIBUTING.md](CONTRIBUTING.md#cleanup-pass-every-branch-and-pr)
+   over the files you touched.

@@ -69,6 +69,9 @@ Both profiles share `SAR_DATA_DIR` (knowledge base, ticked files, quiz bank); gi
 - No blocking calls on the camera/WebSocket threads.
 - Every behaviour change ships with a test.
 - Show only changed sections + minimal context when editing.
+- **Cleanup pass on every branch and PR** — before opening a PR, run the checklist in
+  [CONTRIBUTING.md](CONTRIBUTING.md#cleanup-pass-every-branch-and-pr) over the files the branch touches; list what
+  is left in the PR's **Cleanup** section.
 
 ## Token economy (hackathon — maximize the budget)
 - **Draft bulk/boilerplate with the local model**, then review: use `draft-with-ollama`
@@ -102,5 +105,6 @@ Both profiles share `SAR_DATA_DIR` (knowledge base, ticked files, quiz bank); gi
 
 ### Gates
 - Before done/commit → verification-before-completion.
+- Before opening a PR → the cleanup pass (CONTRIBUTING.md).
 - Before merge/demo → code-review then security-review.
 - Before deploy → deployment-checklist.
