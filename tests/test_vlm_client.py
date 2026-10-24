@@ -1823,10 +1823,44 @@ def test_check_prompt_never_shows_an_expected_answer() -> None:
         ("¡Muy bien!", True, "es"),
         ("¡Correcto!", True, "es"),
         ("Casi. No es correcto todavía.", False, "es"),
+        ("Great!", True, "en"),
+        ("Right!", True, "en"),
+        ("You're right.", True, "en"),
+        ("You are right, x is five.", True, "en"),
+        ("The answer is right.", True, "en"),
+        ("Nice!", True, "en"),
+        ("Good!", True, "en"),
+        ("¡Buen trabajo!", True, "es"),
+        ("¡Bien!", True, "es"),
+        ("Está bien.", True, "es"),
+        ("Tienes razón.", True, "es"),
+        ("¡Genial!", True, "es"),
+        # a verdict against the answer, a step, a word that only looks like praise
+        ("Not quite.", False, "en"),
+        ("That's not right.", False, "en"),
+        ("That is not quite right, check the sign.", False, "en"),
+        ("Right, now subtract five from both sides.", False, "en"),
+        ("Look at the right side of the equation.", False, "en"),
+        ("Good question: what undoes times three?", False, "en"),
+        ("Is that right?", False, "en"),
+        ("Casi.", False, "es"),
+        ("Casi, no está bien.", False, "es"),
+        ("No está del todo bien.", False, "es"),
+        ("Revisa bien el signo.", False, "es"),
     ],
 )
 def test_praises(text: str, praise: bool, language: str) -> None:
     assert vc.praises(text, language) is praise
+
+
+def test_praise_is_left_out_of_a_hint_for_a_wrong_answer() -> None:
+    solutions = vc.expected_answers(QUADRATIC)
+    hint = vc.hint_after_wrong("Not quite. Great! Now factor it.", QUADRATIC, solutions=solutions)
+    assert hint == "Not quite. Now factor it."
+    es = vc.hint_after_wrong("Casi. ¡Buen trabajo! Ahora factoriza.", QUADRATIC, language="es", solutions=solutions)
+    assert es == "Casi. Ahora factoriza."
+    praised = AvatarAction("Not quite. You're right that it factors. Look for two numbers.", "error", 1, 2)
+    assert "right" not in vc.check_quiz_answer(praised, QUADRATIC, "x = 7 or x = -3").spoken_text
 
 
 def test_hint_after_wrong_cleans_the_models_hint() -> None:

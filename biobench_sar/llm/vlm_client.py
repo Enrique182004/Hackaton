@@ -1012,17 +1012,27 @@ def copies_problem(read: str | None, problem: str | None, language: str = "en") 
     return len(wanted) >= 3 and any(_math_seq(part, language) == wanted for part in parts)
 
 
-# Praise in a reply to a wrong answer: the model graded it itself ("Correct, great job!"). "Not correct" is no praise.
+# Praise in a reply to a wrong answer: the model graded it itself ("Correct, great job!", "Great!", "You're right",
+# "¡Buen trabajo!", "Tienes razón"). "Not correct", "not right" and "no está bien" are no praise. A lone "great",
+# "right", "good" or "bien" counts only as a whole sentence ("Right!"): "Right, now..." and "the right side" are none.
 _PRAISE_RE = re.compile(
     r"\b(?:correct|great\s+(?:job|work)|good\s+(?:job|work)|well\s+done|perfect|excellent|awesome|you\s+got\s+it|"
-    r"that'?s\s+right|nice\s+work|exactly)\b",
+    r"that['’]?s\s+right|nice\s+(?:work|job)|exactly|you(?:['’]re|\s+are)\s+(?:so\s+|absolutely\s+)?right|"
+    r"(?:answer|it|that|this)\s+(?:is|was|looks)\s+(?:all\s+|exactly\s+)?right|looks\s+(?:good|great|right)|"
+    r"wonderful|fantastic|brilliant|bravo|nailed\s+it)\b"
+    r"|^\W*(?:great|nice|good|right|super|yay|yes)\W*$",
     re.I,
 )
 _PRAISE_RE_ES = re.compile(
-    r"\b(?:correct[oa]|muy\s+bien|excelente|perfecto|bien\s+hecho|lo\s+lograste|exacto|as[ií]\s+es|eso\s+es)\b", re.I
+    r"\b(?:correct[oa]|muy\s+bien|excelente|perfecto|bien\s+hecho|lo\s+lograste|exacto|as[ií]\s+es|eso\s+es|"
+    r"(?:muy\s+)?buen\s+trabajo|tienes\s+raz[oó]n|genial|est[aá]\s+bien|qu[eé]\s+bien|fant[aá]stico|bravo|s[uú]per)\b"
+    r"|^\W*(?:bien|eso|s[ií])\W*$",
+    re.I,
 )
 _NOT_PRAISE_RE = re.compile(
-    r"\b(?:not|isn'?t|no\s+es|no\s+está)\s+(?:quite\s+|del\s+todo\s+)?correct|\bincorrect", re.I
+    r"\b(?:not|isn['’]?t|is\s+not|no\s+es|no\s+est[aá])\s+(?:quite\s+|del\s+todo\s+|muy\s+)?(?:correct|right|bien)"
+    r"|\bincorrect",
+    re.I,
 )
 _OPENER_RE = re.compile(r"^\s*(?:not\s+quite|casi|no\s+exactamente|no\s+del\s+todo)\s*[.,!:;]*\s*", re.I)
 
