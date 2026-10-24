@@ -3,9 +3,12 @@ import { $, request, every } from "./api.js";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const FRAME_MS = 500;
 const INK_MS = 1500;
+// As long as the projector shows its outline (main.js HIGHLIGHT_MS).
+const HIGHLIGHT_MS = 8000;
 
 let warped = true;
 let target = null;
+let highlight = null; // { x, y, w, h, at }: the ink the last answer was about
 
 // The projector size from the template (Settings): the lined-up picture, the ink boxes and the avatar's
 // target all live in this space. The classroom kit's Epson WXGA is 1280×800 (16:10).
@@ -78,10 +81,20 @@ function drawOverlay(regions, size) {
     svg.append(svgNode("circle", { cx: r.cx, cy: r.cy, r: 8 * unit }));
   }
   if (target) svg.append(svgNode("circle", { class: "target", cx: target.x, cy: target.y, r: 26 * unit }));
+  if (highlight && Date.now() - highlight.at < HIGHLIGHT_MS) {
+    const { x, y, w, h } = highlight;
+    svg.append(svgNode("rect", { class: "highlight", x, y, width: w, height: h, rx: 10 * unit }));
+  }
 }
 
 export function setTarget(x, y) {
   target = Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+
+// The avatar_update's "highlight" ([x, y, w, h] projector px, or null). Servers without it send no key at all.
+export function setHighlight(rect) {
+  const ok = Array.isArray(rect) && rect.length === 4 && rect.every(Number.isFinite) && rect[2] > 0 && rect[3] > 0;
+  highlight = ok ? { x: rect[0], y: rect[1], w: rect[2], h: rect[3], at: Date.now() } : null;
 }
 
 export function initCamera() {

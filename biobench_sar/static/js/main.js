@@ -15,6 +15,21 @@ const MOVE_MS = 1500;
 const CAPTURE_STATES = ["listening", "transcribing", "thinking"];
 // Server states with a proj.<state> label; anything else is shown as sent.
 const LABELLED_STATES = ["idle", "listening", "transcribing", "thinking", "speaking"];
+// The ink an answer is about ([x, y, w, h], projector px) gets a glowing outline that pulses for about 2 s and fades
+// after HIGHLIGHT_MS, or sooner when the next answer or question comes.
+const HIGHLIGHT_MS = 8000;
+const HIGHLIGHT_FADE_MS = 800; // style.css #highlight.fading
+// Projector px between the ink and the outline, so the outline frames the writing and never lights it up.
+const HIGHLIGHT_GAP = 14;
+const HIGHLIGHT_BORDER = 3; // CSS px: style.css #highlight border width
+const HIGHLIGHT_TONES = { error: "error", celebrating: "celebrate" };
+// Projected UI looks like ink to the camera, so the server is told where it is ("ui_rects", projector px) and leaves
+// out ink regions mostly under it. Sent on every change and at least once a second; the server ignores rects older
+// than 3 s, so a closed or hidden page stops masking by itself.
+const UI_TICK_MS = 250;
+const UI_HEARTBEAT_MS = 1000;
+const UI_PAD = 10; // CSS px: the glow and the idle bob reach past each element's own box
+const UI_JITTER = 12; // projector px: moving less than this (the idle bob) is not a change worth sending
 
 const $ = (id) => document.getElementById(id);
 const avatar = $("avatar");
@@ -31,6 +46,7 @@ const crosshair = $("crosshair");
 const quizCard = $("quiz-card");
 const quizCount = $("quiz-card-count");
 const quizProblem = $("quiz-card-problem");
+const highlightEl = $("highlight");
 
 let currentState = "idle";
 let pendingState = "idle";
@@ -45,6 +61,11 @@ let offlineTimer = null;
 let offlineHintTimer = null;
 let tutorVersion = 0; // bumped per "tutor" render so an older GET can't roll the card back
 let languageVersion = 0; // the same for "language"
+let highlight = null; // [x, y, w, h] in projector px while the outline is on (not fading)
+let highlightTimer = null;
+let sentRects = null; // the last "ui_rects" sent, and when
+let sentAt = 0;
+let uiQueued = false;
 
 // English until the server says which language it answers in.
 setLanguage("en");
@@ -69,18 +90,172 @@ function placeAvatar(state, tx, ty) {
   fitBubble();
 }
 
+function clampX(x, width) {
+  return Math.max(EDGE, Math.min(x, window.innerWidth - width - EDGE));
+}
+
 // Uses the avatar's destination (style.top), not its mid-transition position, plus the real bubble height.
 function fitBubble() {
   const top = parseFloat(avatar.style.top) || 0;
   const h = bubble.classList.contains("hidden") ? 120 : bubble.offsetHeight;
-  avatar.classList.toggle("bubble-below", top - h - 8 < 0);
+  let below = top - h - 8 < 0;
   // Centre the bubble over the avatar, then clamp it inside the window: the avatar itself may hang off-screen
   // when it points near an edge, so aligning to the avatar's edge is not enough.
   const left = parseFloat(avatar.style.left) || 0;
   const width = bubble.classList.contains("hidden") ? 420 : bubble.offsetWidth;
-  const ideal = left + avatar.offsetWidth / 2 - width / 2;
-  const clamped = Math.max(EDGE, Math.min(ideal, window.innerWidth - width - EDGE));
-  bubble.style.left = Math.round(clamped - left) + "px";
+  let x = clampX(left + avatar.offsetWidth / 2 - width / 2, width);
+  // Never over the highlighted writing: beside it, else on the avatar's other side; if nothing fits, as it was.
+  const hl = highlight && highlightBox(highlight);
+  if (hl) {
+    const yOf = (under) => (under ? top + avatar.offsetHeight + 4 : top - h - 4);
+    const hits = (bx, under) => {
+      const by = yOf(under);
+      return bx < hl.left + hl.width && bx + width > hl.left && by < hl.top + hl.height && by + h > hl.top;
+    };
+    const fits = (under) => (under ? yOf(true) + h <= window.innerHeight : yOf(false) >= 0);
+    if (hits(x, below)) {
+      const options = [
+        [clampX(hl.left - width - EDGE, width), below],
+        [clampX(hl.left + hl.width + EDGE, width), below],
+        [x, !below],
+      ];
+      const free = options.find(([bx, under]) => fits(under) && !hits(bx, under));
+      if (free) [x, below] = free;
+    }
+  }
+  avatar.classList.toggle("bubble-below", below);
+  bubble.style.left = Math.round(x - left) + "px";
+}
+
+function isRect(r) {
+  return Array.isArray(r) && r.length === 4 && r.every(Number.isFinite) && r[2] > 0 && r[3] > 0;
+}
+
+// The outline's box in window px: the ink plus the gap, plus the border (drawn inside the box), kept on screen.
+function highlightBox([x, y, w, h]) {
+  const a = toPixels(x - HIGHLIGHT_GAP, y - HIGHLIGHT_GAP);
+  const b = toPixels(x + w + HIGHLIGHT_GAP, y + h + HIGHLIGHT_GAP);
+  const left = Math.max(0, a.x - HIGHLIGHT_BORDER);
+  const top = Math.max(0, a.y - HIGHLIGHT_BORDER);
+  const right = Math.min(window.innerWidth, b.x + HIGHLIGHT_BORDER);
+  const bottom = Math.min(window.innerHeight, b.y + HIGHLIGHT_BORDER);
+  return { left, top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+}
+
+function placeHighlight() {
+  if (!highlight) return;
+  const box = highlightBox(highlight);
+  for (const side of ["left", "top", "width", "height"]) highlightEl.style[side] = Math.round(box[side]) + "px";
+}
+
+function showHighlight(rect, state) {
+  const same = highlight !== null && rect.every((v, i) => v === highlight[i]);
+  highlight = rect.slice();
+  placeHighlight();
+  const tone = HIGHLIGHT_TONES[state];
+  if (tone) highlightEl.dataset.tone = tone;
+  else delete highlightEl.dataset.tone;
+  highlightEl.classList.remove("hidden", "fading");
+  if (!same) {
+    // A new region pulses again: the class comes off, a reflow, and it goes back on.
+    highlightEl.classList.remove("pulse");
+    void highlightEl.offsetWidth;
+    highlightEl.classList.add("pulse");
+  }
+  clearTimeout(highlightTimer);
+  highlightTimer = setTimeout(() => clearHighlight(), HIGHLIGHT_MS);
+  fitBubble();
+  uiChanged();
+}
+
+function hideHighlight() {
+  highlightEl.classList.add("hidden");
+  highlightEl.classList.remove("fading", "pulse");
+  uiChanged();
+}
+
+// Fades out, or with `now` goes at once: a question is starting and the camera is about to read the board.
+function clearHighlight(now = false) {
+  clearTimeout(highlightTimer);
+  highlightTimer = null;
+  highlight = null;
+  if (highlightEl.classList.contains("hidden")) return;
+  if (now) return hideHighlight();
+  highlightEl.classList.add("fading");
+  highlightTimer = setTimeout(hideHighlight, HIGHLIGHT_FADE_MS);
+}
+
+// Servers without highlights send no "highlight" key at all; those answers leave the outline alone.
+function applyHighlight(d, state) {
+  if (!Object.hasOwn(d, "highlight")) return;
+  if (isRect(d.highlight)) showHighlight(d.highlight, state);
+  else clearHighlight();
+}
+
+// Visible on the board: not display:none (itself or a parent), and not the quiz card stepping aside.
+function onBoard(node) {
+  for (let n = node; n && n !== body; n = n.parentNode) if (n.classList.contains("hidden")) return false;
+  return !node.classList.contains("capturing");
+}
+
+// The outline goes as its four edges, not its whole box: the server drops ink mostly under a UI rect, and the
+// writing inside the outline is exactly what the student is working on.
+function edges(r) {
+  const band = HIGHLIGHT_BORDER;
+  return [
+    { left: r.left, top: r.top, width: r.width, height: band },
+    { left: r.left, top: r.top + r.height - band, width: r.width, height: band },
+    { left: r.left, top: r.top, width: band, height: r.height },
+    { left: r.left + r.width - band, top: r.top, width: band, height: r.height },
+  ];
+}
+
+// [x, y, w, h] in projector px for everything the projector is drawing right now.
+function uiRects() {
+  if ($("calibration-img")) return []; // the checkerboard covers the whole board
+  const sx = PROJ_W / window.innerWidth;
+  const sy = PROJ_H / window.innerHeight;
+  const boxes = [];
+  for (const node of [avatar, bubble, quizCard, highlightEl, transcriptEl, statusEl, textInput, debugEl]) {
+    if (!onBoard(node)) continue;
+    const r = node.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) continue;
+    boxes.push(...(node === highlightEl ? edges(r) : [r]));
+  }
+  const out = [];
+  for (const r of boxes) {
+    const x0 = Math.max(0, (r.left - UI_PAD) * sx);
+    const y0 = Math.max(0, (r.top - UI_PAD) * sy);
+    const x1 = Math.min(PROJ_W, (r.left + r.width + UI_PAD) * sx);
+    const y1 = Math.min(PROJ_H, (r.top + r.height + UI_PAD) * sy);
+    if (x1 - x0 >= 1 && y1 - y0 >= 1) out.push([Math.round(x0), Math.round(y0), Math.round(x1 - x0), Math.round(y1 - y0)]);
+  }
+  return out;
+}
+
+function sameRects(a, b) {
+  return a.length === b.length && a.every((r, i) => r.every((v, j) => Math.abs(v - b[i][j]) <= UI_JITTER));
+}
+
+// `force` sends even an unchanged list. Never while disconnected: socket.io would replay stale rects later.
+function reportUi(force = false) {
+  if (!socket || !connected || document.hidden) return;
+  const rects = uiRects();
+  const now = Date.now();
+  if (!force && sentRects && sameRects(rects, sentRects) && now - sentAt < UI_HEARTBEAT_MS) return;
+  sentRects = rects;
+  sentAt = now;
+  socket.emit("ui_rects", { rects });
+}
+
+// Several changes in one event (avatar, bubble, outline) go out as one message, once the layout has them all.
+function uiChanged() {
+  if (uiQueued) return;
+  uiQueued = true;
+  queueMicrotask(() => {
+    uiQueued = false;
+    reportUi(true);
+  });
 }
 
 // Single owner of bubbleTimer: every (re)arm clears the previous one so stale timers can't hide a newer bubble.
@@ -96,6 +271,7 @@ function showBubble(text, holdMs) {
   bubble.classList.remove("hidden");
   fitBubble();
   armBubbleTimer(holdMs);
+  uiChanged();
 }
 
 // Clear `audio` before touching the element: src="" fires an "error" event on it, and the
@@ -111,6 +287,7 @@ function releaseAudio() {
 function hideBubbleUnlessSpeaking() {
   if (audio && !audio.paused && !audio.ended) return;
   bubble.classList.add("hidden");
+  uiChanged();
 }
 
 function onAvatarUpdate(d) {
@@ -118,14 +295,20 @@ function onAvatarUpdate(d) {
   const hasTarget = Number.isFinite(d.target_x) && Number.isFinite(d.target_y);
   pendingState = finalState;
   clearTimeout(moveTimer);
+  // Before the bubble, so the bubble can keep clear of the highlighted writing.
+  applyHighlight(d, finalState);
 
   if (hasTarget) {
     lastTarget = { x: d.target_x, y: d.target_y };
     setState("walking");
     placeAvatar(finalState, d.target_x, d.target_y);
     // transitionend can be skipped (no movement / hidden tab), so use a timer as the single source of truth.
-    moveTimer = setTimeout(() => setState(pendingState), MOVE_MS + 50);
+    moveTimer = setTimeout(() => {
+      setState(pendingState);
+      uiChanged();
+    }, MOVE_MS + 50);
     updateCrosshair();
+    uiChanged();
   } else {
     setState(finalState);
   }
@@ -136,6 +319,7 @@ function onAvatarUpdate(d) {
 
 function onSpeak(d) {
   releaseAudio();
+  applyHighlight(d, pendingState);
   const text = d.display_text || d.text || d.spoken_text;
   if (text) showBubble(text); else armBubbleTimer(0);
   if (!d.url) { armBubbleTimer(4000); return; }
@@ -162,7 +346,11 @@ function renderStatus(d) {
   statusEl.dataset.state = s;
   // The corner is read from across the room, so it says what to do rather than the internal state name.
   bindText(statusLabel, () => (d.detail === "busy" ? t("proj.busy") : LABELLED_STATES.includes(s) ? t(`proj.${s}`) : s));
-  quizCard.classList.toggle("capturing", CAPTURE_STATES.includes(s));
+  const capturing = CAPTURE_STATES.includes(s);
+  quizCard.classList.toggle("capturing", capturing);
+  // A new question: the last answer's outline is stale, and the camera must not see it as writing.
+  if (capturing) clearHighlight(true);
+  uiChanged();
 }
 
 function onTutor(d) {
@@ -174,6 +362,7 @@ function onTutor(d) {
   bindText(quizCount, () => t("proj.quiz", { n: quiz.number, total: quiz.total }));
   // No problem text means the assistant makes problems up and reads them out itself.
   quizProblem.textContent = quiz.problem || "";
+  uiChanged();
 }
 
 // The corner and the quiz card speak the language the assistant answers in; the bubble is the answer itself.
@@ -213,7 +402,11 @@ function onTranscript(d) {
   clearTimeout(transcriptTimer);
   transcriptEl.textContent = d.text || "";
   transcriptEl.classList.toggle("hidden", !d.text);
-  transcriptTimer = setTimeout(() => transcriptEl.classList.add("hidden"), 5000);
+  transcriptTimer = setTimeout(() => {
+    transcriptEl.classList.add("hidden");
+    uiChanged();
+  }, 5000);
+  uiChanged();
 }
 
 // Black is invisible on the projector, so "offline" is a bright amber frame plus a status-corner label.
@@ -245,6 +438,7 @@ function resync() {
   clearTimeout(moveTimer);
   pendingState = "idle";
   setState("idle");
+  clearHighlight(true);
   if (!statusSinceConnect) renderStatus({ state: "idle" });
   refreshTutor();
   refreshLanguage();
@@ -257,11 +451,13 @@ function showCalibration(d) {
   img.alt = "";
   img.src = d.url || "/calibration.png";
   document.body.appendChild(img);
+  uiChanged();
 }
 
 function hideCalibration() {
   const img = $("calibration-img");
   if (img) img.remove();
+  uiChanged();
 }
 
 function updateCrosshair() {
@@ -283,7 +479,12 @@ function setConn(key, vars) {
 // Socket.IO may fail to load (offline venue); the page still renders and keys are no-ops.
 const socket = typeof io === "function" ? io() : null;
 if (socket) {
-  socket.on("connect", () => { connected = true; setConn("proj.debug.connected"); resync(); });
+  socket.on("connect", () => {
+    connected = true;
+    setConn("proj.debug.connected");
+    resync();
+    reportUi(true);
+  });
   socket.on("disconnect", () => { connected = false; statusSinceConnect = false; setConn("proj.debug.disconnected"); setOffline(); });
   socket.on("connect_error", (e) => {
     connected = false;
@@ -316,16 +517,21 @@ function emit(name, payload) {
 
 // Grace period so the initial handshake doesn't flash the offline frame.
 if (socket) offlineTimer = setTimeout(() => { if (!connected) setOffline(); }, 1500);
+// Catches what no handler announces (the avatar mid-walk) and keeps the server's copy fresh.
+setInterval(reportUi, UI_TICK_MS);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) uiChanged(); });
 
 function openTextInput() {
   textOverlay.classList.remove("hidden");
   textInput.value = "";
   textInput.focus();
+  uiChanged();
 }
 
 function closeTextInput() {
   textOverlay.classList.add("hidden");
   textInput.blur();
+  uiChanged();
 }
 
 textInput.addEventListener("keydown", (e) => {
@@ -351,14 +557,17 @@ document.addEventListener("keydown", (e) => {
   else if (k === "c") {
     debugEl.classList.toggle("hidden");
     if (debugEl.classList.contains("hidden")) crosshair.classList.add("hidden"); else updateCrosshair();
+    uiChanged();
   } else if (k === "f") {
     if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(() => {});
   }
 });
 
 window.addEventListener("resize", () => {
+  placeHighlight();
   if (lastTarget) placeAvatar(currentState, lastTarget.x, lastTarget.y);
   updateCrosshair();
+  uiChanged();
 });
 
 // Start parked at the centre of the screen.

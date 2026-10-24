@@ -10,8 +10,16 @@
   <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Caveat:wght@500;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Caveat:wght@500;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap"></noscript>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+  {% if lan_enabled %}
+  {# Phone mode only: Add to Home Screen, and the service worker that dashboard/phone.js registers. #}
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
+  <meta name="theme-color" content="#23497d">
+  <link rel="icon" href="{{ url_for('static', filename='icons/icon.svg') }}" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
+  <meta name="apple-mobile-web-app-title" content="Whiteboard">
+  {% endif %}
 </head>
-<body data-projector-width="{{ projector_width }}" data-projector-height="{{ projector_height }}">
+<body data-projector-width="{{ projector_width }}" data-projector-height="{{ projector_height }}" data-lan="{{ '1' if lan_enabled else '0' }}">
   <div class="page">
     <header class="masthead">
       <h1><span data-i18n="app.name">Whiteboard Assistant</span> <span class="kicker" data-i18n="app.kicker">lab notebook</span></h1>
@@ -78,7 +86,7 @@
             </div>
             <figcaption data-i18n="board.caption">Orange boxes are drawings the assistant can point at.</figcaption>
           </figure>
-          <div>
+          <div class="board-side">
             <ul class="checks" id="checks" aria-label="System checks" data-i18n-aria-label="board.checks"></ul>
             <div class="calibrate">
               <button type="button" class="btn" id="calibrate-btn" data-i18n="board.calibrate">Line up camera and projector</button>
@@ -105,6 +113,8 @@
         <div class="quiz-bar" id="quiz-bar" hidden>
           <p class="quiz-progress" id="quiz-progress"></p>
           <p class="quiz-problem" id="quiz-problem" hidden></p>
+          {# The student said "stop" during the quiz: the assistant asked whether to end it and waits for the answer. #}
+          <p class="quiz-confirm" id="quiz-confirm" role="status" data-i18n="tutor.confirmStop" hidden>Waiting for yes/no to end the quiz</p>
           <button type="button" class="btn btn-small" id="quiz-start-btn" data-i18n="quiz.start">Start quiz</button>
           <button type="button" class="btn btn-quiet btn-small" id="quiz-stop-btn" data-i18n="quiz.stop" hidden>Stop quiz</button>
         </div>
@@ -128,7 +138,30 @@
 
       <section class="panel" role="tabpanel" id="panel-more" aria-labelledby="tab-more" hidden>
         <div class="more-grid">
-          <div>
+          {% if lan_enabled %}
+          {# Phone mode: dashboard/phone.js shows this only on the laptop itself (GET /api/lan answers only there). #}
+          <section class="more-col phone-card" id="phone-card" aria-labelledby="phone-title" hidden>
+            <h3 id="phone-title" data-i18n="phone.title">Use a phone or tablet</h3>
+            <p class="hint small" data-i18n="phone.hint">On the same Wi-Fi, scan the code with the phone's camera, or type the address and then the PIN.</p>
+            <div class="phone-join">
+              <div class="qr" id="phone-qr" role="img" aria-label="QR code that opens the dashboard on a phone" data-i18n-aria-label="phone.qrLabel"></div>
+              <div class="phone-code">
+                <p class="phone-pin-label" data-i18n="phone.pin">PIN</p>
+                <p class="phone-pin" id="phone-pin">–</p>
+              </div>
+            </div>
+            <p class="phone-url" id="phone-url"></p>
+            <p class="phone-other" id="phone-other" hidden></p>
+            <p class="phone-count" id="phone-count"></p>
+            <p class="note" id="phone-msg" role="status"></p>
+            <div class="phone-actions">
+              <button type="button" class="btn btn-small" id="phone-rotate-btn" data-i18n="phone.rotate">New PIN</button>
+              <button type="button" class="btn btn-quiet btn-small" id="phone-disconnect-btn" data-i18n="phone.disconnect">Disconnect all phones</button>
+            </div>
+            <p class="hint small" data-i18n="phone.rotateHint">New PIN signs every phone out. Every restart makes a new PIN too.</p>
+          </section>
+          {% endif %}
+          <div class="more-col">
             <h3 data-i18n="more.cameraView">Camera view</h3>
             <div class="seg" role="group" aria-label="Camera view" data-i18n-aria-label="more.cameraView">
               <button type="button" aria-pressed="true" data-view="1" data-i18n="more.linedUp">Lined-up</button>
@@ -144,7 +177,7 @@
             </form>
             <ol class="hits" id="hits"></ol>
           </div>
-          <div>
+          <div class="more-col">
             <h3 data-i18n="more.settings">Settings</h3>
             <dl class="config" id="config"></dl>
             <h3 data-i18n="more.log">Activity log</h3>
@@ -160,6 +193,9 @@
   </div>
 
   <script src="{{ url_for('static', filename='js/vendor/socket.io.min.js') }}"></script>
+  {% if lan_enabled %}
+  <script src="{{ url_for('static', filename='vendor/qrcode.min.js') }}"></script>
+  {% endif %}
   <script type="module" src="{{ url_for('static', filename='js/dashboard/main.js') }}"></script>
 </body>
 </html>

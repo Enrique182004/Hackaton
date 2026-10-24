@@ -56,6 +56,21 @@ html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0000
   50% { box-shadow: 0 0 22px var(--cyan), inset 0 0 12px rgba(127, 252, 255, 0.8); }
 }
 
+/* The writing the answer is about: a glowing outline around it (main.js keeps a gap between the two). Outer glow
+   only, never a fill: the inside stays black, so the projector adds no light over the ink and the camera still
+   reads it. Pulses for about 2 s, then holds until main.js fades it. */
+#highlight { position: fixed; z-index: 8; pointer-events: none; --hl: var(--cyan); --hl-glow: rgba(127, 252, 255, 0.75);
+  border: 3px solid var(--hl); border-radius: 16px; background: transparent; box-shadow: 0 0 12px var(--hl-glow);
+  transition: opacity 0.8s ease-out; }
+#highlight[data-tone="error"] { --hl: var(--amber); --hl-glow: rgba(255, 179, 71, 0.8); }
+#highlight[data-tone="celebrate"] { --hl: var(--white); --hl-glow: rgba(127, 252, 255, 0.9); }
+#highlight.pulse { animation: hl-pulse 0.66s ease-in-out 3; }
+#highlight.fading { opacity: 0; }
+@keyframes hl-pulse {
+  0%,100% { box-shadow: 0 0 8px var(--hl-glow); }
+  50% { box-shadow: 0 0 22px var(--hl-glow), 0 0 40px var(--hl-glow); }
+}
+
 #status { position: fixed; right: 16px; bottom: 14px; display: flex; align-items: center; gap: 8px;
   font-size: 16px; color: var(--cyan); z-index: 20; text-shadow: 0 0 6px var(--cyan); }
 #status[data-state="offline"] { color: var(--amber); text-shadow: 0 0 6px var(--amber); }
@@ -112,5 +127,6 @@ body.offline::after { content: ""; position: fixed; inset: 0; border: 6px dashed
 @media (prefers-reduced-motion: reduce) {
   #avatar { animation: none !important; transition-duration: 0.01s; }
   #avatar.state-celebrating #bubble { animation: none; }
+  #highlight { animation: none !important; transition-duration: 0.01s; }
   #status .ring, #status .dots i { animation: none !important; }
 }

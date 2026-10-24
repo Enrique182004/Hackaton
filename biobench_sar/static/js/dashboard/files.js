@@ -58,11 +58,18 @@ function fileRow(doc, index) {
   });
   remove.addEventListener("click", () => removeFile(doc.source, remove));
   const sections = plural("files.sections", doc.chunks);
+  // Stored before answers were taken out of worksheets: help mode could read them until it is uploaded again.
+  const warning = doc.has_answers === true ? el("span", { className: "file-warn", textContent: t("files.hasAnswers") }) : null;
   return el(
     "li",
     { dataset: { active: isActive(doc) ? "1" : "0", source: doc.source } },
     box,
-    el("label", { htmlFor: id, className: "file-name", textContent: doc.source }, el("span", { className: "file-meta", textContent: t("files.meta", { kind: kindOf(doc), sections }) })),
+    el(
+      "label",
+      { htmlFor: id, className: "file-name", textContent: doc.source },
+      el("span", { className: "file-meta", textContent: t("files.meta", { kind: kindOf(doc), sections }) }),
+      warning,
+    ),
     remove,
   );
 }
@@ -72,8 +79,11 @@ function draw() {
   bindText($("files-summary"), summary());
   const total = documents.length;
   const active = documents.filter(isActive).length;
+  const withAnswers = documents.filter((doc) => doc.has_answers === true).length;
   if (total === 0) {
     setBadge("files", words().filesBadge, "warn");
+  } else if (withAnswers > 0) {
+    setBadge("files", plural("files.badge.answers", withAnswers), "warn");
   } else if (active === 0) {
     setBadge("files", t("files.badge.noneTicked"), "warn");
   } else {

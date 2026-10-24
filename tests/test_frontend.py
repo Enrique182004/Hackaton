@@ -119,7 +119,7 @@ def run_node(tmp_path: Path, template: str, body: str) -> str:
     # A "type": "module" package makes any node version load the pages' .js files as ES modules. The layout
     # mirrors static/js: the projector's main.js and i18n.js beside the dashboard/ folder.
     shutil.copytree(STATIC / "js" / "dashboard", tmp_path / "dashboard")
-    for name in ("main.js", "i18n.js"):
+    for name in ("main.js", "i18n.js", "join.js"):
         shutil.copy(STATIC / "js" / name, tmp_path / name)
     (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
     prelude = (
@@ -385,11 +385,14 @@ for (const [state, words] of [["idle", "Ready – press Space to talk"], ["liste
 }
 sock.fire("status", { state: "thinking", detail: "busy" });
 assert.equal(label(), "Still busy – wait a moment");
+const sent = sock.emitted.length;
 sock.fire("disconnect");
 const space = { code: "Space", key: " ", repeat: false, preventDefault() {} };
 for (const fn of doc.listeners.keydown) fn(space);
 assert.equal(label(), "Not connected – question not sent");
-assert.deepEqual(sock.emitted, []);
+await settle();
+// Nothing at all while disconnected: no question, and no UI boxes either.
+assert.deepEqual(sock.emitted.slice(sent), []);
 """,
     )
 
@@ -465,7 +468,7 @@ assert.equal($("conn-text").textContent, "Connecting…");
 assert.notEqual($("badge-ask").textContent, "not connected");
 sock.fire("connect_error", { message: "xhr poll error" });
 sock.fire("connect_error", { message: "xhr poll error" });
-assert.match($("status-text").textContent, /^Can't reach the assistant\\. Check its Terminal window/);
+assert.match($("status-text").textContent, /^Can't reach the assistant\\. Check it is still running \\(restart the assistant/);
 assert.equal($("badge-ask").textContent, "not connected");
 assert.equal(logText().match(/connect_error/g).length, 1);
 sock.fire("connect");
@@ -550,7 +553,7 @@ sock.fire("connect");
 await settle();
 await $("mode-quiz").fire("click");
 assert.equal($("ask-msg").textContent,
-  "Couldn't change how the assistant helps. Check the assistant's Terminal window is still open, then try again.");
+  "Couldn't change how the assistant helps. Check the assistant is still running (restart the assistant if it closed), then try again.");
 assert.equal($("ask-msg").dataset.tone, "warn");
 assert.match(logText(), /KeyError: mode/);
 assert.equal($("mode-help").getAttribute("aria-pressed"), "true");
@@ -820,7 +823,7 @@ const { renderStatus } = await import("./dashboard/status.js");
 const base = { camera_running: true, calibrated: true, total_documents: 1, active_documents: 1, audio_available: true };
 const checks = () => $("checks").children.map(text).join("\\\\n");
 renderStatus({ ...base, camera_running: false, vlm_backend: "mock", vlm_model: "mock", tts_backend: "edge" });
-assert.match(checks(), /Camera not found .*not open in another app \\(Zoom, FaceTime\\).*\\(Ctrl\\+C\\) and start it again\\./);
+assert.match(checks(), /Camera not found .*not open in another app \\(Zoom, Teams, FaceTime\\)\\. On a Mac, .*On Windows, .*Then restart the assistant\\./);
 assert.match(checks(), /Demo mode: answers are pretend Ask whoever set up the assistant/);
 assert.match(checks(), /Answers are read aloud on the projector page \\(click it once to allow sound\\)/);
 renderStatus({ ...base, vlm_backend: "ollama", vlm_model: "qwen2.5vl:3b", tts_backend: "none" });
@@ -881,7 +884,7 @@ installFetch({
 await import("./dashboard/main.js");
 sock.fire("connect");
 await settle();
-const hint = "Check the assistant's Terminal window is still open, then try again.";
+const hint = "Check the assistant is still running (restart the assistant if it closed), then try again.";
 $("ask-input").value = "help";
 await $("ask-form").fire("submit");
 assert.equal($("ask-msg").textContent, `Couldn't send your question. ${hint}`);
@@ -1174,7 +1177,9 @@ class _Untranslated(HTMLParser):
 
 
 def template_source(name: str) -> str:
-    return re.sub(r"\{#.*?#\}", "", (TEMPLATES / name).read_text(encoding="utf-8"), flags=re.S)
+    # Jinja comments and statements ({% if lan_enabled %}) are not page text.
+    source = re.sub(r"\{#.*?#\}", "", (TEMPLATES / name).read_text(encoding="utf-8"), flags=re.S)
+    return re.sub(r"\{%.*?%\}", "", source, flags=re.S)
 
 
 def template_keys(name: str) -> list[str]:
@@ -1211,7 +1216,7 @@ def test_spanish_is_mexican_classroom_spanish() -> None:
         assert text.count("?") <= text.count("¿") and text.count("!") <= text.count("¡"), text
 
 
-@pytest.mark.parametrize("template", ["precharge.html", "index.html"])
+@pytest.mark.parametrize("template", ["precharge.html", "index.html", "join.html"])
 def test_every_visible_template_text_has_a_dictionary_key(template: str) -> None:
     reader = _Untranslated()
     reader.feed(template_source(template))
@@ -1219,7 +1224,7 @@ def test_every_visible_template_text_has_a_dictionary_key(template: str) -> None
 
 
 @needs_node
-@pytest.mark.parametrize("template", ["precharge.html", "index.html"])
+@pytest.mark.parametrize("template", ["precharge.html", "index.html", "join.html"])
 def test_template_english_is_the_dictionary_english(template: str) -> None:
     en, es = strings()["en"], strings()["es"]
     for key in template_keys(template):
@@ -1241,7 +1246,11 @@ def test_template_english_is_the_dictionary_english(template: str) -> None:
 def test_every_key_the_scripts_name_exists() -> None:
     en = strings()["en"]
     prefixes = {key.split(".")[0] for key in en}
-    sources = [STATIC / "js" / "main.js", *sorted((STATIC / "js" / "dashboard").glob("*.js"))]
+    sources = [
+        STATIC / "js" / "main.js",
+        STATIC / "js" / "join.js",
+        *sorted((STATIC / "js" / "dashboard").glob("*.js")),
+    ]
     named = 0
     for path in sources:
         for key in re.findall(r'"([a-z]+(?:\.[a-zA-Z]+)+)"', path.read_text(encoding="utf-8")):
@@ -1318,7 +1327,7 @@ sock.fire("connect");
 await settle();
 await $("lang-es").fire("click");
 assert.equal($("lang-msg").textContent,
-  "Couldn't change the language. Check the assistant's Terminal window is still open, then try again.");
+  "Couldn't change the language. Check the assistant is still running (restart the assistant if it closed), then try again.");
 assert.equal($("lang-msg").dataset.tone, "bad");
 assert.match(logText(), /language must be auto, en or es/);
 assert.equal($("lang-auto").getAttribute("aria-pressed"), "true");

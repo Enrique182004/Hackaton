@@ -23,11 +23,23 @@ function shown(key, value, config) {
   return Array.isArray(value) ? value.join(" × ") : String(value);
 }
 
+// What a teacher looks for first; anything else follows in the server's order.
+const ORDER = [
+  "profile", "language", "current_language", "listen_mode", "wake_word", "tts_backend", "tts_voice", "vlm_model",
+  "vlm_backend", "vlm_base_url", "camera_index", "camera_size", "projector_size", "checkerboard",
+];
+
+function rank(key) {
+  const i = ORDER.indexOf(key);
+  return i < 0 ? ORDER.length : i;
+}
+
 export function renderConfig(config) {
   lastConfig = config;
   const dl = $("config");
   dl.replaceChildren();
-  for (const [key, value] of Object.entries(config)) {
+  const entries = Object.entries(config).sort(([a], [b]) => rank(a) - rank(b));
+  for (const [key, value] of entries) {
     // The wake word only matters when the microphone is always listening.
     if (key === "wake_word" && config.listen_mode !== "wake") continue;
     const label = has(`config.${key}`) ? t(`config.${key}`) : key.replaceAll("_", " ");
