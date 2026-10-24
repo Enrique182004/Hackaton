@@ -246,3 +246,38 @@ def test_reupload_in_different_order_does_not_duplicate(store: VectorStore) -> N
     store.add_chunks(chunks)
     store.add_chunks(list(reversed(chunks)))
     assert store.count() == 2
+
+
+def _texts(store: VectorStore, source: str) -> set[str]:
+    return {r.text for r in store.query("amoeba cyst agar", k=50) if r.source == source}
+
+
+def test_replace_source_drops_stale_chunks_of_edited_file(store: VectorStore) -> None:
+    other = Chunk("amoeba agar in another file", "b.md", {})
+    store.add_chunks([other])
+    v1 = [Chunk("amoeba cyst stage one", "a.md", {}), Chunk("amoeba agar old step", "a.md", {})]
+    assert store.replace_source("a.md", v1) == (2, 0)
+    v2 = [Chunk("amoeba cyst stage one", "a.md", {}), Chunk("amoeba agar new step", "a.md", {})]
+    assert store.replace_source("a.md", v2) == (1, 1)
+    assert _texts(store, "a.md") == {"amoeba cyst stage one", "amoeba agar new step"}
+    assert store.source_count("a.md") == 2 and store.count() == 3
+    assert _texts(store, "b.md") == {other.text}, "other sources untouched"
+
+
+def test_replace_source_unchanged_reupload_is_a_no_op(store: VectorStore) -> None:
+    chunks = [Chunk("amoeba one", "a.md", {}), Chunk("amoeba two", "a.md", {}), Chunk("amoeba one", "a.md", {})]
+    assert store.replace_source("a.md", chunks) == (2, 0)
+    assert store.replace_source("a.md", list(reversed(chunks))) == (0, 0)
+    assert store.count() == 2 and store.source_count("a.md") == 2
+
+
+def test_replace_source_with_no_chunks_removes_the_file(store: VectorStore) -> None:
+    store.replace_source("a.md", [Chunk("amoeba one", "a.md", {}), Chunk("amoeba two", "a.md", {})])
+    assert store.replace_source("a.md", [Chunk("  ", "a.md", {})]) == (0, 2)
+    assert store.count() == 0 and store.source_count("a.md") == 0
+
+
+def test_replace_source_rejects_chunks_of_another_source(store: VectorStore) -> None:
+    with pytest.raises(ValueError, match=r"'a\.md'"):
+        store.replace_source("a.md", [Chunk("x", "b.md", {})])
+    assert store.count() == 0

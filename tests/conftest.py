@@ -42,6 +42,15 @@ class FakeStore:
         self.chunks.extend(chunks)
         return len(chunks)
 
+    def replace_source(self, source: str, chunks: list[Any]) -> tuple[int, int]:
+        old = {c.text for c in self.chunks if c.source == source}
+        new = {c.text: c for c in chunks}
+        self.chunks = [c for c in self.chunks if c.source != source] + list(new.values())
+        return len(new.keys() - old), len(old - new.keys())
+
+    def source_count(self, source: str) -> int:
+        return sum(1 for c in self.chunks if c.source == source)
+
     def query(self, text: str, k: int = 4) -> list[Any]:
         if self.fail_query:
             raise RuntimeError("store down")

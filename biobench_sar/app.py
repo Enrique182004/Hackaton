@@ -11,6 +11,7 @@ import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from flask import Flask, jsonify, render_template, request, send_from_directory
 from flask_socketio import SocketIO
@@ -23,6 +24,8 @@ log = logging.getLogger("biobench_sar.app")
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 CALIBRATION_SETTLE_SECONDS = 1.5
 MAX_SEARCH_RESULTS = 10
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 @dataclass
@@ -85,13 +88,29 @@ def create_app(
     app = Flask(__name__, template_folder=template_folder or "templates", static_folder="static")
     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
     # None = same-origin only: other pages open in the demo browser can't drive the avatar.
-    socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=None)
+    # always_connect sends CONNECT before on_connect runs: socket.io-client replays events that arrive
+    # before CONNECT ahead of its "connect" event, whose idle reset would then bury on_connect's status.
+    socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=None, always_connect=True)
 
     assistant = Assistant(settings, socketio.emit, socketio.start_background_task)
     svc = services or build_services(settings, assistant.handle_query, assistant.on_state, assistant.should_listen)
     assistant.services = svc
     if services is None:
         assistant.calibrated = _load_initial_calibration(settings)
+
+    @app.before_request
+    def block_cross_origin() -> Any:
+        # Plain form POSTs skip CORS preflight, so any page open in the operator's browser could upload
+        # documents or fire the mic/calibration. Clients sending neither header (curl, scripts) pass.
+        if request.method in SAFE_METHODS:
+            return None
+        claimed = request.headers.get("Origin") or request.headers.get("Referer")
+        if not claimed:
+            return None
+        origin = _origin_of(claimed)
+        if origin is None or origin != _origin_of(request.host_url):
+            return jsonify({"error": "cross-origin request blocked"}), 403
+        return None
 
     # ---- pages -------------------------------------------------------------
     def page(name: str) -> str:
@@ -128,9 +147,10 @@ def create_app(
             try:
                 storage.save(path)
                 chunks = [replace(c, source=name, metadata={**c.metadata, "source": name}) for c in ingest_file(path)]
-                added = svc.store.add_chunks(chunks) if chunks else 0
+                # Replace, not add: ids are content hashes, so an edited file would keep its old chunks.
+                added, removed = svc.store.replace_source(name, chunks)
                 total += added
-                results.append({"name": name, "chunks": added})
+                results.append({"name": name, "chunks": svc.store.source_count(name), "replaced": removed})
             except Exception as exc:  # UnsupportedFileType, parse errors, embed errors
                 log.warning("upload %s failed: %s", name, exc)
                 results.append({"name": name, "chunks": 0, "error": str(exc) or type(exc).__name__})
@@ -224,7 +244,9 @@ def create_app(
 
     @app.post("/api/query")
     def api_query() -> Any:
-        body = request.get_json(silent=True) or {}
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            body = {}
         text = str(body.get("text") or "").strip()
         if not text:
             return jsonify({"accepted": False, "error": "empty text"}), 400
@@ -336,6 +358,17 @@ def create_app(
     app.config["SAR_ON_STATE"] = assistant.on_state
     app.config["SAR_SHOULD_LISTEN"] = assistant.should_listen
     return app, socketio
+
+
+def _origin_of(url: str) -> tuple[str, str, int | None] | None:
+    """(scheme, host, port) with the scheme's default port filled in; None if the URL can't be parsed."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    return scheme, (parts.hostname or "").lower(), port or DEFAULT_PORTS.get(scheme)
 
 
 def _load_initial_calibration(settings: Settings) -> bool:
