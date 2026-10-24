@@ -196,6 +196,19 @@ LAYOUTS = [
         {},
     ),
     Layout(
+        "label_variants.md",
+        _text(
+            "# Worksheet: one-step equations\n\n1. x + 9 = 15\nRespuesta correcta: x = 6\n\n2. x - 6 = 2\nR: 8\n\n"
+            "3. 8x = 56\nAns. 7\n\n4. x/5 = 4\nAnswer x = 20\n\n5. 2x + 3 = 11\nSol. x = 4\n\n"
+            "6. 6x - 5 = 25\nThe answer is 5.\n\nQ7. 3x = 27\nA7. x = 9\n\nQ: 2x = 22\nA: x = 11\n\n"
+            "8. x + 1 = 13\nResultado: x = 12\n\n9. 7x = 91\nAnswer - x = 13\n\n10. x - 4 = 10\nRespuesta： x = 14\n"
+        ),
+        [x_is(v) for v in ("6", "8", "7", "20", "4", "5", "9", "11", "12", "13", "14")]
+        + [r"(?m)^R:\s*8", r"(?m)^Ans\.\s*7"],
+        ["x + 9 = 15", "x - 6 = 2", "8x = 56", "x/5 = 4", "2x + 3 = 11", "6x - 5 = 25", "3x = 27", "x + 1 = 13"],
+        {"x + 9 = 15": "x = 6", "x - 6 = 2": "8", "8x = 56": "7", "x/5 = 4": "x = 20", "6x - 5 = 25": "5"},
+    ),
+    Layout(
         "key_over_two_pages.pdf",
         _pdf_key_over_pages,
         [x_is(v) for v in ONE_STEP_X],

@@ -96,6 +96,47 @@ def is_quiz_stop(text: str) -> bool:
     return _any(_STOP_QUIZ, _norm(text))
 
 
+# Mid-quiz, these ask to stop too; the assistant asks to confirm first, so a plain "stop" is enough.
+_STOP_INTENT = _compile(
+    r"^(?:please\s+|ok\s+|okay\s+|can\s+we\s+|let's\s+|lets\s+)?(?:stop|quit|exit|cancel|end\s+it|stop\s+it)"
+    r"(?:\s+(?:please|now|here|it|this|that|for\s+now|for\s+today))*$",
+    r"\b(?:i|we)\s+(?:want|wanna|would\s+like|need|have)\s+to\s+(?:stop|quit|end\s+this|leave)\b",
+    r"\b(?:i|we)\s+(?:don't|dont|do\s+not)\s+want\s+to\s+(?:do\s+this|play|continue|keep\s+going)\b",
+    r"\blet'?s\s+(?:stop|quit)\b",
+    r"\b(?:can|could)\s+we\s+(?:stop|quit)\b",
+    r"\bi\s+quit\b",
+)
+
+
+def is_stop_intent(text: str) -> bool:
+    """Wanting to end a running quiz: "stop the quiz", "stop", "I want to stop", "let's quit". Plain "help",
+    "I'm stuck" and "I'm done" (with the answer) are not."""
+    norm = _norm(text)
+    return _any(_STOP_QUIZ, norm) or _any(_STOP_INTENT, norm)
+
+
+_YES_WORDS = (
+    r"(?:yes|yeah|yep|yup|sure|ok|okay|alright|all\s+right|of\s+course|definitely|please|yes\s+please|"
+    r"do\s+it|go\s+ahead|i\s+do|i'm\s+sure|im\s+sure|i\s+am\s+sure|sounds\s+good|why\s+not|fine)"
+)
+_YES = re.compile(
+    rf"^(?:{_YES_WORDS})(?:\s+(?:{_YES_WORDS}|thanks|thank\s+you|stop|stop\s+it|end\s+it|i\s+want\s+to\s+stop))*$"
+)
+_YES_WORDS_ES = (
+    r"(?:si|claro|dale|ok|okey|okay|va|sale|orale|andale|bueno|de\s+acuerdo|esta\s+bien|por\s+favor|porfa|"
+    r"si\s+quiero|claro\s+que\s+si|seguro|simon|sip|obvio)"
+)
+_YES_ES = re.compile(
+    rf"^(?:{_YES_WORDS_ES})(?:\s+(?:{_YES_WORDS_ES}|gracias|termina|terminalo|terminar|para|paralo|ya\s+no|"
+    r"quiero\s+terminar))*$"
+)
+
+
+def is_yes(text: str) -> bool:
+    """A plain yes ("yes", "sure", "ok", "yeah, please"): nothing else in it, so "ok, keep going" is not one."""
+    return bool(_YES.match(_norm(text)))
+
+
 def is_repeat_request(text: str) -> bool:
     """ "Can you repeat the problem?": read the current quiz problem again instead of grading the board."""
     return _any(_REPEAT, _norm(text))
@@ -109,7 +150,16 @@ _LEARN_GUARDED = _compile(
     r"\bhow\s+(?:do|can|should|would|could)\s+(?:i|you|we|one|people)\s+(?P<verb>.+)",
     r"\bhow\s+to\s+(?P<verb>.+)",
     r"\bexplain(?:\s+to\s+me)?\s+(?P<rest>.+)",
+    # "what is a fraction?", "I don't understand fractions", "help me with fractions", "tell me about slope"
+    r"\bhow\s+(?:do|does)\s+(?P<rest>.+?)\s+work\b",
+    r"^(?:so\s+|um\s+|ok\s+|okay\s+)?what(?:'s|\s+is|\s+are)\s+(?P<rest>.+)",
+    r"\b(?:don't|dont|do\s+not)\s+(?:really\s+)?(?:understand|get)\s+(?P<rest>.+)",
+    r"\b(?:want|need|like|trying|try)\s+to\s+understand\s+(?P<rest>.+)",
+    r"\bhelp(?:\s+me)?\s+(?:with|understand|learn)\s+(?P<rest>.+)",
+    r"\btell\s+me\s+about\s+(?P<rest>.+)",
 )
+# "help me with fractions" names the help mode and a topic: a lesson on an empty board, help with the ink otherwise.
+_HELP_WITH_TOPIC = re.compile(r"\bhelp(?:\s+me)?\s+(?:with|understand|learn)\s+")
 _MATH_TOPIC = re.compile(
     r"\b(?:fraction|equation|decimal|percent|ratio|proportion|exponent|power|square\s+root|root|radical|algebra|"
     r"variable|expression|inequalit|polynomial|factor|integer|negative\s+number|whole\s+number|number\s+line|"
@@ -135,7 +185,9 @@ _EXPLICIT = re.compile(
     r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:halves|half|thirds?|fourths?|quarters?|fifths?|"
     r"sixths?|sevenths?|eighths?|ninths?|tenths?)\b"
 )
-_LEADING_FILLER = re.compile(r"^(?:more\s+about|a\s+bit\s+about|a\s+little\s+about|about|the\s+basics\s+of|some)\s+")
+_LEADING_FILLER = re.compile(
+    r"^(?:more\s+about|a\s+bit\s+about|a\s+little\s+about|about|the\s+basics\s+of|some|a|an)\s+"
+)
 _TRAILING_FILLER = re.compile(
     r"(?:^|\s+)(?:please|now|today|thanks|thank\s+you|again|for\s+me|to\s+me|with\s+me|right\s+now)$"
 )
@@ -190,7 +242,8 @@ def detect_learn_request(text: str, *, board_in_use: bool = False) -> str | None
         found = pattern.search(norm)
         if found:
             return _topic(found.group("rest"), starts_with_verb=False)
-    if board_in_use or detect_mode(text) is not None:
+    mode = detect_mode(text)
+    if board_in_use or (mode is not None and not (mode == "help" and _HELP_WITH_TOPIC.search(norm))):
         return None
     for pattern in _LEARN_GUARDED:
         found = pattern.search(norm)
@@ -227,6 +280,7 @@ _OFFER_GENERATE = _compile(
     r"\bsurprise\s+me\b",
     r"\binvent\s+one\b",
     r"^(?:no|nope|not\s+really|no\s+thanks)$",
+    r"^(?:yes|yeah|sure|ok|okay)\s+(?:make|give|invent|pick)\b",
 )
 
 
@@ -239,6 +293,8 @@ def detect_offer_reply(text: str) -> str | None:
         return "own"
     if _any(_OFFER_GENERATE, norm):
         return "generate"
+    if is_yes(norm):
+        return "generate"  # "sure" to "...or should I make one up?": make one up
     return None
 
 
@@ -289,6 +345,25 @@ def is_quiz_stop_any(text: str) -> bool:
     return is_quiz_stop(text) or bool(_spanish("is_quiz_stop_es", text, False))
 
 
+_STOP_INTENT_ES = _compile(
+    r"^(?:ya\s+)?(?:para|paremos|alto|basta|ya\s+basta|detente|deten|termina|terminemos|terminalo|salir|salte|"
+    r"cancela|cancelalo)(?:\s+(?:ya|por\s+favor|porfa|aqui|ahi|ahora))*$",
+    r"\b(?:quiero|queremos|podemos|vamos\s+a|me\s+gustaria)\s+(?:parar|terminar|salir|dejarlo|acabar|detenerlo)\b"
+    r"(?!\s+(?:el|la|este|esta|mi)\s+(?:problema|ejercicio|ecuacion|paso|respuesta|tarea))",
+    r"\bya\s+no\s+quiero\s+(?:seguir|continuar|jugar|hacer\s+esto)\b",
+)
+
+
+def is_stop_intent_any(text: str) -> bool:
+    """is_stop_intent in English or Spanish: "stop", "I want to stop", "para", "quiero terminar", "termina el quiz"."""
+    return is_stop_intent(text) or is_quiz_stop_any(text) or _any(_STOP_INTENT_ES, _norm_es(text))
+
+
+def is_yes_any(text: str) -> bool:
+    """A plain yes in English or Spanish: "yes", "sure", "ok", "sí", "claro", "dale", "de acuerdo"."""
+    return is_yes(text) or bool(_YES_ES.match(_norm_es(text)))
+
+
 _REPEAT_ES = _compile(
     r"\brepit\w*",
     r"\brepetir\w*",
@@ -315,12 +390,71 @@ _EXPLICIT_ES = re.compile(
 )
 
 
+_MATH_TOPIC_ES = re.compile(
+    r"\b(?:fraccion|ecuacion|decimal|porcentaje|porciento|razon|proporcion|exponente|potencia|raiz|radical|algebra|"
+    r"variable|expresion|desigualdad|polinomio|factor|entero|numeros?\s+negativos?|recta\s+numerica|grafica|"
+    r"pendiente|funcion|angulo|area|perimetro|volumen|triangulo|circulo|rectangulo|media|mediana|promedio|"
+    r"probabilidad|primo|multiplo|divisor|denominador|numerador|division|multiplicacion|suma|resta|tablas?\s+de|"
+    r"jerarquia\s+de\s+operaciones|distributiva|terminos\s+semejantes|cuadratica|pitagoras|geometria|"
+    r"notacion\s+cientifica|valor\s+absoluto|coordenada|lineal|sistemas?\s+de)\w*"
+)
+_DEIXIS_ES = re.compile(
+    r"\b(?:esto|esta|este|eso|esa|ese|aqui|ahi|alla|pizarron|pizarra|mi|mis|tu|tus|la\s+siguiente|el\s+siguiente|"
+    r"el\s+paso|la\s+ecuacion|el\s+problema|la\s+respuesta|el\s+resultado)\b"
+)
+# "¿qué es una fracción?", "no entiendo las fracciones", "ayúdame con las ecuaciones": a lesson on an empty board.
+_LEARN_MORE_ES = _compile(
+    r"^(?:y\s+|oye\s+|bueno\s+)?(?:que|cual)\s+(?:es|son)\s+(?P<rest>.+)",
+    r"\bno\s+(?:le\s+)?entiendo\s+(?:nada\s+de\s+|bien\s+)?(?P<rest>.+)",
+    r"\b(?:quiero|necesito)\s+entender\s+(?P<rest>.+)",
+    r"\b(?:ayudame|me\s+ayudas|ayuda|necesito\s+ayuda)\s+(?:con|a\s+entender)\s+(?P<rest>.+)",
+    r"\bhablame\s+(?:de|sobre)\s+(?P<rest>.+)",
+)
+_ARTICLE_ES = re.compile(r"^(?:un|una|unos|unas)\s+")
+
+
+def _norm_es_pair(text: str) -> tuple[str, str]:
+    """(accent-free, accented) lowercase words of `text`, the same length, so a span found in one is the other's."""
+    accented = re.sub(
+        r"\s+", " ", re.sub(r"[^\w\s]|_", " ", unicodedata.normalize("NFC", (text or "").lower()))
+    ).strip()
+    plain = "".join(
+        "".join(c for c in unicodedata.normalize("NFD", ch) if not unicodedata.combining(c)) or ch for ch in accented
+    )
+    return plain, accented
+
+
+def _more_learn_es(text: str) -> str | None:
+    """The topic of "¿qué es una fracción?" / "no entiendo las fracciones" / "ayúdame con las ecuaciones", accents
+    kept ("fracción"); None when it is about the board or an explicit problem."""
+    plain, accented = _norm_es_pair(text)
+    if len(plain) != len(accented):
+        accented = plain
+    for pattern in _LEARN_MORE_ES:
+        found = pattern.search(plain)
+        if not found:
+            continue
+        rest = found.group("rest").strip()
+        if not _MATH_TOPIC_ES.search(rest) or _DEIXIS_ES.search(rest) or _EXPLICIT_ES.search(rest):
+            return None
+        start = found.start("rest") + (len(found.group("rest")) - len(found.group("rest").lstrip()))
+        topic = accented[start : start + len(rest)]
+        words = _ARTICLE_ES.sub("", topic).split()[:MAX_TOPIC_WORDS]
+        return " ".join(words) or None
+    return None
+
+
 def _learn_request_es(text: str, board_in_use: bool) -> str | None:
     plain = _norm_es(text)
     trusted = bool(_LEARN_TRUSTED_ES.search(plain))
-    if not trusted and (board_in_use or _spanish("detect_mode_es", text, None) is not None):
+    mode = _spanish("detect_mode_es", text, None)
+    more = None if trusted else _more_learn_es(text)
+    # "no entiendo las fracciones" / "ayúdame con las ecuaciones" can read as help mode: a named topic is a lesson.
+    if not trusted and (board_in_use or (mode is not None and not (mode == "help" and more))):
         return None
     topic = _spanish("detect_learn_request_es", text, None)
+    if topic is None and not trusted:
+        topic = more
     if topic is None or (not trusted and _EXPLICIT_ES.search(plain)):
         return None
     return topic
@@ -336,8 +470,12 @@ def detect_learn_request_any(text: str, language: str = "en", *, board_in_use: b
 
 
 def detect_offer_reply_any(text: str, language: str = "en") -> str | None:
-    """Answer to the lesson offer in English or Spanish: "invéntame uno" -> "generate", "tengo uno" -> "own"."""
-    return _first(language, lambda: detect_offer_reply(text), lambda: _spanish("detect_offer_reply_es", text, None))
+    """Answer to the lesson offer in English or Spanish: "invéntame uno" -> "generate", "tengo uno" -> "own"; a plain
+    "sure" / "sí" / "claro" to "...or should I make one up?" -> "generate"."""
+    found = _first(language, lambda: detect_offer_reply(text), lambda: _spanish("detect_offer_reply_es", text, None))
+    if found is None and is_yes_any(text):
+        return "generate"
+    return found
 
 
 class TutorSession:
@@ -357,6 +495,7 @@ class TutorSession:
         self._dictated = False
         self._learn_topic: str | None = None
         self._offer_pending = False
+        self._pending_stop = False  # asked "Do you want to end the quiz?": the next turn answers it
         self._turns: deque[dict[str, str]] = deque(maxlen=MAX_TURNS)
 
     @property
@@ -375,6 +514,7 @@ class TutorSession:
             if mode != "help":
                 self._learn_topic = None
             self._offer_pending = False
+            self._pending_stop = False
             self._mode = mode
 
     # ---- quiz ----------------------------------------------------------------
@@ -390,13 +530,31 @@ class TutorSession:
             self._index = self._score = 0
             self._missed = self._dictated = False
             self._learn_topic, self._offer_pending = None, False
+            self._pending_stop = False
 
     def stop_quiz(self) -> None:
         with self._lock:
             self._quiz = None
             self._dictated = False
+            self._pending_stop = False
             if self._mode == "quiz":
                 self._mode = "help"
+
+    @property
+    def pending_stop(self) -> bool:
+        """The student asked to stop the running quiz and was asked to confirm: the next turn answers it."""
+        with self._lock:
+            return self._pending_stop
+
+    def request_stop(self) -> bool:
+        """Ask to confirm stopping the running quiz; False (nothing pending) without one."""
+        with self._lock:
+            self._pending_stop = self._quiz == "active"
+            return self._pending_stop
+
+    def clear_stop(self) -> None:
+        with self._lock:
+            self._pending_stop = False
 
     @property
     def quiz_active(self) -> bool:
@@ -474,6 +632,7 @@ class TutorSession:
             if self._index >= self._total:
                 self._quiz = "finished"
                 self._mode = "help"
+                self._pending_stop = False
 
     # ---- learn ---------------------------------------------------------------
     @property
@@ -525,4 +684,9 @@ class TutorSession:
                     "score": self._score,
                     "problem": current.problem if current else None,
                 }
-            return {"mode": self._mode, "learn_topic": self._learn_topic, "quiz": quiz}
+            return {
+                "mode": self._mode,
+                "learn_topic": self._learn_topic,
+                "quiz": quiz,
+                "confirm_stop": self._pending_stop and self._quiz == "active",
+            }

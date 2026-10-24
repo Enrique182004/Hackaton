@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 import requests
 
+from biobench_sar import grading
 from biobench_sar.rag.quiz_bank import invent_problem, similar_problem, solve_problem, strip_chunk_answers
 from biobench_sar.schemas import (
     AvatarAction,
@@ -64,6 +65,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "wrong": WRONG_TEXT,
         "step": STEP_TEXT,
         "correct": "Correct, great job!",
+        "not_quite": "Not quite.",
+        "incomplete": "Not quite. That is only part of the answer: there is more to find.",
         "reread": "I couldn't read your answer clearly. Ask me to check it again.",
         "next": " Problem {number}. {problem}",
         "last": " That was the last problem. You finished the quiz!",
@@ -86,6 +89,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "wrong": "Casi. Revisa tus pasos y vuelve a intentarlo.",
         "step": "Fíjate qué le están haciendo a la x y deshazlo en ambos lados. Escribe ese paso en el pizarrón.",
         "correct": "¡Correcto, muy bien!",
+        "not_quite": "Casi.",
+        "incomplete": "Casi. Esa es solo una parte de la respuesta: falta encontrar más.",
         "reread": "No pude leer bien tu respuesta. Pídeme que la revise otra vez.",
         "next": " Problema {number}. {problem}",
         "last": " Ese fue el último problema. ¡Terminaste el quiz!",
@@ -178,11 +183,14 @@ MATH_SCHEMA = '{"spoken_text": str, "animation_state": "idle|walking|pointing|ce
 "target_y": int}'
 # Reading the answer into its own key first makes the model look at the board, and lets code check the value.
 QUIZ_SCHEMA = MATH_SCHEMA.replace('{"spoken_text"', '{"board_answer": str, "spoken_text"')
-# Same for practice: code can then tell when the "new" problem is the board's one read back.
+# Same for practice: code can then tell when the "new" problem is the board's one read back. In help, code solves the
+# copied problem and checks that the reply never states its solution.
 PRACTICE_SCHEMA = MATH_SCHEMA.replace('{"spoken_text"', '{"board_problem": str, "spoken_text"')
+HELP_SCHEMA = PRACTICE_SCHEMA
 
 MATH_HELP = """MODE: step-by-step help.
-- Read the equation on the board and the student's latest step.
+- FIRST copy the equation written on the board into board_problem, exactly ("" if the board is empty).
+- Read the student's latest step.
 - Explain ONLY the next single operation in simple words, e.g. "subtract five from both sides".
 - NEVER give the final answer or the value of the variable, even if the student asks for it.
 - If the latest step has a mistake, say gently what to fix.
@@ -193,11 +201,11 @@ problem: "idle", target = screen center.
 
 Examples (JSON only):
 Board (ink center 700,400): 2x + 3 = 11. Query: "Help me."
-{"spoken_text": "First get the x term alone. Subtract three from both sides, then write that step.", "animation_state": "pointing", "target_x": 700, "target_y": 400}
+{"board_problem": "2x + 3 = 11", "spoken_text": "First get the x term alone. Subtract three from both sides, then write that step.", "animation_state": "pointing", "target_x": 700, "target_y": 400}
 Board (ink center 900,500): 1/2 + 1/3. Query: "I'm stuck."
-{"spoken_text": "To add one half and one third, find a common denominator. What number do two and three both go into?", "animation_state": "pointing", "target_x": 900, "target_y": 500}
+{"board_problem": "1/2 + 1/3", "spoken_text": "To add one half and one third, find a common denominator. What number do two and three both go into?", "animation_state": "pointing", "target_x": 900, "target_y": 500}
 Board (ink center 650,620): x^2 = 49. Query: "Just tell me x."
-{"spoken_text": "You can do it! Undo x squared by taking the square root of both sides. Write that step.", "animation_state": "pointing", "target_x": 650, "target_y": 620}"""
+{"board_problem": "x^2 = 49", "spoken_text": "You can do it! Undo x squared by taking the square root of both sides. Write that step.", "animation_state": "pointing", "target_x": 650, "target_y": 620}"""
 
 MATH_PRACTICE = """MODE: similar problem.
 - FIRST copy the problem written on the board into board_problem, exactly ("" if the board is empty).
@@ -274,7 +282,8 @@ Responde SOLO con un objeto JSON:
 target_x / target_y son píxeles del proyector dentro del ancho y alto dados."""
 
 MATH_HELP_ES = """MODO: ayuda paso a paso.
-- Lee la ecuación del pizarrón y el último paso del estudiante.
+- PRIMERO copia la ecuación escrita en el pizarrón en board_problem, tal cual ("" si el pizarrón está vacío).
+- Lee el último paso del estudiante.
 - Explica SOLO la siguiente operación con palabras sencillas, por ejemplo "resta cinco en ambos lados".
 - NUNCA des la respuesta final ni el valor de la letra, aunque el estudiante te lo pida.
 - Si el último paso tiene un error, dile con amabilidad qué corregir.
@@ -285,11 +294,11 @@ que escriba el problema: "idle", target = centro de la pantalla.
 
 Ejemplos (solo JSON):
 Pizarrón (centro de la tinta 500,300): 2x + 3 = 11. Mensaje: "Ayúdame."
-{"spoken_text": "Primero deja sola la parte con x. Resta tres en ambos lados y escribe ese paso.", "animation_state": "pointing", "target_x": 500, "target_y": 300}
+{"board_problem": "2x + 3 = 11", "spoken_text": "Primero deja sola la parte con x. Resta tres en ambos lados y escribe ese paso.", "animation_state": "pointing", "target_x": 500, "target_y": 300}
 Pizarrón (centro de la tinta 600,350): 1/2 + 1/3. Mensaje: "Estoy atorado."
-{"spoken_text": "Para sumar un medio y un tercio, busca un denominador común. ¿Qué número se puede dividir entre dos y entre tres?", "animation_state": "pointing", "target_x": 600, "target_y": 350}
+{"board_problem": "1/2 + 1/3", "spoken_text": "Para sumar un medio y un tercio, busca un denominador común. ¿Qué número se puede dividir entre dos y entre tres?", "animation_state": "pointing", "target_x": 600, "target_y": 350}
 Pizarrón (centro de la tinta 450,420): x^2 = 49. Mensaje: "Nada más dime cuánto vale x."
-{"spoken_text": "¡Tú puedes! Para quitar el cuadrado, saca la raíz cuadrada en ambos lados. Escribe ese paso.", "animation_state": "pointing", "target_x": 450, "target_y": 420}"""
+{"board_problem": "x^2 = 49", "spoken_text": "¡Tú puedes! Para quitar el cuadrado, saca la raíz cuadrada en ambos lados. Escribe ese paso.", "animation_state": "pointing", "target_x": 450, "target_y": 420}"""
 
 MATH_PRACTICE_ES = """MODO: problema parecido.
 - PRIMERO copia el problema escrito en el pizarrón en board_problem, tal cual ("" si el pizarrón está vacío).
@@ -347,7 +356,7 @@ Etapa de aprender: propio. Tema: fracciones. Mensaje: "Yo tengo uno."
 {{"spoken_text": "¡Muy bien! Escribe tu ejercicio en el pizarrón y luego pídeme ayuda.", "animation_state": "idle", \
 "target_x": 640, "target_y": 400}}"""
 
-_SCHEMAS = {"quiz": QUIZ_SCHEMA, "practice": PRACTICE_SCHEMA}
+_SCHEMAS = {"quiz": QUIZ_SCHEMA, "practice": PRACTICE_SCHEMA, "help": HELP_SCHEMA}
 _RULES = {
     "en": (("help", MATH_HELP), ("practice", MATH_PRACTICE), ("quiz", MATH_QUIZ), ("learn", MATH_LEARN)),
     "es": (("help", MATH_HELP_ES), ("practice", MATH_PRACTICE_ES), ("quiz", MATH_QUIZ_ES), ("learn", MATH_LEARN_ES)),
@@ -402,12 +411,16 @@ class TutorAction(AvatarAction):
     verdict: a graded quiz check, "correct" or "wrong"; None when there was no answer to grade.
     dictated: the quiz problem this reply read out (dictate: the current one; a correct check: the next one).
     display_text: the reply before mathspeak, for the screen ("3x + 5 = 20"); spoken_text is what the voice says.
+    board_answer: what a quiz check read off the board, the text code graded.
+    hint_needed: a wrong answer whose reply is code's own hint: evaluate asks the model for one on this problem.
     """
 
     failed: bool = False
     verdict: str | None = None
     dictated: str | None = None
     display_text: str | None = None
+    board_answer: str | None = None
+    hint_needed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {f.name: getattr(self, f.name) for f in fields(AvatarAction)}
@@ -536,9 +549,20 @@ def _seed_problem(number: int, total: int) -> str:
 
 
 def expected_answer(task: Mapping[str, Any] | None) -> str | None:
-    """The task's answer, or the one code works out from the problem (e.g. an invented problem)."""
+    """The task's answer, or the one code works out from the problem (an invented problem, a quadratic...)."""
     t = task or {}
-    return _clean(t.get("answer")) or solve_problem(_clean(t.get("problem")))
+    problem = _clean(t.get("problem"))
+    return _clean(t.get("answer")) or solve_problem(problem) or grading.format_answers(_solved(problem))
+
+
+def _solved(problem: str | None) -> grading.Answers:
+    return grading.solve_text(problem) or frozenset()
+
+
+def expected_answers(task: Mapping[str, Any] | None) -> grading.Answers:
+    """The task's answer parsed (grading.parse_answers), else the problem solved in code; empty when neither."""
+    t = task or {}
+    return grading.parse_answers(_clean(t.get("answer"))) or _solved(_clean(t.get("problem")))
 
 
 def quiz_task_text(task: Mapping[str, Any] | None, language: str = "en") -> str:
@@ -559,14 +583,9 @@ def quiz_task_text(task: Mapping[str, Any] | None, language: str = "en") -> str:
             f"{head}{problem or 'the problem on the board'}\nThe student is stuck. Explain ONLY the next single step "
             "for this problem and ask them to write it. NEVER say the answer or the value of the letter."
         )
+    # Every answer is graded in code (check_quiz_answer, grading.py) and never shown here: shown it, a small model
+    # copies it into board_answer instead of reading the board, and may say it aloud.
     lines = [head + (problem or "the problem on the board (see the conversation).")]
-    answer = expected_answer(t)
-    # A numeric answer is checked in code (check_quiz_answer) and left out here: shown it, a small model copies it
-    # into board_answer instead of reading the board, and may say it aloud.
-    if answer and answer_value(answer) is None:
-        lines.append(f"Expected answer: {answer}. The student's answer is correct ONLY if its value is the same.")
-    elif not answer:
-        lines.append("Expected answer: not given, solve the problem yourself.")
     # The next problem is never in a check prompt: shown it, the model copied it as the student's answer. Code reads
     # it out after a correct verdict (check_quiz_answer).
     if not upcoming and number >= total:
@@ -594,11 +613,6 @@ def _quiz_task_text_es(t: Mapping[str, Any]) -> str:
             "paso de este problema y pídele que lo escriba. NUNCA digas la respuesta ni el valor de la letra."
         )
     lines = [head + (problem or "el problema del pizarrón (mira la conversación).")]
-    answer = expected_answer(t)
-    if answer and answer_value(answer) is None:
-        lines.append(f"Respuesta esperada: {answer}. La respuesta del estudiante es correcta SOLO si vale lo mismo.")
-    elif not answer:
-        lines.append("Respuesta esperada: no se da, resuelve tú el problema.")
     if not upcoming and number >= total:
         lines.append("Este es el último problema: si la respuesta es correcta, felicita al estudiante por terminar.")
     lines.append(
@@ -983,6 +997,37 @@ def copies_problem(read: str | None, problem: str | None, language: str = "en") 
     return len(wanted) >= 3 and any(_math_seq(part, language) == wanted for part in parts)
 
 
+# Praise in a reply to a wrong answer: the model graded it itself ("Correct, great job!"). "Not correct" is no praise.
+_PRAISE_RE = re.compile(
+    r"\b(?:correct|great\s+(?:job|work)|good\s+(?:job|work)|well\s+done|perfect|excellent|awesome|you\s+got\s+it|"
+    r"that'?s\s+right|nice\s+work|exactly)\b",
+    re.I,
+)
+_PRAISE_RE_ES = re.compile(
+    r"\b(?:correct[oa]|muy\s+bien|excelente|perfecto|bien\s+hecho|lo\s+lograste|exacto|as[ií]\s+es|eso\s+es)\b", re.I
+)
+_NOT_PRAISE_RE = re.compile(
+    r"\b(?:not|isn'?t|no\s+es|no\s+está)\s+(?:quite\s+|del\s+todo\s+)?correct|\bincorrect", re.I
+)
+_OPENER_RE = re.compile(r"^\s*(?:not\s+quite|casi|no\s+exactamente|no\s+del\s+todo)\s*[.,!:;]*\s*", re.I)
+
+
+def praises(text: str, language: str = "en") -> bool:
+    """Whether a reply approves the answer ("Correct, great job!", "¡Muy bien!")."""
+    pattern = _PRAISE_RE_ES if normalize_reply_language(language) == "es" else _PRAISE_RE
+    return any(pattern.search(s) and not _NOT_PRAISE_RE.search(s) for s in _raw_sentences(text))
+
+
+def wrong_answer_text(task: Mapping[str, Any] | None, language: str = "en", read: str | None = None) -> str:
+    """What code says to a wrong answer: "Not quite." and one hint for the problem's first step (grading.hint_for),
+    "only part of the answer" when some values are missing, else the generic WRONG_TEXT."""
+    t = task or {}
+    if read and grading.incomplete(grading.parse_answers(read), expected_answers(t)):
+        return text_for(language, "incomplete")
+    hint = grading.hint_for(_clean(t.get("problem")), normalize_reply_language(language))
+    return f"{text_for(language, 'not_quite')} {hint}" if hint else text_for(language, "wrong")
+
+
 def check_quiz_answer(
     action: AvatarAction,
     task: Mapping[str, Any] | None,
@@ -991,40 +1036,51 @@ def check_quiz_answer(
     query: str | None = None,
     language: str = "en",
 ) -> AvatarAction:
-    """Grade the quiz answer in code: a 3B model reads "x = 7" fine but often calls it correct anyway."""
+    """Grade the quiz answer in code (grading.compare against the task's answer, or the problem solved in code): the
+    model only reads board_answer, and its own verdict never awards a point. A 3B model reads "x = 7" fine but calls
+    it correct anyway, and it calls every wrong answer to a quadratic or a system correct."""
     t = task or {}
     number, total = _as_int(t.get("number"), 1), _as_int(t.get("total"), 0)
     upcoming = _clean(t.get("next_problem"))
-    if copies_problem(answer_on_board, upcoming, language):
+    read = _clean(answer_on_board)
+
+    def ungraded(key: str) -> TutorAction:
+        return _tutor(
+            action, spoken_text=text_for(language, key), animation_state="idle", verdict=None, board_answer=read
+        )
+
+    if copies_problem(read, upcoming, language):
         # The next problem is not on the board yet: this is no reading of the student's answer, so no grade either.
-        return _tutor(action, spoken_text=text_for(language, "reread"), animation_state="idle", verdict=None)
-    expected, given = answer_value(expected_answer(t)), answer_value(answer_on_board)
+        return ungraded("reread")
+    given = grading.parse_answers(read)
+    if not given:
+        # Nothing, the problem itself or a step of it ("3x = 15"): no answer yet. Anything else could not be read.
+        return ungraded("no_answer" if read is None or grading.solve_text(read) is not None else "reread")
+    result = grading.compare(given, expected_answers(t))
+    if result is None:
+        return ungraded("reread")
     spoken, state = action.spoken_text, action.animation_state
+    shown = getattr(action, "display_text", None) or spoken
     usable = (
         spoken.strip() not in ("", "...") and not _is_echo(spoken, query, language) and in_language(spoken, language)
     )
-    correct = text_for(language, "correct")
-    if expected is None:  # not a plain number (two solutions, a word answer): the model's verdict stands
-        verdict = {"celebrating": "correct", "error": "wrong"}.get(state)
-        if verdict == "wrong" and not usable:
-            return _tutor(action, spoken_text=text_for(language, "wrong"), verdict=verdict)
-        if verdict != "correct":
-            return _tutor(action, verdict=verdict)
-        praise = spoken if usable else correct
-    elif given is None:
-        # Nothing read off the board: never approve (the model praises anything) and never count it as a miss.
-        return _tutor(action, spoken_text=text_for(language, "no_answer"), animation_state="idle", verdict=None)
-    elif given != expected:
+    if not result:
+        solutions = expected_answers(t)
         keep = (
             state == "error"
             and usable
+            and not praises(spoken, language)
             and not reveals_value(spoken, language)
+            and not grading.states_solution(shown, solutions, language)
+            and not grading.states_solution(spoken, solutions, language)
             and not reads_problem(spoken, upcoming, language)
         )
-        wrong = spoken if keep else text_for(language, "wrong")
-        return _tutor(action, spoken_text=wrong, animation_state="error", verdict="wrong")
-    else:
-        praise = spoken if state == "celebrating" and usable else correct
+        wrong = spoken if keep else wrong_answer_text(t, language, read)
+        return _tutor(
+            action, spoken_text=wrong, animation_state="error", verdict="wrong", board_answer=read, hint_needed=not keep
+        )
+    correct = text_for(language, "correct")
+    praise = spoken if state == "celebrating" and usable else correct
     if praise != correct and says_equation(praise, language) and not reads_problem(praise, upcoming, language):
         praise = correct  # it read out a problem of its own (an example's): only the quiz's next one is read out
     if upcoming and not reads_problem(praise, upcoming, language):
@@ -1032,7 +1088,48 @@ def check_quiz_answer(
         praise += text_for(language, "next", number=number + 1, problem=upcoming)
     elif not upcoming and total and number >= total and praise == correct:
         praise += text_for(language, "last")
-    return _tutor(action, spoken_text=praise, animation_state="celebrating", verdict="correct", dictated=upcoming)
+    return _tutor(
+        action,
+        spoken_text=praise,
+        animation_state="celebrating",
+        verdict="correct",
+        dictated=upcoming,
+        board_answer=read,
+    )
+
+
+def hint_after_wrong(
+    spoken: str,
+    task: Mapping[str, Any] | None,
+    *,
+    query: str | None = None,
+    language: str = "en",
+    solutions: grading.Answers | None = None,
+) -> str | None:
+    """The model's hint for a wrong answer, cleaned: praise, the answer, an echo or the wrong language left out,
+    "Not quite." in front. None when nothing usable is left."""
+    t = task or {}
+    upcoming = _clean(t.get("next_problem"))
+    kept: list[str] = []
+    for sentence in _raw_sentences(spoken):
+        body = _OPENER_RE.sub("", sentence).strip()
+        if not body or not re.search(r"\w", body):
+            continue
+        said = _spoken(body, language)
+        if (
+            praises(body, language)
+            or reveals_value(body, language)
+            or grading.states_solution(body, solutions, language)
+            or grading.states_solution(said, solutions, language)
+            or _is_echo(body, query, language)
+            or not in_language(body, language)
+            or reads_problem(said, upcoming, language)
+        ):
+            continue
+        kept.append(body[0].upper() + body[1:])
+    if not kept:
+        return None
+    return f"{text_for(language, 'not_quite')} {' '.join(kept)}"
 
 
 def _quiz_dictation(
@@ -1182,6 +1279,10 @@ RETRY_NOTES = {
         "numbers and operation, not a story.",
         "misread": "Your last board_answer was not what the student wrote. Look at the photo again and copy the bottom "
         "line of the student's own writing into board_answer, exactly as written.",
+        "wrong_answer": 'The student\'s answer "{answer}" is WRONG (it was checked). Do not praise it. Give ONE short hint '
+        "about the next step of this problem and ask them to try again. NEVER say the answer or the value of the letter.",
+        "incomplete": "It is only part of the answer: tell them there is more to find.",
+        "next_step": "A good next step for this problem: {step}",
     },
     "es": {
         "echo": "Tu respuesta anterior solo repitió las palabras del estudiante. Responde lo que preguntó.",
@@ -1195,8 +1296,33 @@ RETRY_NOTES = {
         "sus números y su operación, no una historia.",
         "misread": "Tu board_answer anterior no era lo que escribió el estudiante. Mira otra vez la foto y copia en "
         "board_answer la última línea de lo que escribió el estudiante, tal como está.",
+        "wrong_answer": 'La respuesta del estudiante "{answer}" está MAL (ya se revisó). No la felicites. Da UNA pista '
+        "corta sobre el siguiente paso de este problema y pídele que lo intente otra vez. NUNCA digas la respuesta ni "
+        "el valor de la letra.",
+        "incomplete": "Es solo una parte de la respuesta: dile que falta encontrar más.",
+        "next_step": "Un buen siguiente paso para este problema: {step}",
     },
 }
+
+
+def _states(action: AvatarAction, solutions: grading.Answers | None, language: str) -> bool:
+    """Whether a reply (as shown or as spoken) states the problem's solution."""
+    if not solutions:
+        return False
+    shown = getattr(action, "display_text", None) or action.spoken_text
+    return grading.states_solution(shown, solutions, language) or grading.states_solution(
+        action.spoken_text, solutions, language
+    )
+
+
+def solutions_for(kind: str, task: Mapping[str, Any] | None, board: str | None) -> grading.Answers | None:
+    """The solution a reply must never state: the quiz problem's, or in help the one of the problem the model copied
+    off the board (board_problem), solved in code. None when there is none (or the board line is an answer already)."""
+    if kind == "quiz":
+        return expected_answers(task) or None
+    if kind == "help" and board and not grading.solved_form(board):
+        return grading.solve_text(board)
+    return None
 
 
 def _retry_note(
@@ -1208,9 +1334,11 @@ def _retry_note(
     board: str | None = None,
     language: str = "en",
     read: str | None = None,
+    solutions: grading.Answers | None = None,
 ) -> str | None:
     """Why a finished math reply must be asked for again, or None. Quiz dictation and grading are fixed in code; a
-    check is asked again only when what it read off the board (`read`) is the next problem instead."""
+    check is asked again only when what it read off the board (`read`) is the next problem instead. `solutions`:
+    the problem's solution, worked out in code; a help or hint reply that states it is asked again."""
     notes = RETRY_NOTES[normalize_reply_language(language)]
     if kind == "quiz" and quiz_stage(task) == "check":
         return notes["misread"] if copies_problem(read, _clean((task or {}).get("next_problem")), language) else None
@@ -1228,7 +1356,7 @@ def _retry_note(
     earlier = _repeated(spoken, recent_turns, language)
     if earlier:
         return notes["copied"].format(earlier=_short(earlier))
-    if kind in ("help", "quiz") and reveals_value(spoken, language):
+    if kind in ("help", "quiz") and (reveals_value(spoken, language) or _states(action, solutions, language)):
         return notes["reveal"]
     if kind == "learn" and _starter_missing(action, task, language):
         return notes["starter"].format(topic=_clean((task or {}).get("topic")))
@@ -1244,6 +1372,7 @@ def _salvage(
     has_ink: bool,
     board: str | None = None,
     language: str = "en",
+    solutions: grading.Answers | None = None,
 ) -> AvatarAction:
     """Keep the sentences that are fine (not an echo, a copy, the answer or the wrong language); otherwise use the
     task's fallback. Works on the text before mathspeak, so what is kept keeps its notation on screen."""
@@ -1270,6 +1399,8 @@ def _salvage(
         for s in _raw_sentences(text)
         if not _is_echo(s, query, language)
         and not reveals_value(s, language)
+        and not grading.states_solution(s, solutions, language)
+        and not grading.states_solution(_spoken(s, language), solutions, language)
         and not copied(s)
         and in_language(s, language)
     ]
@@ -1439,26 +1570,76 @@ class VLMClient:
             return reply.action
         try:
             kind = resolve_mode(mode, task)
+            checking = kind == "quiz" and quiz_stage(task) == "check"
             action, board = self._finish(reply, mode, task, query, language), reply.board_problem
+            solutions = solutions_for(kind, task, board)
             note = None
             if self.backend != "mock":
-                note = _retry_note(action, kind, task, query, recent_turns, board, language, reply.board_answer)
-            if note is None:
-                return action
-            logger.info("asking the model again: %s", note)
-            retry = self._evaluate(*args, note=note, **extra)
-            if not retry.failed:
-                again, board = self._finish(retry, mode, task, query, language), retry.board_problem or board
-                if _retry_note(again, kind, task, query, recent_turns, board, language, retry.board_answer) is None:
-                    return again
-                action = again
-            if kind == "quiz" and quiz_stage(task) == "check":
-                return action  # graded in code: still the next problem, so it stays ungraded ("ask me again")
-            salvaged = _salvage(action, kind, task, query, recent_turns, bool(ink_regions), board, language)
-            return speakable(salvaged, language)
+                read = reply.board_answer
+                note = _retry_note(action, kind, task, query, recent_turns, board, language, read, solutions)
+            if note is not None:
+                logger.info("asking the model again: %s", note)
+                retry = self._evaluate(*args, note=note, **extra)
+                fixed = False
+                if not retry.failed:
+                    again, board = self._finish(retry, mode, task, query, language), retry.board_problem or board
+                    solutions = solutions_for(kind, task, board)
+                    read = retry.board_answer
+                    fixed = (
+                        _retry_note(again, kind, task, query, recent_turns, board, language, read, solutions) is None
+                    )
+                    action = again
+                if not fixed and not checking:
+                    salvaged = _salvage(
+                        action, kind, task, query, recent_turns, bool(ink_regions), board, language, solutions
+                    )
+                    return speakable(salvaged, language)
+                # A check still misread is graded in code: still the next problem, so it stays ungraded ("ask again").
+            if checking and getattr(action, "hint_needed", False) and self.backend != "mock":
+                action = self._wrong_answer_hint(action, args, extra, task, query, language)
+            return action
         except Exception as exc:  # evaluate must never raise
             logger.exception("Math post-processing failed, using the raw answer: %s", exc)
+            if resolve_mode(mode, task) == "quiz" and quiz_stage(task) == "check":
+                # Never the model's own verdict: an answer code could not grade is not graded ("ask me again").
+                return _tutor(
+                    reply.action, spoken_text=text_for(language, "reread"), animation_state="idle", verdict=None
+                )
             return reply.action
+
+    def _wrong_answer_hint(
+        self,
+        action: AvatarAction,
+        args: tuple[Any, ...],
+        extra: dict[str, Any],
+        task: Mapping[str, Any] | None,
+        query: str,
+        language: str,
+    ) -> AvatarAction:
+        """A wrong quiz answer: the model is told so and asked for ONE hint on this problem (never the answer). Code's
+        own hint stays when the call fails or the hint is unusable."""
+        t = dict(task or {})
+        read = getattr(action, "board_answer", None) or ""
+        notes = RETRY_NOTES[normalize_reply_language(language)]
+        note = notes["wrong_answer"].format(answer=read.replace('"', "'"))
+        if grading.incomplete(grading.parse_answers(read), expected_answers(t)):
+            note += " " + notes["incomplete"]
+        step = grading.hint_for(_clean(t.get("problem")), normalize_reply_language(language))
+        if step:
+            # Worked out in code: a 3B model's own "next step" for a quadratic was often no step at all.
+            note += " " + notes["next_step"].format(step=step)
+        hint_task = {**t, "stage": "hint", "next_problem": None}
+        query_, image, context, ink, size, mode, _, turns = args
+        reply = self._evaluate(query_, image, context, ink, size, mode, hint_task, turns, note=note, **extra)
+        if reply.failed:
+            return action
+        hint = hint_after_wrong(
+            reply.action.spoken_text, t, query=query, language=language, solutions=expected_answers(t)
+        )
+        if hint is None:
+            return action
+        hinted = _tutor(action, spoken_text=hint, display_text=None, hint_needed=False)
+        return speakable(hinted, language)
 
     def _finish(
         self, reply: RawReply, mode: str, task: Mapping[str, Any] | None, query: str, language: str = "en"

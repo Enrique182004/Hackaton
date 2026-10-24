@@ -1,0 +1,969 @@
+"""Quiz answers graded in code, and the solution of a board problem worked out in code (sympy).
+
+parse_answers reads an answer as written or said ("x = 5", "5/2", "x = 5 or x = -3", "x = 5, y = 2", "(2, 3)",
+"x es igual a cinco") into a set of (letter, value) pairs, and grade compares a student's answer with the expected
+one: the model only copies the answer off the board, it never decides whether it is right. solve_text solves the
+problem itself (linear, quadratic, a system), so a help reply can be checked for stating the solution
+(solution_sentences) and a wrong quiz answer can get one hint for the next step (hint_for).
+
+Nothing here raises on bad input: unreadable text gives an empty set or None. The parser is our own (no eval), so a
+model's reply or an uploaded file can never run code. Without sympy, plain numbers and one-letter linear problems
+still work (quiz_bank.solve_problem); square roots, quadratics and systems then give None.
+"""
+
+from __future__ import annotations
+
+import functools
+import logging
+import math
+import re
+import unicodedata
+from collections.abc import Iterable
+from fractions import Fraction
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+Value = Any  # a sympy number, or a Fraction when sympy is missing
+Answer = tuple[str, Value]  # (letter, value): "" for a bare value, "#1" / "#2" for the entries of a pair "(2, 3)"
+Answers = frozenset[Answer]
+
+MAX_CHARS = 240
+MAX_EXPONENT = 6
+MAX_LETTERS = 3
+MAX_DEGREE = 4
+TOLERANCE = 1e-9
+_NONE: Answers = frozenset()
+
+
+@functools.lru_cache(maxsize=1)
+def _sympy() -> Any:
+    try:
+        import sympy
+    except Exception:  # missing or broken: plain numbers still work
+        log.warning("sympy is not available: only plain numbers and linear problems are graded")
+        return None
+    return sympy
+
+
+# ---- text -> plain math ----------------------------------------------------------------------------------------
+
+_SUPERSCRIPTS = str.maketrans({"²": "^2", "³": "^3", "⁴": "^4"})
+_CHARS = str.maketrans(
+    {
+        "−": "-",
+        "–": "-",
+        "—": "-",
+        "‐": "-",
+        "×": "*",
+        "·": "*",
+        "∙": "*",
+        "⋅": "*",
+        "⁄": "/",
+        "：": ":",
+        "＝": "=",
+        "，": ",",
+    }
+)
+_BOLD = re.compile(r"(?<=[\w)])\*\*(?=[\w(])")
+
+_EN_SMALL = dict(
+    zip(
+        [
+            "zero",
+            "one",
+            "two",
+            "three",
+            "four",
+            "five",
+            "six",
+            "seven",
+            "eight",
+            "nine",
+            "ten",
+            "eleven",
+            "twelve",
+            "thirteen",
+            "fourteen",
+            "fifteen",
+            "sixteen",
+            "seventeen",
+            "eighteen",
+            "nineteen",
+        ],
+        range(20),
+        strict=True,
+    )
+)
+_EN_TENS = dict(
+    zip(["twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"], range(20, 100, 10), strict=True)
+)
+_ES_SMALL = dict(
+    zip(
+        [
+            "cero",
+            "uno",
+            "dos",
+            "tres",
+            "cuatro",
+            "cinco",
+            "seis",
+            "siete",
+            "ocho",
+            "nueve",
+            "diez",
+            "once",
+            "doce",
+            "trece",
+            "catorce",
+            "quince",
+            "dieciseis",
+            "diecisiete",
+            "dieciocho",
+            "diecinueve",
+            "veinte",
+            "veintiuno",
+            "veintidos",
+            "veintitres",
+            "veinticuatro",
+            "veinticinco",
+            "veintiseis",
+            "veintisiete",
+            "veintiocho",
+            "veintinueve",
+        ],
+        range(30),
+        strict=True,
+    )
+)
+_ES_SMALL |= {"un": 1, "una": 1, "veintiun": 21, "veintiuna": 21}
+# "un" / "una" are numbers only before a fraction word ("un medio"): "x es una variable" says nothing about 1.
+_ES_ARTICLE_ONE = frozenset({"un", "una"})
+_ES_TENS = dict(
+    zip(
+        ["treinta", "cuarenta", "cincuenta", "sesenta", "setenta", "ochenta", "noventa"],
+        range(30, 100, 10),
+        strict=True,
+    )
+)
+_ES_HUNDREDS = {"cien": 100, "ciento": 100, "quinientos": 500, "quinientas": 500, "setecientos": 700}
+_ES_HUNDREDS |= {"novecientos": 900, "novecientas": 900, "setecientas": 700}
+_ES_HUNDREDS |= {f"{p}cientos": n * 100 for p, n in (("dos", 2), ("tres", 3), ("cuatro", 4), ("seis", 6), ("ocho", 8))}
+_ES_HUNDREDS |= {f"{p}cientas": n * 100 for p, n in (("dos", 2), ("tres", 3), ("cuatro", 4), ("seis", 6), ("ocho", 8))}
+_EN_FRACTIONS = {"half": 2, "halves": 2, "quarter": 4, "quarters": 4}
+_EN_FRACTIONS |= {
+    w + s: n
+    for n, w in enumerate(
+        ["third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth", "eleventh", "twelfth"], 3
+    )
+    for s in ("", "s")
+}
+_ES_FRACTIONS = {
+    w + s: n
+    for n, w in enumerate(["medio", "tercio", "cuarto", "quinto", "sexto", "septimo", "octavo", "noveno", "decimo"], 2)
+    for s in ("", "s")
+}
+_ES_FRACTIONS |= {"media": 2}
+_TABLES = {
+    "en": (_EN_SMALL, _EN_TENS, {}, _EN_FRACTIONS, {"thousand"}, {"hundred"}),
+    "es": (_ES_SMALL, _ES_TENS, _ES_HUNDREDS, _ES_FRACTIONS, {"mil"}, set()),
+}
+_SIGN_WORDS = {"en": {"negative", "minus"}, "es": {"menos", "negativo", "negativa"}}
+_POINT_WORDS = {"en": {"point"}, "es": {"punto", "coma"}}
+_OPERATOR_WORDS = {
+    "en": {"plus": "+", "times": "*", "over": "/"},
+    "es": {"mas": "+", "por": "*", "entre": "/", "sobre": "/"},
+}
+_PHRASES = {
+    "en": (
+        (r"\bdivided\s+by\b", " / "),
+        (r"\bmultiplied\s+by\b", " * "),
+        (r"\bthe\s+square\s+root\s+of\b|\bsquare\s+root\s+of\b", " √ "),
+        (r"\bsquared\b", " ^2 "),
+        (r"\bcubed\b", " ^3 "),
+        (r"\bplus\s+or\s+minus\b", " ± "),
+        (
+            r"\b(?:is\s+equal\s+to|is\s+equals|equals|equal\s+to|would\s+be|will\s+be|should\s+be|must\s+be|"
+            r"comes\s+out\s+to|is)\b",
+            " = ",
+        ),
+    ),
+    "es": (
+        (r"\bdividid[oa]s?\s+(?:entre|por|sobre)\b", " / "),
+        (r"\bmultiplicad[oa]s?\s+por\b", " * "),
+        (r"\b(?:la\s+)?raiz\s+cuadrada\s+de\b", " √ "),
+        (r"\bal\s+cuadrado\b", " ^2 "),
+        (r"\bal\s+cubo\b", " ^3 "),
+        (r"\bmas\s+o\s+menos\b", " ± "),
+        (r"\bpor\s+(?:favor|eso|ejemplo|lo\s+tanto|fin|que|cierto|ahora|cada|ambos|los\s+dos|un\s+lado)\b", " "),
+        (
+            r"\b(?:es\s+igual\s+a|son\s+iguales\s+a|igual\s+a|equivale\s+a|deberia\s+ser|debe\s+ser|seria|sera|"
+            r"vale|valen|queda\s+en|nos\s+da|te\s+da|resulta\s+en|es)\b",
+            " = ",
+        ),
+        (r"\bye\b", " y "),
+    ),
+}
+_WORD_TOKEN = re.compile(r"[a-z]+|\d+(?:\.\d+)?|\.\d+|\s+|.")
+# "2,5" is two and a half (Spanish); "(2,3)" and "1,2,3" are lists.
+_DECIMAL_COMMA = re.compile(r"(?<![\d(,])(\d+),(\d+)(?![\d,)])")
+
+
+def _plain(text: Any) -> str:
+    """Lowercase, accents off, one symbol per operation ("−" -> "-", "×" -> "*", "x²" -> "x^2", "：" -> ":")."""
+    raw = str(text if text is not None else "")[: MAX_CHARS * 4].translate(_SUPERSCRIPTS)
+    raw = unicodedata.normalize("NFKC", raw).translate(_CHARS).lower()
+    raw = "".join(c for c in unicodedata.normalize("NFD", raw) if not unicodedata.combining(c))
+    raw = _BOLD.sub("^", raw).replace("**", "").replace("`", "").replace("$", "")
+    raw = _DECIMAL_COMMA.sub(r"\1.\2", raw)
+    return raw.replace("+/-", "±").replace("+-", "±")
+
+
+def _languages(language: str | None) -> tuple[str, ...]:
+    if language in ("en", "es"):
+        return (language,)
+    return ("en", "es")
+
+
+class _Words:
+    """Number words to digits for one language: "twenty five" -> 25, "dos tercios" -> 2/3, "two point five" -> 2.5,
+    "treinta y cinco" -> 35, "negative four" / "menos cuatro" -> -4."""
+
+    def __init__(self, language: str) -> None:
+        small, tens, hundreds, fractions, thousands, multipliers = _TABLES[language]
+        self.language = language
+        self.small, self.tens, self.hundreds, self.fractions = small, tens, hundreds, fractions
+        self.thousands, self.multipliers = thousands, multipliers
+        self.signs, self.points = _SIGN_WORDS[language], _POINT_WORDS[language]
+        self.operators = _OPERATOR_WORDS[language]
+
+    def run(self, words: list[str], i: int) -> tuple[int, int] | None:
+        """The number spelled by words[i:], and the index after it; None when words[i] starts no number."""
+        total, current, last, j = 0, 0, None, i
+        while j < len(words):
+            word = words[j]
+            if word in self.small and last in (None, "hundred", "thousand", "tens"):
+                if last == "tens" and (self.small[word] >= 10 or self.language == "es"):
+                    break  # "twenty twelve"; Spanish joins tens and units with "y" ("treinta y cinco")
+                if word in _ES_ARTICLE_ONE and self.language == "es" and last is None:
+                    nxt = words[j + 1] if j + 1 < len(words) else ""
+                    if nxt not in self.fractions and nxt not in self.thousands:
+                        break
+                current, last = current + self.small[word], "small"
+            elif word in self.tens and last in (None, "hundred", "thousand"):
+                current, last = current + self.tens[word], "tens"
+            elif word in self.hundreds and last in (None, "thousand"):
+                current, last = current + self.hundreds[word], "hundred"
+            elif word in self.multipliers and last in ("small", "tens"):
+                current, last = current * 100, "hundred"
+            elif word in self.thousands and last in (None, "small", "tens", "hundred"):
+                total, current, last = total + max(current, 1) * 1000, 0, "thousand"
+            elif word == "y" and self.language == "es" and last == "tens":
+                nxt = words[j + 1] if j + 1 < len(words) else ""
+                if nxt not in self.small or self.small[nxt] >= 10 or nxt in _ES_ARTICLE_ONE:
+                    break
+                j += 1
+                current, last = current + self.small[nxt], "small"
+            elif word == "and" and self.language == "en" and last in ("hundred", "thousand"):
+                nxt = words[j + 1] if j + 1 < len(words) else ""
+                if not (nxt in self.small or nxt in self.tens):
+                    break
+            else:
+                break
+            j += 1
+        if last is None:
+            return None
+        return total + current, j
+
+
+def _words_to_math(text: str, language: str) -> str:
+    words_of = _Words(language)
+    for pattern, replacement in _PHRASES[language]:
+        text = re.sub(pattern, replacement, text)
+    tokens = _WORD_TOKEN.findall(text)
+    # Number runs skip the spaces between their words; everything else keeps its spacing ("2y" stays one term).
+    at = [k for k, t in enumerate(tokens) if t.strip()]
+    words = [tokens[k] for k in at]
+    out: list[str] = []
+    i = 0
+    while i < len(words):
+        word = words[i]
+        found = words_of.run(words, i) if word.isalpha() else None
+        if word == "a" and language == "en" and i + 1 < len(words) and words[i + 1] in words_of.fractions:
+            found = (1, i + 1)
+        if found is None:
+            out.append(words_of.operators.get(word, "-" if word in words_of.signs else word))
+            out.append(_space_after(tokens, at, i))
+            i += 1
+            continue
+        start = i
+        value, i = found
+        piece = str(value)
+        nxt = words[i] if i < len(words) else ""
+        if nxt in words_of.fractions:
+            piece, i = f"{value}/{words_of.fractions[nxt]}", i + 1
+        elif nxt in words_of.points and i + 1 < len(words):
+            digits: list[str] = []
+            j = i + 1
+            while j < len(words) and (step := words_of.run(words, j)) is not None:
+                digits.append(str(step[0]))
+                j = step[1]
+            if digits:
+                piece, i = f"{value}.{''.join(digits)}", j
+        tail = words[i : i + 3]
+        if language == "en" and tail[:3] == ["and", "a", "half"]:
+            piece, i = f"{value} 1/2", i + 3
+        elif language == "es" and tail[:2] in (["y", "medio"], ["y", "media"]):
+            piece, i = f"{value} 1/2", i + 2
+        out.append(piece if i > start else word)
+        out.append(_space_after(tokens, at, i - 1))
+    return "".join(out)
+
+
+def _space_after(tokens: list[str], at: list[int], i: int) -> str:
+    """The whitespace that followed word i in the text ("" when the next token touches it)."""
+    k = at[i] + 1
+    return tokens[k] if k < len(tokens) and not tokens[k].strip() else ""
+
+
+def to_math(text: Any, language: str | None = None) -> str:
+    """Text as plain math: number words as digits and "equals" / "is" / "es igual a" / "vale" as "=", in `language`
+    ("en" | "es"; None tries English then Spanish words). Other words are kept."""
+    plain = _plain(text)
+    for lang in _languages(language):
+        plain = _words_to_math(plain, lang)
+    return " ".join(plain.split())
+
+
+# ---- expressions: our own parser, no eval ----------------------------------------------------------------------
+
+_TOKEN = re.compile(r"\s*(?:(?P<num>\d+(?:\.\d+)?|\.\d+)|(?P<sqrt>√|sqrt\b)|(?P<var>[a-z])|(?P<op>[-+*/÷^()]))")
+
+
+class _Bad(ValueError):
+    pass
+
+
+class _Parser:
+    """+ - * / ÷ ^ ( ) √ with implicit products ("2x", "3(x + 1)"); a written fraction bar binds tighter than × and
+    ÷, so "5/6 ÷ 1/3" is (5/6) ÷ (1/3) and "1/2x" is half of x. Values are sympy numbers and symbols, or Fractions
+    without sympy (then letters and roots are refused)."""
+
+    def __init__(self, text: str, letters: bool) -> None:
+        self.tokens = _tokens(text)
+        self.pos = 0
+        self.letters = letters
+        self.sp = _sympy()
+
+    def parse(self) -> Value:
+        if not self.tokens:
+            raise _Bad("empty")
+        value = self.expr()
+        if self.pos != len(self.tokens):
+            raise _Bad("trailing tokens")
+        return value
+
+    def peek(self) -> tuple[str, str] | None:
+        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+    def take(self) -> tuple[str, str]:
+        token = self.peek()
+        if token is None:
+            raise _Bad("unexpected end")
+        self.pos += 1
+        return token
+
+    def expr(self) -> Value:
+        value = self.term()
+        while (token := self.peek()) is not None and token[1] in ("+", "-"):
+            self.take()
+            value = value + self.term() if token[1] == "+" else value - self.term()
+        return value
+
+    def term(self) -> Value:
+        value = self.fraction()
+        while (token := self.peek()) is not None:
+            if token[1] in ("*", "÷"):
+                self.take()
+                value = value * self.fraction() if token[1] == "*" else _divide(value, self.fraction())
+            elif token[0] in ("num", "var", "sqrt") or token[1] == "(":
+                value = value * self.fraction()
+            else:
+                break
+        return value
+
+    def fraction(self) -> Value:
+        value = self.unary()
+        while (token := self.peek()) is not None and token[1] == "/":
+            self.take()
+            value = _divide(value, self.unary())
+        return value
+
+    def unary(self) -> Value:
+        token = self.peek()
+        if token is not None and token[1] in ("+", "-"):
+            self.take()
+            value = self.unary()
+            return -value if token[1] == "-" else value
+        return self.power()
+
+    def power(self) -> Value:
+        base = self.atom()
+        token = self.peek()
+        if token is None or token[1] != "^":
+            return base
+        self.take()
+        exponent = self.unary()
+        try:
+            whole = int(exponent)
+        except (TypeError, ValueError) as exc:
+            raise _Bad("exponent") from exc
+        if whole != exponent or abs(whole) > MAX_EXPONENT:
+            raise _Bad("exponent")
+        if whole < 0:
+            return _divide(1, base**-whole)
+        return base**whole
+
+    def atom(self) -> Value:
+        kind, text = self.take()
+        if kind == "num":
+            return self.sp.Rational(text) if self.sp is not None else Fraction(text)
+        if kind == "var":
+            if not self.letters or self.sp is None:
+                raise _Bad("letter")
+            return self.sp.Symbol(text)
+        if kind == "sqrt":
+            if self.sp is None:
+                raise _Bad("root")
+            return self.sp.sqrt(self.atom())
+        if text == "(":
+            value = self.expr()
+            if self.take()[1] != ")":
+                raise _Bad("brackets")
+            return value
+        raise _Bad(f"unexpected {text!r}")
+
+
+def _divide(a: Value, b: Value) -> Value:
+    try:
+        if b == 0:
+            raise _Bad("divide by zero")
+    except TypeError:  # a sympy expression with letters: never "== 0" as written
+        pass
+    return a / b
+
+
+def _tokens(text: str) -> list[tuple[str, str]]:
+    tokens: list[tuple[str, str]] = []
+    pos, text = 0, text.strip()
+    while pos < len(text):
+        found = _TOKEN.match(text, pos)
+        if not found:
+            if text[pos:].strip():
+                raise _Bad(f"not math at {pos}")
+            break
+        kind = found.lastgroup or "op"
+        tokens.append((kind, found.group(kind)))
+        pos = found.end()
+    return tokens
+
+
+def _expression(text: str, *, letters: bool = False) -> Value | None:
+    try:
+        value = _Parser(text, letters).parse()
+    except (_Bad, ValueError, TypeError, ZeroDivisionError, OverflowError, RecursionError):
+        return None
+    sp = _sympy()
+    if sp is not None and isinstance(value, sp.Basic) and value.has(sp.zoo, sp.nan, sp.oo, -sp.oo):
+        return None
+    return value
+
+
+def _number(value: Value) -> float | None:
+    """A real value as a float, else None (letters left, or not real)."""
+    try:
+        sp = _sympy()
+        if sp is not None and isinstance(value, sp.Basic):
+            if value.free_symbols:
+                return None
+            number = complex(value.evalf())
+            if abs(number.imag) > TOLERANCE:
+                return None
+            result = number.real
+        else:
+            result = float(value)
+    except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _close(a: Value, b: Value) -> bool:
+    x, y = _number(a), _number(b)
+    return x is not None and y is not None and math.isclose(x, y, rel_tol=TOLERANCE, abs_tol=TOLERANCE)
+
+
+_MIXED = re.compile(r"^(-?)\s*(\d+)\s+(\d+)\s*/\s*(\d+)$")
+_VALUE_CHARS = re.compile(r"[\d\s.+\-*/÷^()√±%]+")
+
+
+def _values(text: str) -> list[Value] | None:
+    """The value(s) of a written value: "5", "-3", "5/2", "2.5", "2 1/2", "√2", "±3" (two), "75%"; None otherwise."""
+    s = text.strip().rstrip(" .,;:!?+-*/÷^(").strip()
+    if s.count(")") > s.count("("):
+        s = s.rstrip(")").strip()
+    both = s.startswith("±")
+    s = s.lstrip("±").strip()
+    percent = s.endswith("%")
+    s = s.rstrip("%").strip()
+    if not s or "%" in s or "±" in s:
+        return None
+    mixed = _MIXED.match(s)
+    if mixed:
+        sign, whole, num, den = mixed.groups()
+        if int(den) == 0:
+            return None
+        sp = _sympy()
+        part = sp.Rational(int(num), int(den)) if sp is not None else Fraction(int(num), int(den))
+        value: Value = (-1 if sign else 1) * (int(whole) + part)
+    else:
+        value = _expression(s)
+        if value is None or _number(value) is None:
+            return None
+    if percent:
+        value = value / 100
+    return [value, -value] if both else [value]
+
+
+# ---- answers ---------------------------------------------------------------------------------------------------
+
+_PAIR = re.compile(r"\(\s*([^(),;]+?)\s*[,;]\s*([^(),;]+?)\s*\)")
+# "and" / "or" / "o" / "y" / "," between answers; a "y" followed by "=" is the letter y ("x = 5, y = 2").
+_CLAUSES = re.compile(
+    r"\s*(?:,(?!\d)|;|\n|&|\bor\b|\band\b|\bthen\b|\bso\b|\bo\b|\bluego\b|\bentonces\b|\by\b(?!\s*=)|\.\s)\s*"
+)
+_LABEL = re.compile(
+    r"^\s*(?:(?:the|my|your|our|final|correct|la|mi|tu|el)\s+)*"
+    r"(?:answers?|ans|solutions?|sol|results?|respuestas?|resp|solucion(?:es)?|resultados?)"
+    r"\b(?:\s+(?:correcta|final|correct))?\s*(?:[:=.\-]\s*|\s+(?=[-+\d(√±]))?"
+    r"|^\s*[ar]\d{0,3}\s*[:.]\s*"
+)
+# A letter set to something: the letter is not a term of an expression ("3x = 15", "x + 4 = 10" are no answers).
+_ASSIGNED = re.compile(r"(?<![\w.])([a-z])\s*=\s*")
+_TERM_END = re.compile(r"[\d)^*/÷+\-]\s*$")
+# A single letter right after a value makes it an expression ("x = 2y + 1", "x = 5x"); "y luego" is a word.
+_VARIABLE_NEXT = re.compile(r"\s*[a-z]\s*(?:[=+\-*/^(]|\d|$)")
+_LEADING_WORDS = re.compile(r"^(?:(?:[a-z]{2,}|i)\s+)+")
+
+
+def _value_run(text: str) -> tuple[str, str]:
+    """(the math at the start of `text`, what follows it)."""
+    found = _VALUE_CHARS.match(text)
+    if not found:
+        return "", text
+    return found.group(), text[found.end() :]
+
+
+def _assignment(clause: str) -> tuple[str, list[Value]] | None:
+    """("x", [5]) for "x = 5" / "so x = 15/3 = 5" / "i got x = 5 apples"; None when no lone letter is set to a value."""
+    for found in _ASSIGNED.finditer(clause):
+        before = clause[: found.start()]
+        if _TERM_END.search(before):
+            continue
+        rest = clause[found.end() :]
+        last = rest.rsplit("=", 1)[-1]  # "x = 15/3 = 5": the last value
+        run, after = _value_run(last.strip())
+        if not run.strip() or _VARIABLE_NEXT.match(after):
+            return None  # "x = 2y", "x = 5x": not a value
+        values = _values(run)
+        return (found.group(1), values) if values else None
+    return None
+
+
+def parse_answers(text: Any) -> Answers:
+    """A written or spoken answer as a set of (letter, value): "x = 5 or x = -3" -> {("x", 5), ("x", -3)},
+    "x = 5, y = 2" -> {("x", 5), ("y", 2)}, "5" -> {("", 5)}, "(2, 3)" -> {("#1", 2), ("#2", 3)}. Steps and problems
+    in the text ("3x + 5 = 20, x = 5") are skipped; an empty set when nothing reads as an answer."""
+    math_text = to_math(text)
+    if not math_text:
+        return _NONE
+    answers: set[Answer] = set()
+    pairs: list[tuple[str, str]] = []
+
+    def keep_pair(found: re.Match[str]) -> str:
+        pairs.append((found.group(1), found.group(2)))
+        return " ; "
+
+    math_text = _PAIR.sub(keep_pair, math_text)
+    for first, second in pairs:
+        a, b = _values(first), _values(second)
+        if a and b and len(a) == len(b) == 1:
+            answers |= {("#1", a[0]), ("#2", b[0])}
+    letter = ""
+    for raw in _CLAUSES.split(math_text):
+        clause = _LABEL.sub("", raw.strip(" .:!?")).strip()
+        if not clause:
+            continue
+        assigned = _assignment(clause)
+        if assigned is not None:
+            letter = assigned[0]
+            answers |= {(letter, v) for v in assigned[1]}
+            continue
+        if "=" in clause:
+            continue  # the problem or a step
+        run, after = _value_run(_LEADING_WORDS.sub("", clause))
+        if run.strip() and not _VARIABLE_NEXT.match(after):
+            values = _values(run)
+            if values:
+                answers |= {(letter, v) for v in values}
+    return frozenset(answers)
+
+
+def _letters(answers: Answers) -> set[str]:
+    return {letter for letter, _ in answers if letter}
+
+
+def _resolve_pairs(answers: Answers, other: Answers) -> Answers:
+    """A pair "(2, 3)" against "x = 2, y = 3": its entries are the other side's letters in alphabetical order."""
+    named = sorted(letter for letter in _letters(other) if not letter.startswith("#"))
+    if not any(letter.startswith("#") for letter, _ in answers) or len(named) != 2:
+        return answers
+    mapping = {"#1": named[0], "#2": named[1]}
+    return frozenset((mapping.get(letter, letter), v) for letter, v in answers)
+
+
+def _same_values(a: Iterable[Value], b: Iterable[Value]) -> bool:
+    left, right = list(a), list(b)
+    return all(any(_close(x, y) for y in right) for x in left) and all(any(_close(y, x) for x in left) for y in right)
+
+
+def compare(student: Answers, expected: Answers) -> bool | None:
+    """Whether two parsed answers say the same; None when either is empty or they can't be lined up."""
+    if not student or not expected:
+        return None
+    student, expected = _resolve_pairs(student, expected), _resolve_pairs(expected, student)
+    want, got = _letters(expected), _letters(student)
+    if len(want) >= 2:  # a system: each letter's value
+        if not got:
+            return None  # "7, 3": which value is which letter?
+        letters = want | got
+        return all(
+            _same_values([v for x, v in student if x == letter], [v for x, v in expected if x == letter])
+            for letter in letters
+        )
+    if len(got) >= 2:
+        return False  # two letters for a one-letter problem
+    return _same_values([v for _, v in student], [v for _, v in expected])
+
+
+def grade(student_text: Any, expected_text: Any) -> bool | None:
+    """True / False when the student's answer is / is not the expected one; None when either side can't be read."""
+    return compare(parse_answers(student_text), parse_answers(expected_text))
+
+
+def incomplete(student: Answers, expected: Answers) -> bool:
+    """Some of the expected values and none wrong, e.g. "x = 5" for "x = 5 or x = -3"."""
+    if not student or not expected or compare(student, expected) is not False:
+        return False
+    values = [v for _, v in expected]
+    return all(any(_close(v, e) for e in values) for _, v in student)
+
+
+def format_answers(answers: Answers) -> str | None:
+    """ "x = 5 or x = -3", "x = 7 and y = 3", "5/6"; None for an empty set."""
+    if not answers:
+        return None
+    items = sorted(answers, key=lambda a: (a[0], -(_number(a[1]) or 0.0)))
+    letters = _letters(answers)
+    parts = [f"{letter} = {_fmt(v)}" if letter else _fmt(v) for letter, v in items]
+    return (" and " if len(letters) >= 2 else " or ").join(parts)
+
+
+def _fmt(value: Value, *, decimals: bool = False) -> str:
+    """ "5", "-3", "5/6" ("2.5" with `decimals`, for a problem written with decimal points), "√13/2"."""
+    sp = _sympy()
+    if isinstance(value, Fraction) or (sp is not None and isinstance(value, sp.Rational)):
+        exact = Fraction(int(value.numerator), int(value.denominator))
+        if exact.denominator == 1:
+            return str(exact.numerator)
+        if decimals and _finite_decimal(exact.denominator):
+            return format(float(exact), "g")
+        return f"{exact.numerator}/{exact.denominator}"
+    return str(value).replace("sqrt", "√").replace("**", "^").replace("*", "")
+
+
+def _finite_decimal(denominator: int) -> bool:
+    for factor in (2, 5):
+        while denominator % factor == 0:
+            denominator //= factor
+    return denominator == 1
+
+
+# ---- solving the problem ---------------------------------------------------------------------------------------
+
+_INSTRUCTION = re.compile(
+    r"^\s*(?:solve|simplify|evaluate|compute|calculate|work\s+out|find|what\s+is|resuelve|calcula|simplifica|"
+    r"encuentra|halla|cuanto\s+es)\b(?:\s+(?:for|para)\s+[a-z]\b)?\s*[:,]?\s*"
+)
+_EQUATIONS = re.compile(r"\s*(?:,(?!\d)|;|\n|&|\band\b|(?<=[\w)])\s+y\s+(?=[\w(√-]))\s*")
+
+
+def _equations(problem: Any) -> list[str] | None:
+    # Said in words too ("three x plus five equals twenty"), as a model may copy it off the board.
+    text = to_math(_INSTRUCTION.sub("", _plain(problem).strip())).strip().rstrip(" ?.!")
+    text = re.sub(r"=\s*[?_\s]*$", "", text)  # "12 ÷ 4 = ?" asks for the value
+    if not text or len(text) > MAX_CHARS:
+        return None
+    if "=" not in text:
+        text = re.sub(r"(?<=\d)\s*x\s*(?=\d)", "*", text)  # "6 x 7" is a product, not a letter
+    parts = [p for p in _EQUATIONS.split(text) if p.strip()]
+    if not parts or len(parts) > MAX_LETTERS:
+        return None
+    if any(re.search(r"[a-z]{2,}", p.replace("sqrt", "")) for p in parts):
+        return None  # words left: a word problem
+    return parts
+
+
+def _sides(part: str) -> tuple[Value, Value] | None:
+    sides = part.split("=")
+    if len(sides) != 2:
+        return None
+    left, right = (_expression(s, letters=True) for s in sides)
+    return None if left is None or right is None else (left, right)
+
+
+def solve_text(problem: Any) -> Answers | None:
+    """The solution of a board or quiz problem: "3x + 5 = 20" -> {("x", 5)}, "x^2 - 2x - 15 = 0" -> {("x", 5),
+    ("x", -3)}, "x + y = 10 and x - y = 4" -> {("x", 7), ("y", 3)}, "1/2 + 1/3" -> {("", 5/6)}. None when there is
+    nothing to solve ("x = 5" is solved already) or it is not math code can solve."""
+    parts = _equations(problem)
+    if parts is None:
+        return None
+    sp = _sympy()
+    if sp is None:
+        from biobench_sar.rag.quiz_bank import solve_problem
+
+        solved = solve_problem(" and ".join(parts)) if len(parts) == 1 else None
+        return parse_answers(solved) or None
+    try:
+        return _solve(parts, sp)
+    except Exception as exc:  # sympy on odd input: never break a reply over it
+        log.debug("could not solve %r: %s", problem, exc)
+        return None
+
+
+def _solve(parts: list[str], sp: Any) -> Answers | None:
+    if len(parts) == 1 and "=" not in parts[0]:
+        value = _expression(parts[0])
+        return frozenset({("", sp.nsimplify(value))}) if value is not None and _number(value) is not None else None
+    equations: list[Any] = []
+    for part in parts:
+        sides = _sides(part)
+        if sides is None:
+            return None
+        equations.append(sp.expand(sides[0] - sides[1]))
+    if len(parts) == 1:
+        left, right = _sides(parts[0]) or (None, None)
+        if isinstance(left, sp.Symbol) and _number(right) is not None:
+            return None  # "x = 5": already solved
+        if isinstance(right, sp.Symbol) and _number(left) is not None:
+            return None
+    symbols = sorted(set().union(*(e.free_symbols for e in equations)), key=str)
+    if not symbols or len(symbols) > MAX_LETTERS or (len(equations) < len(symbols) and len(symbols) > 1):
+        return None
+    for equation in equations:
+        try:
+            if sp.Poly(equation, *symbols).total_degree() > MAX_DEGREE:
+                return None
+        except sp.PolynomialError:
+            return None
+    found: set[Answer] = set()
+    for solution in sp.solve(equations, symbols, dict=True):
+        if set(solution) != set(symbols):
+            continue  # one of a family: not one answer
+        values = {str(s): sp.nsimplify(v) for s, v in solution.items()}
+        if any(_number(v) is None for v in values.values()):
+            continue  # complex
+        found |= set(values.items())
+    return frozenset(found) or None
+
+
+def solved_form(text: Any) -> bool:
+    """Whether a board line is an answer already ("x = 5", "x = 5 or x = -3"), not a problem to solve."""
+    return bool(parse_answers(text)) and solve_text(text) is None
+
+
+# ---- a reply that states the solution --------------------------------------------------------------------------
+
+_SENTENCES = re.compile(r"(?<=[.!?])\s+")
+_ANSWER_WORDS = re.compile(r"\b(?:answer|solution|result|respuesta|solucion|resultado)\s*(?:=|:)\s*")
+_EQUALS = re.compile(r"=\s*")
+
+
+def _stated(sentence: str, solutions: Answers, language: str | None) -> bool:
+    text = to_math(sentence, language)
+    by_letter: dict[str, list[Value]] = {}
+    for letter, value in solutions:
+        by_letter.setdefault(letter, []).append(value)
+    every = [v for _, v in solutions]
+    # An answer written without its letter ("8", "(7, 3)") is any letter's value: "x = 8" gives it away too.
+    named = any(letter and not letter.startswith("#") for letter in by_letter)
+
+    def says(found: re.Match[str], wanted: list[Value]) -> bool:
+        run, after = _value_run(text[found.end() :])
+        if not run.strip() or _VARIABLE_NEXT.match(after):
+            return False
+        values = _values(run)
+        return bool(values) and any(_close(v, w) for v in values for w in wanted)
+
+    for found in _ASSIGNED.finditer(text):
+        letter = found.group(1)
+        before = text[: found.start()]
+        wanted = by_letter.get(letter) or ([] if named else every)
+        if not wanted or _TERM_END.search(before):
+            continue
+        if says(found, wanted):
+            return True
+    if any(says(found, every) for found in _ANSWER_WORDS.finditer(text)):
+        return True
+    if "" in by_letter:  # arithmetic: "... = 5/6" anywhere gives the result away
+        return any(says(found, by_letter[""]) for found in _EQUALS.finditer(text))
+    return False
+
+
+def solution_sentences(text: Any, solutions: Answers | None, language: str | None = None) -> list[str]:
+    """The sentences of a reply that state the problem's solution as an answer ("x = 5", "x is 5", "x equals five",
+    "la respuesta es cinco", "x es igual a 5"), as written; [] without solutions."""
+    if not solutions:
+        return []
+    sentences = [s.strip() for s in _SENTENCES.split(str(text or "").strip()) if s.strip()]
+    return [s for s in sentences if _stated(s, solutions, language)]
+
+
+def states_solution(text: Any, solutions: Answers | None, language: str | None = None) -> bool:
+    return bool(solution_sentences(text, solutions, language))
+
+
+def without_solution(text: Any, solutions: Answers | None, language: str | None = None) -> str:
+    """The reply without the sentences that state the solution."""
+    sentences = [s.strip() for s in _SENTENCES.split(str(text or "").strip()) if s.strip()]
+    if not solutions:
+        return " ".join(sentences)
+    return " ".join(s for s in sentences if not _stated(s, solutions, language))
+
+
+# ---- one hint for the next step --------------------------------------------------------------------------------
+
+HINTS: dict[str, dict[str, str]] = {
+    "en": {
+        "substitute": "Put {value} in place of {letter} in the other equation.",
+        "eliminate": "Add or subtract the two equations so that one letter cancels out.",
+        "square_root": "Get {letter}^2 alone, then take the square root of both sides. There are two answers.",
+        "factor_pair": "Factor it: look for two numbers that multiply to {c} and add to {b}.",
+        "factor": "Move everything to one side so it equals 0, then try to factor it.",
+        "brackets": "Start by multiplying out the brackets.",
+        "both_sides": "Get all the {letter} terms on one side first.",
+        "like_terms": "Combine the {letter} terms first.",
+        "subtract": "Subtract {b} from both sides first.",
+        "add": "Add {b} to both sides first.",
+        "multiply": "Multiply both sides by {k}.",
+        "divide": "Divide both sides by {a}.",
+        "flip": "Flip the second fraction and multiply.",
+        "times": "Multiply the tops together and the bottoms together.",
+        "same_bottom": "The bottoms are the same, so work with the tops.",
+        "common": "Find a common denominator first. What number do {d1} and {d2} both go into?",
+    },
+    "es": {
+        "substitute": "Pon {value} en lugar de la {letter} en la otra ecuación.",
+        "eliminate": "Suma o resta las dos ecuaciones para que se elimine una letra.",
+        "square_root": "Deja sola la {letter}^2 y saca la raíz cuadrada en ambos lados. Hay dos respuestas.",
+        "factor_pair": "Factoriza: busca dos números que multiplicados den {c} y sumados den {b}.",
+        "factor": "Pasa todo a un lado para que quede igual a 0 y luego intenta factorizar.",
+        "brackets": "Empieza por quitar los paréntesis multiplicando.",
+        "both_sides": "Primero junta todos los términos con {letter} en un solo lado.",
+        "like_terms": "Primero junta los términos con {letter}.",
+        "subtract": "Primero resta {b} en ambos lados.",
+        "add": "Primero suma {b} en ambos lados.",
+        "multiply": "Multiplica ambos lados por {k}.",
+        "divide": "Divide ambos lados entre {a}.",
+        "flip": "Voltea la segunda fracción y multiplica.",
+        "times": "Multiplica los numeradores entre sí y los denominadores entre sí.",
+        "same_bottom": "Los denominadores son iguales, así que trabaja con los numeradores.",
+        "common": "Primero busca un denominador común. ¿Qué número se puede dividir entre {d1} y entre {d2}?",
+    },
+}
+_DENOMINATORS = re.compile(r"\d+\s*/\s*(\d+)")
+
+
+def hint_for(problem: Any, language: str = "en") -> str | None:
+    """One hint for the first step of `problem`, never its answer ("3x + 5 = 20" -> "Subtract 5 from both sides
+    first."); None when code can't tell (a word problem, plain whole numbers)."""
+    texts = HINTS["es" if language == "es" else "en"]
+    parts = _equations(problem)
+    sp = _sympy()
+    if parts is None or sp is None:
+        return None
+    try:
+        return _hint(parts, texts, sp)
+    except Exception as exc:
+        log.debug("no hint for %r: %s", problem, exc)
+        return None
+
+
+def _hint(parts: list[str], texts: dict[str, str], sp: Any) -> str | None:
+    if len(parts) == 1 and "=" not in parts[0]:
+        return _arithmetic_hint(parts[0], texts)
+    sides = [_sides(part) for part in parts]
+    if any(s is None for s in sides):
+        return None
+    pairs = [s for s in sides if s is not None]
+    if len(pairs) >= 2:
+        for left, right in pairs:
+            for lone, other in ((left, right), (right, left)):
+                if isinstance(lone, sp.Symbol) and other.free_symbols - {lone}:
+                    return texts["substitute"].format(value=_fmt(other), letter=lone)
+        return texts["eliminate"]
+    left, right = pairs[0]
+    symbols = sorted((left - right).free_symbols, key=str)
+    if len(symbols) != 1:
+        return None
+    letter = symbols[0]
+    poly = sp.Poly(sp.expand(left - right), letter)
+    if poly.degree() == 2:
+        a, b, c = (poly.coeff_monomial(letter**n) for n in (2, 1, 0))
+        if b == 0:
+            return texts["square_root"].format(letter=letter)
+        if a == 1 and all(v.is_integer for v in (b, c)) and right == 0:
+            return texts["factor_pair"].format(b=_fmt(b), c=_fmt(c))
+        return texts["factor"]
+    if poly.degree() != 1:
+        return None
+    raw = parts[0]
+    if "(" in raw:
+        return texts["brackets"]
+    if letter in left.free_symbols and letter in right.free_symbols:
+        return texts["both_sides"].format(letter=letter)
+    side, side_text = (left, raw.split("=")[0]) if letter in left.free_symbols else (right, raw.split("=")[1])
+    if len(re.findall(rf"(?<![a-z]){letter}(?![a-z])", side_text)) >= 2:
+        return texts["like_terms"].format(letter=letter)
+    linear = sp.Poly(sp.expand(side), letter)
+    a, b = linear.coeff_monomial(letter), linear.coeff_monomial(1)
+    if b != 0:
+        return texts["subtract" if b > 0 else "add"].format(b=_fmt(abs(b), decimals="." in raw))
+    if a == 1:
+        return None
+    if a.is_Rational and a.p == 1 and a.q > 1:
+        return texts["multiply"].format(k=a.q)
+    return texts["divide"].format(a=_fmt(a, decimals="." in raw))
+
+
+def _arithmetic_hint(expression: str, texts: dict[str, str]) -> str | None:
+    if "÷" in expression or re.search(r"/\s*\(?\s*\d+\s*/", expression):
+        return texts["flip"] if _DENOMINATORS.search(expression) else None
+    denominators = [int(d) for d in _DENOMINATORS.findall(expression)]
+    if not denominators:
+        return None
+    if "*" in expression:
+        return texts["times"]
+    if len(set(denominators)) == 1:
+        return texts["same_bottom"]
+    return texts["common"].format(d1=denominators[0], d2=denominators[1])

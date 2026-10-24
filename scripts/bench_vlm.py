@@ -15,8 +15,16 @@ Crop: a small "3.5 - x^2 = 0.25" on a big board sent as the high-res ink crop: C
 board (board_answer of a quiz check: "3.5", then the minus sign) and CRH a help reply whose first step fits the signs
 and decimals as written; CRW / CRHW the same on the whole board, as before the crop.
 Biology: A missing step, B complete, AB complete after an earlier "not yet".
+Graded in code (grading.py): QQC/QQW/QQP a quadratic x^2 - 2x - 15 = 0 checked right / wrong / half right, QSC/QSW a
+system right / wrong, EQQW the wrong quadratic in Spanish. A wrong answer must be "error" with one hint and no answer.
+
+--flow runs the whole pipeline (Assistant + this model, a synthetic board, a temporary quiz bank): a quiz with a wrong
+then right answer on 3x + 5 = 20, a wrong then right quadratic, then "stop the quiz" -> the confirmation -> "yes" ->
+stopped with the score. --flow es runs it in Spanish ("Termina el quiz" -> "Sí").
 
 Example (the final-wiring live check): --scenarios --profile math --runs 2 --only ELO,ELE,EH,EHA,EQD,EQC,EQW,CR
+Code grading: --scenarios --profile math --runs 2 --only QC,QW,QQC,QQW,QQP,QSC,QSW,H,HA,EQC,EQW,EQQW
+Pipeline: --flow en --runs 2 and --flow es --runs 2
 Answer-leak check: --scenarios --profile math --runs 3 --only EQCN,EQWN and --runs 2 --only H,EH,HS,EHS
 """
 
@@ -37,8 +45,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from biobench_sar import grading
 from biobench_sar.lang import detect_language
-from biobench_sar.llm.vlm_client import OFFER_QUESTION_ES, VLMClient, reads_problem
+from biobench_sar.llm.vlm_client import OFFER_QUESTION_ES, VLMClient, praises, reads_problem
 from biobench_sar.schemas import AvatarAction, InkRegion, RetrievedChunk
 
 SIZE = (1920, 1080)
@@ -139,7 +148,8 @@ def seed_context(*needles: str, stripped: bool = False) -> list[RetrievedChunk]:
 
 
 def leaks_answer(spoken: str) -> bool:
-    return bool(_LEAK_RE.search(spoken))
+    """The value of x in 3x + 5 = 20 given away: the regex, or the reply stating the solution sympy finds."""
+    return bool(_LEAK_RE.search(spoken)) or grading.states_solution(spoken, grading.solve_text(EQUATION))
 
 
 def has_notation(spoken: str) -> bool:
@@ -214,17 +224,24 @@ def make_flowchart(steps: list[str]) -> tuple[bytes, list[InkRegion]]:
     return _jpeg(img), regions
 
 
-def make_board(lines: list[str]) -> tuple[bytes, list[InkRegion]]:
-    """Marker-style lines of math, one ink region per line, in projector coordinates."""
-    img = np.full((SIZE[1], SIZE[0], 3), 255, np.uint8)
-    font, scale, thick = cv2.FONT_HERSHEY_SIMPLEX, 3.0, 8
+def draw_board(lines: list[str], size: tuple[int, int] = SIZE) -> tuple[np.ndarray, list[InkRegion]]:
+    """Marker-style lines of math on a white board of `size`, one ink region per line, in projector coordinates."""
+    img = np.full((size[1], size[0], 3), 255, np.uint8)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    scale, thick, step = 3.0 * size[0] / SIZE[0], max(3, round(8 * size[0] / SIZE[0])), round(260 * size[1] / SIZE[1])
     regions: list[InkRegion] = []
     for i, line in enumerate(lines):
         (w, h), base = cv2.getTextSize(line, font, scale, thick)
-        x, y = 300, 300 + i * 260
+        x, y = round(300 * size[0] / SIZE[0]), round(300 * size[1] / SIZE[1]) + i * step
         cv2.putText(img, line, (x, y), font, scale, (20, 20, 20), thick, cv2.LINE_AA)
         top, height = y - h, h + base
         regions.append({"x": x, "y": top, "w": w, "h": height, "cx": x + w // 2, "cy": top + height // 2})
+    return img, regions
+
+
+def make_board(lines: list[str]) -> tuple[bytes, list[InkRegion]]:
+    """Marker-style lines of math, one ink region per line, in projector coordinates."""
+    img, regions = draw_board(lines)
     return _jpeg(img), regions
 
 
@@ -807,9 +824,102 @@ NO_FILES_SCENARIOS = {
         language="es",
     ),
 }
+# ---- graded in code: several values and systems ----------------------------------------------------------------
+QUADRATIC = "x^2 - 2x - 15 = 0"
+QUADRATIC_TASK = {
+    "kind": "quiz",
+    "stage": "check",
+    "number": 10,
+    "total": 10,
+    "problem": QUADRATIC,
+    "answer": "x = 5 or x = -3",
+    "next_problem": None,
+}
+SYSTEM = "x + y = 10 and x - y = 4"
+SYSTEM_TASK = {**QUADRATIC_TASK, "number": 9, "problem": SYSTEM, "answer": "x = 7 and y = 3"}
+
+
+def _never_states(problem: str, language: str = "en") -> Callable[[str], str | None]:
+    """A wrong answer's reply: "Not quite" with a hint, never praise, never the solution."""
+    solutions = grading.solve_text(problem)
+
+    def check(spoken: str) -> str | None:
+        if grading.states_solution(spoken, solutions, language):
+            return "gave the solution"
+        if not re.search(r"^\s*(?:casi|not\s+quite)\b", spoken, re.I):
+            return "no 'Not quite' / 'Casi'"
+        return "praised a wrong answer" if praises(spoken, language) else None
+
+    return check
+
+
+GRADED_SCENARIOS = {
+    "QQC": Scenario(
+        f"quiz check {QUADRATIC}, right: x = 5 or x = -3",
+        "Is my answer right?",
+        lambda: make_board([QUADRATIC, "x = 5 or x = -3"]),
+        "celebrating",
+        mode="quiz",
+        task=QUADRATIC_TASK,
+        context=[],
+        check=_graded,
+    ),
+    "QQW": Scenario(
+        f"quiz check {QUADRATIC}, wrong: x = 7 or x = -3",
+        "Is my answer right?",
+        lambda: make_board([QUADRATIC, "x = 7 or x = -3"]),
+        "error",
+        mode="quiz",
+        task=QUADRATIC_TASK,
+        context=[],
+        check=_all(_graded, _never_states(QUADRATIC)),
+    ),
+    "QQP": Scenario(
+        f"quiz check {QUADRATIC}, half right: x = 5",
+        "Is my answer right?",
+        lambda: make_board([QUADRATIC, "x = 5"]),
+        "error",
+        mode="quiz",
+        task=QUADRATIC_TASK,
+        context=[],
+        check=_all(_graded, _never_states(QUADRATIC)),
+    ),
+    "QSC": Scenario(
+        f"quiz check the system {SYSTEM}, right: x = 7, y = 3",
+        "Check my answer.",
+        lambda: make_board(["x + y = 10", "x - y = 4", "x = 7, y = 3"]),
+        "celebrating",
+        mode="quiz",
+        task=SYSTEM_TASK,
+        context=[],
+        check=_graded,
+    ),
+    "QSW": Scenario(
+        f"quiz check the system {SYSTEM}, wrong: x = 8, y = 2",
+        "Check my answer.",
+        lambda: make_board(["x + y = 10", "x - y = 4", "x = 8, y = 2"]),
+        "error",
+        mode="quiz",
+        task=SYSTEM_TASK,
+        context=[],
+        check=_all(_graded, _never_states(SYSTEM)),
+    ),
+    "EQQW": Scenario(
+        f"ES quiz check {QUADRATIC}, wrong: x = 7 or x = -3",
+        "¿Está bien mi respuesta?",
+        lambda: make_board([QUADRATIC, "x = 7 o x = -3"]),
+        "error",
+        mode="quiz",
+        task=QUADRATIC_TASK,
+        context=[],
+        check=_all(_graded, _never_states(QUADRATIC, "es"), spanish),
+        language="es",
+    ),
+}
 MATH_SCENARIOS.update(SPANISH_SCENARIOS)
 MATH_SCENARIOS.update(NO_FILES_SCENARIOS)
 MATH_SCENARIOS.update(CROP_SCENARIOS)
+MATH_SCENARIOS.update(GRADED_SCENARIOS)
 SCENARIOS = {"biology": BIO_SCENARIOS, "math": MATH_SCENARIOS}
 
 
@@ -866,6 +976,145 @@ def run_scenarios(
         )
 
 
+# ---- the whole pipeline --------------------------------------------------------------------------------------------
+FLOW_PROBLEMS = [("3x + 5 = 20", "x = 5"), (QUADRATIC, "x = 5 or x = -3"), (SYSTEM, "x = 7 and y = 3")]
+
+
+class FlowStep(NamedTuple):
+    query: str
+    board: list[str]
+    expected: str  # the animation state, "" for any
+    check: Callable[[dict[str, Any]], str | None]  # the turn's {"avatar", "said", "tutor"} -> a failure reason
+
+
+def _said(*needles: str) -> Callable[[dict[str, Any]], str | None]:
+    def check(turn: dict[str, Any]) -> str | None:
+        text = turn["said"].lower()
+        return None if all(n.lower() in text for n in needles) else f"did not say {needles}"
+
+    return check
+
+
+def _graded_step(verdict: str, problem: str, language: str = "en") -> Callable[[dict[str, Any]], str | None]:
+    never = _never_states(problem, language)
+
+    def check(turn: dict[str, Any]) -> str | None:
+        if turn["avatar"]["highlight"] is None:
+            return "no highlight on the answer"
+        return never(turn["said"]) if verdict == "wrong" else None
+
+    return check
+
+
+def _confirming(turn: dict[str, Any]) -> str | None:
+    return None if turn["tutor"].get("confirm_stop") is True and turn["tutor"]["quiz"] else "no confirm_stop"
+
+
+def _stopped(*needles: str) -> Callable[[dict[str, Any]], str | None]:
+    said = _said(*needles)
+
+    def check(turn: dict[str, Any]) -> str | None:
+        if turn["tutor"]["quiz"] is not None or turn["tutor"].get("confirm_stop"):
+            return "the quiz is still running"
+        return said(turn)
+
+    return check
+
+
+Q1, Q2 = FLOW_PROBLEMS[0][0], FLOW_PROBLEMS[1][0]
+FLOWS: dict[str, list[FlowStep]] = {
+    "en": [
+        FlowStep("Quiz me.", [], "idle", _said("problem one")),
+        FlowStep("Check my answer.", [Q1, "x = 7"], "error", _graded_step("wrong", Q1)),
+        FlowStep("Check my answer.", [Q1, "x = 5"], "celebrating", _graded_step("right", Q1)),
+        FlowStep("Check my answer.", [Q2, "x = 7 or x = -3"], "error", _graded_step("wrong", Q2)),
+        FlowStep("Check my answer.", [Q2, "x = 5 or x = -3"], "celebrating", _graded_step("right", Q2)),
+        FlowStep("Stop the quiz.", [], "idle", _confirming),
+        # Both problems were missed once first: none counts as solved on the first try.
+        FlowStep("Yes.", [], "idle", _stopped("the quiz is over", "zero of three")),
+    ],
+    "es": [
+        FlowStep("Hazme un quiz.", [], "idle", _said("problema uno")),
+        FlowStep("Revisa mi respuesta.", [Q1, "x = 7"], "error", _graded_step("wrong", Q1, "es")),
+        FlowStep("Revisa mi respuesta.", [Q1, "x = 5"], "celebrating", _graded_step("right", Q1, "es")),
+        FlowStep("Revisa mi respuesta.", [Q2, "x = 7 o x = -3"], "error", _graded_step("wrong", Q2, "es")),
+        FlowStep("Termina el quiz.", [], "idle", _confirming),
+        FlowStep("Sí.", [], "idle", _stopped("terminamos el quiz", "cero de tres")),
+    ],
+}
+
+
+class _FlowServices:
+    """The pipeline's services around a real model: the board a step shows, no notes, no voice."""
+
+    def __init__(self, client: VLMClient) -> None:
+        self.vlm = client
+        self.vision = self
+        self.store = self
+        self.tts = self
+        self.frame: Any = None
+
+    def latest_warped(self) -> Any:
+        return self.frame
+
+    def query(self, *_: Any, **__: Any) -> list[RetrievedChunk]:
+        return []
+
+    def speak(self, *_: Any, **__: Any) -> None:
+        return None
+
+
+def run_flow(client: VLMClient, language: str, runs: int) -> None:
+    """The Assistant pipeline with this model: real ink detection on a synthetic board, a temporary quiz bank."""
+    import tempfile
+
+    from biobench_sar.assistant import Assistant
+    from biobench_sar.config import Settings
+    from biobench_sar.rag.quiz_bank import QuizProblem
+
+    for run in range(runs):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Settings(
+                profile="math",
+                selection_file=Path(tmp) / "selection.json",
+                quiz_bank_file=Path(tmp) / "quiz_bank.json",
+                quiz_length=len(FLOW_PROBLEMS),
+                language=language,
+            )
+            events: list[tuple[str, dict[str, Any]]] = []
+            assistant = Assistant(settings, lambda name, data, seen=events: seen.append((name, data)), _inline)
+            problems = [QuizProblem(p, a, "flow", 1, "flow.csv") for p, a in FLOW_PROBLEMS]
+            assistant.quiz_bank.replace_source("flow.csv", problems)
+            services = _FlowServices(client)
+            assistant.services = services
+            passed = 0
+            for step in FLOWS[language]:
+                services.frame = draw_board(step.board, settings.projector_size)[0] if step.board else None
+                events.clear()
+                t = time.perf_counter()
+                assistant.handle_query(step.query)
+                took = time.perf_counter() - t
+                avatar = next(d for n, d in reversed(events) if n == "avatar_update")
+                said = next((d["text"] for n, d in reversed(events) if n == "speak"), avatar["spoken_text"])
+                turn = {"avatar": avatar, "said": said, "tutor": assistant.tutor.to_dict()}
+                state_ok = not step.expected or avatar["animation_state"] == step.expected
+                fails = [] if state_ok else [f"state {avatar['animation_state']}"]
+                fails += [r] if (r := step.check(turn)) else []
+                passed += not fails
+                quiz = turn["tutor"]["quiz"] or {}
+                print(
+                    f"  [flow {language} run {run + 1}] {step.query!r} board={step.board} -> {took:.1f}s "
+                    f"{avatar['animation_state']} ({avatar['target_x']},{avatar['target_y']}) hl={avatar['highlight']} "
+                    f"{'ok' if not fails else 'FAIL: ' + ', '.join(fails)} {said!r} "
+                    f"score={quiz.get('score')} n={quiz.get('number')} confirm={turn['tutor'].get('confirm_stop')}"
+                )
+            print(f"flow {language} run {run + 1}: {passed}/{len(FLOWS[language])} steps pass")
+
+
+def _inline(fn: Callable[..., Any], *args: Any) -> None:
+    fn(*args)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", type=int, default=3)
@@ -877,6 +1126,9 @@ def main() -> None:
     ap.add_argument("--only", help="comma-separated scenario keys, e.g. H,QC")
     ap.add_argument("--runs", type=int, default=5, help="runs per scenario")
     ap.add_argument("--raw", action="store_true", help="grade the model without evaluate's math post-processing")
+    ap.add_argument(
+        "--flow", choices=sorted(FLOWS), help="run the whole pipeline: a quiz checked in code, then stopped"
+    )
     args = ap.parse_args()
     if args.cold:
         import requests
@@ -888,6 +1140,10 @@ def main() -> None:
     t0 = time.perf_counter()
     client.warmup()
     print(f"warmup: {time.perf_counter() - t0:.1f}s")
+    if args.flow:
+        client.profile = "math"
+        run_flow(client, args.flow, args.runs)
+        return
     if args.scenarios:
         run_scenarios(client, args.runs, args.profile, args.only.split(",") if args.only else None, raw=args.raw)
         return

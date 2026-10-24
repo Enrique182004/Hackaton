@@ -586,3 +586,66 @@ def test_invented_problems_are_progressive_and_solvable() -> None:
             value = p.answer.split("=")[1].strip()  # type: ignore[union-attr]
             assert value.isdigit() and int(value) > 0, p  # a whole positive number for a middle-school quiz
     assert invent_problem(1, 1).level == 1 and invent_problem(5, 1).level == 6
+
+
+@pytest.mark.parametrize(
+    ("text", "kept"),
+    [
+        ("1. 3x + 5 = 20\nRespuesta correcta: x = 5", "1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20\nRespuesta final: x = 5", "1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20\nResultado: x = 5", "1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20\nResult: x = 5", "1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20\nR: 5", "1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20\nResp. 5", "1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20\nSol 5", "1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20\nSol. x = 5", "1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20\nSolución: x = 5", "1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20\nAns. 5", "1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20\nAnswer x = 5", "1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20\nAnswer - x = 5", "1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20\nAnswer： x = 5", "1. 3x + 5 = 20"),
+        ("1. 2x = 16\nThe answer is 8.", "1. 2x = 16"),
+        ("1. 2x = 16\nLa respuesta es 8.", "1. 2x = 16"),
+        ("1. 2x = 16\nEl resultado es 8.", "1. 2x = 16"),
+        ("Q: 3x + 5 = 20\nA: x = 5", "Q: 3x + 5 = 20"),
+        ("Q1. 3x + 5 = 20\nA1. x = 5", "Q1. 3x + 5 = 20"),
+        ("1. 3x + 5 = 20 (answer： 5)", "1. 3x + 5 = 20"),
+        ("1. 2x = 16. The answer is 8.", "1. 2x = 16."),
+        ("Q1. 2x = 16 A1. x = 8", "Q1. 2x = 16"),
+        ("Q: 2x = 16 A: x = 8", "Q: 2x = 16"),
+        ("1. 3x + 5 = 20 Ans. 5", "1. 3x + 5 = 20"),
+        # not answers: prose and problems that only look like labels
+        ("If both sides match, the answer is correct.", "If both sides match, the answer is correct."),
+        ("Answer the questions below.", "Answer the questions below."),
+        ("Answers will vary.", "Answers will vary."),
+        ("Find the result: 3 + 4", "Find the result: 3 + 4"),
+        ("Solve: 3x + 5 = 20", "Solve: 3x + 5 = 20"),
+        ("El sol sale temprano.", "El sol sale temprano."),
+        ("Results show the line goes up.", "Results show the line goes up."),
+        ("Answer 5 questions.", "Answer 5 questions."),
+    ],
+)
+def test_strip_answers_label_variants(text: str, kept: str) -> None:
+    assert strip_answers(text) == kept
+
+
+def test_answer_label_variants_are_read_into_the_quiz_bank() -> None:
+    from biobench_sar.rag.quiz_bank import answer_label_text
+
+    text = (
+        "Worksheet\nQ1. 3x + 5 = 20\nA1. x = 5\nQ2. 2x = 16\nThe answer is 8.\nQ3. x + 1 = 2\nR: 1\n"
+        "Q4. 5x = 10\nResp. 2\nQ5. x - 2 = 3\nAnswer x = 5\nQ6. 7x = 14 (solution: x = 2)\nQ7. x + 4 = 5\n"
+        "Respuesta correcta： x = 1"
+    )
+    found = {p.problem: p.answer for p in parse_worksheet_text(text, "w.md")}
+    assert found == {
+        "3x + 5 = 20": "x = 5",
+        "2x = 16": "8",
+        "x + 1 = 2": "1",
+        "5x = 10": "2",
+        "x - 2 = 3": "x = 5",
+        "7x = 14": "x = 2",
+        "x + 4 = 5": "x = 1",
+    }
+    assert answer_label_text("Answer the questions below.") is None and answer_label_text("Sol y sombra") is None
+    assert answer_label_text("Resultado: 12") == "12"
