@@ -5,10 +5,13 @@ Also what the pages' readers rely on: the docs and the seed documents must stay 
 
 from __future__ import annotations
 
+import functools
+import html
 import json
 import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -39,6 +42,42 @@ BLAND_FIRST_CHOICES = {"inter", "roboto", "arial", "helvetica", "system-ui", "-a
 
 def template_ids(name: str) -> list[str]:
     return re.findall(r'\bid="([^"]+)"', (TEMPLATES / name).read_text(encoding="utf-8"))
+
+
+def _dataset_key(attr: str) -> str:
+    return re.sub(r"-([a-z0-9])", lambda m: m.group(1).upper(), attr.removeprefix("data-"))
+
+
+class _NodeReader(HTMLParser):
+    """Every element the JS can reach: an id, or a data-i18n* text for i18n.js to fill in."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.nodes: list[dict[str, object]] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"html", "body"}:
+            return
+        values = {name: value or "" for name, value in attrs}
+        data = {_dataset_key(name): value for name, value in values.items() if name.startswith("data-")}
+        if "id" in values or any(key.startswith("i18n") for key in data):
+            self.nodes.append({"id": values.get("id", ""), "tag": tag, "data": data, "hidden": "hidden" in values})
+
+
+def template_nodes(name: str) -> list[dict[str, object]]:
+    reader = _NodeReader()
+    reader.feed((TEMPLATES / name).read_text(encoding="utf-8"))
+    return reader.nodes
+
+
+@functools.cache
+def strings() -> dict[str, dict[str, str]]:
+    """i18n.js's STRINGS, read by node so the tests see exactly what the pages use."""
+    script = f"import {{ STRINGS }} from {json.dumps((STATIC / 'js' / 'i18n.js').as_uri())};"
+    script += "console.log(JSON.stringify(STRINGS));"
+    proc = subprocess.run([NODE or "node", "--input-type=module", "-e", script], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
 
 
 def without_noscript(html: str) -> str:
@@ -81,17 +120,16 @@ def test_dashboard_font_stacks_fall_back_to_local_fonts() -> None:
 
 
 def run_node(tmp_path: Path, template: str, body: str) -> str:
-    # A "type": "module" package makes any node version load the dashboard's .js files as ES modules.
+    # A "type": "module" package makes any node version load the pages' .js files as ES modules. The layout
+    # mirrors static/js: the projector's main.js and i18n.js beside the dashboard/ folder.
     shutil.copytree(STATIC / "js" / "dashboard", tmp_path / "dashboard")
+    for name in ("main.js", "i18n.js"):
+        shutil.copy(STATIC / "js" / name, tmp_path / name)
     (tmp_path / "package.json").write_text('{"type": "module"}', encoding="utf-8")
     prelude = (
         'import assert from "node:assert/strict";\n'
-        'import vm from "node:vm";\n'
-        'import { readFileSync } from "node:fs";\n'
         f"import {{ installDom, installFetch, installIo, settle }} from {json.dumps(FAKE_DOM.as_uri())};\n"
-        f"const IDS = {json.dumps(template_ids(template))};\n"
-        f"const PROJECTOR_JS = {json.dumps(str(STATIC / 'js' / 'main.js'))};\n"
-        "const runClassic = (path) => vm.runInThisContext(readFileSync(path, 'utf8'), { filename: path });\n"
+        f"const NODES = {json.dumps(template_nodes(template))};\n"
     )
     # Polling loops keep the event loop alive, so a passing scenario exits explicitly.
     script = tmp_path / "scenario.mjs"
@@ -102,7 +140,7 @@ def run_node(tmp_path: Path, template: str, body: str) -> str:
 
 
 DASHBOARD = """
-const doc = installDom(IDS);
+const doc = installDom(NODES);
 const $ = (id) => doc.getElementById(id);
 const LISTENING = "Listening… ask your question now. It stops by itself after about 5 seconds.";
 const text = (node) => (typeof node === "string" ? node : [node.textContent, ...node.children.map(text)].join(" ").trim());
@@ -256,11 +294,11 @@ assert.equal($("ask-msg").dataset.tone, "bad");
 
 
 PROJECTOR = """
-const doc = installDom(IDS, { bodyData: { projectorWidth: "1920", projectorHeight: "1080" } });
+const doc = installDom(NODES, { bodyData: { projectorWidth: "1920", projectorHeight: "1080" } });
 const $ = (id) => doc.getElementById(id);
 const sock = installIo();
 installFetch();
-runClassic(PROJECTOR_JS);
+await import("./main.js");
 """
 
 
@@ -397,8 +435,8 @@ installFetch();
 await import("./dashboard/main.js");
 await settle();
 // The template's "Connecting…" stays: nothing has failed yet.
-assert.equal($("status-text").textContent, "");
-assert.equal($("conn-text").textContent, "");
+assert.equal($("status-text").textContent, "Connecting…");
+assert.equal($("conn-text").textContent, "Connecting…");
 assert.notEqual($("badge-ask").textContent, "not connected");
 sock.fire("connect_error", { message: "xhr poll error" });
 sock.fire("connect_error", { message: "xhr poll error" });
@@ -735,6 +773,11 @@ assert.deepEqual(rows(), {
   "Wake word": "hey board",
   "Voice": "Off (answers are only written)",
 });
+renderConfig({ language: "auto", current_language: "es" });
+assert.deepEqual(rows(), {
+  "Answer language": "Auto (the language the question is asked in)",
+  "Answering in right now": "Spanish",
+});
 """,
     )
 
@@ -1059,8 +1102,554 @@ sock.fire("speak", { url: null, text: words, display_text: notation });
 assert.equal($("bubble").textContent, notation);
 sock.fire("speak", { url: null, text: words });
 assert.equal($("bubble").textContent, words);
+// The final contract names the spoken words spoken_text in speak events too.
+sock.fire("speak", { url: null, spoken_text: words });
+assert.equal($("bubble").textContent, words);
 """,
     )
+
+
+# ---- language: one dictionary, the switch, Spanish pages --------------------------------
+
+VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+TEXT_ATTRS = ("placeholder", "alt", "title", "aria-label")
+LANGUAGE_FREE = re.compile(r"^[\W\d_]*$")  # numbers, dashes, arrows: the same in every language
+SLOT = re.compile(r"\{(\w+)\}")
+# The same text on purpose: language names written in their own language, and words Spanish keeps.
+SAME_IN_SPANISH = {"lang.en", "lang.es", "lang.auto", "mode.quiz", "files.meta", "board.latency"}
+
+
+class _Untranslated(HTMLParser):
+    """Visible template text (and text attributes) that no data-i18n* key covers."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stack: list[tuple[str, bool]] = []
+        self.missing: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = {name: value or "" for name, value in attrs}
+        for attr in TEXT_ATTRS:
+            text = values.get(attr, "")
+            if text and not LANGUAGE_FREE.match(text) and f"data-i18n-{attr}" not in values:
+                self.missing.append(f'<{tag} {attr}="{text}">')
+        if tag not in VOID_TAGS:
+            self.stack.append((tag, "data-i18n" in values or bool(self.stack and self.stack[-1][1])))
+
+    def handle_endtag(self, tag: str) -> None:
+        while self.stack and self.stack.pop()[0] != tag:
+            pass
+
+    def handle_data(self, data: str) -> None:
+        text = data.strip()
+        if not text or LANGUAGE_FREE.match(text) or (self.stack and self.stack[-1][0] in {"script", "style"}):
+            return
+        if not (self.stack and self.stack[-1][1]):
+            self.missing.append(text)
+
+
+def template_source(name: str) -> str:
+    return re.sub(r"\{#.*?#\}", "", (TEMPLATES / name).read_text(encoding="utf-8"), flags=re.S)
+
+
+def template_keys(name: str) -> list[str]:
+    keys = re.findall(r'\bdata-i18n(?:-[a-z-]+)?="([^"]+)"', template_source(name))
+    return [k.replace("{profile}", p) for k in keys for p in (("math", "biology") if "{profile}" in k else ("",))]
+
+
+@needs_node
+def test_dictionary_has_every_text_in_both_languages() -> None:
+    en, es = strings()["en"], strings()["es"]
+    assert en.keys() == es.keys()
+    for key, text in en.items():
+        assert text.strip() and es[key].strip(), key
+        # "tu único archivo" needs no number: a .one text may leave out {n}.
+        slots = set(SLOT.findall(text)) - ({"n"} if key.endswith(".one") else set())
+        assert slots <= set(SLOT.findall(es[key])) <= set(SLOT.findall(text)), f"{key}: the {{slots}} differ"
+        assert re.findall(r"</?\w+>", text) == re.findall(r"</?\w+>", es[key]), f"{key}: the markup differs"
+        if key not in SAME_IN_SPANISH:
+            assert es[key] != text, f"{key} is not translated"
+    for key in en:
+        if key.endswith(".one"):
+            assert key.removesuffix(".one") + ".other" in en, f"{key} has no .other"
+
+
+@needs_node
+def test_spanish_is_mexican_classroom_spanish() -> None:
+    es = " ".join(strings()["es"].values())
+    # Tú, not usted or vosotros; Mexican classroom words (pizarrón, computadora), not Spain's.
+    for word in ("usted", "ustedes", "vosotros", "habéis", "pizarra", "ordenador", "vale", "coger", "móvil", "fichero"):
+        assert not re.search(rf"\b{word}\b", es, re.I), f"Spanish copy uses '{word}'"
+    assert "pizarrón" in es and "presiona" in es
+    # Opening marks on every question and exclamation, as a teacher would write them.
+    for text in strings()["es"].values():
+        assert text.count("?") <= text.count("¿") and text.count("!") <= text.count("¡"), text
+
+
+@pytest.mark.parametrize("template", ["precharge.html", "index.html"])
+def test_every_visible_template_text_has_a_dictionary_key(template: str) -> None:
+    reader = _Untranslated()
+    reader.feed(template_source(template))
+    assert reader.missing == []
+
+
+@needs_node
+@pytest.mark.parametrize("template", ["precharge.html", "index.html"])
+def test_template_english_is_the_dictionary_english(template: str) -> None:
+    en, es = strings()["en"], strings()["es"]
+    for key in template_keys(template):
+        assert key in en and key in es, f"{template} names a missing key {key}"
+    src = template_source(template)
+    elements = re.findall(r'<(\w+)\b[^>]*?\bdata-i18n="([^"]+)"[^>]*>(.*?)</\1>', src, flags=re.S)
+    assert len(elements) == src.count('data-i18n="')
+    for tag, key, inner in elements:
+        assert f"<{tag}" not in inner, f"nested <{tag}> inside data-i18n={key}"
+        assert " ".join(html.unescape(inner).split()) == en[key.replace("{profile}", "math")], key
+    for tag in re.findall(r"<\w+\b[^>]*\bdata-i18n-[a-z-]+=[^>]*>", src):
+        for attr, key in re.findall(r'\bdata-i18n-([a-z-]+)="([^"]+)"', tag):
+            value = re.search(rf'\s{attr}="([^"]*)"', tag)
+            assert value and html.unescape(value.group(1)) == en[key.replace("{profile}", "math")], tag
+
+
+@needs_node
+def test_every_key_the_scripts_name_exists() -> None:
+    en = strings()["en"]
+    prefixes = {key.split(".")[0] for key in en}
+    sources = [STATIC / "js" / "main.js", *sorted((STATIC / "js" / "dashboard").glob("*.js"))]
+    named = 0
+    for path in sources:
+        for key in re.findall(r'"([a-z]+(?:\.[a-zA-Z]+)+)"', path.read_text(encoding="utf-8")):
+            if key.split(".")[0] not in prefixes:
+                continue
+            named += 1
+            assert key in en or f"{key}.one" in en, f"{path.name} names a missing key {key}"
+    assert named > 40
+
+
+@needs_node
+def test_language_switch_follows_and_sets_the_server_language(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+const http = installFetch({
+  "PUT /api/language": (init) => {
+    const { language } = JSON.parse(init.body);
+    return { status: 200, body: { setting: language, current: language === "auto" ? "en" : language } };
+  },
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+const pressed = () => ["en", "es", "auto"].filter((s) => $(`lang-${s}`).getAttribute("aria-pressed") === "true");
+assert.equal($("lang-switch").hidden, false);
+assert.deepEqual(pressed(), ["auto"]);
+assert.equal(doc.documentElement.lang, "en");
+assert.equal($("status-text").textContent, "Ready. Ask a question below, or on the board.");
+await $("lang-es").fire("click");
+const put = http.calls.find((c) => c.method === "PUT" && c.path === "/api/language");
+assert.deepEqual(JSON.parse(put.body), { language: "es" });
+assert.deepEqual(pressed(), ["es"]);
+assert.equal(doc.documentElement.lang, "es");
+assert.equal($("lang-es").disabled, false);
+// Everything already on screen switches: the status line, footer, tabs, placeholders, badges, labels.
+assert.equal($("status-text").textContent, "Listo. Haz una pregunta aquí abajo o en el pizarrón.");
+assert.equal($("conn-text").textContent, "Conectado");
+assert.equal($("files-tab-name").textContent, "Ejercicios y apuntes");
+assert.equal($("ask-input").placeholder, "Pregunta sobre lo que escribiste en el pizarrón o sobre lo que quieres aprender…");
+assert.equal($("search-input").placeholder, "p. ej. fracciones");
+assert.equal($("badge-ask").textContent, "ayuda paso a paso");
+assert.equal($("badge-files").textContent, "agrega ejercicios");
+assert.equal($("lang-switch").getAttribute("aria-label"), "Idioma");
+assert.equal($("lang-auto").title, "Contesta en el mismo idioma en que le preguntan");
+assert.equal($("frame").alt, "Lo que ve la cámara en el pizarrón");
+// Auto: the page follows the language of the latest answer.
+sock.fire("language", { setting: "auto", current: "en" });
+assert.deepEqual(pressed(), ["auto"]);
+assert.equal(doc.documentElement.lang, "en");
+assert.equal($("badge-ask").textContent, "step-by-step help");
+sock.fire("language", { setting: "auto", current: "es" });
+assert.deepEqual(pressed(), ["auto"]);
+assert.equal(doc.documentElement.lang, "es");
+assert.equal($("examples").children[1].textContent, "Quiero aprender a resolver fracciones");
+""",
+    )
+
+
+@needs_node
+def test_language_switch_failure_is_explained_and_changes_nothing(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+installFetch({ "PUT /api/language": { status: 400, body: { error: "language must be auto, en or es" } } });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+await $("lang-es").fire("click");
+assert.equal($("lang-msg").textContent,
+  "Couldn't change the language. Check the assistant's Terminal window is still open, then try again.");
+assert.equal($("lang-msg").dataset.tone, "bad");
+assert.match(logText(), /language must be auto, en or es/);
+assert.equal($("lang-auto").getAttribute("aria-pressed"), "true");
+assert.equal(doc.documentElement.lang, "en");
+assert.equal($("lang-es").disabled, false);
+""",
+    )
+
+
+@needs_node
+def test_language_from_an_older_get_never_undoes_a_newer_event(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+const replies = [];
+installFetch({ "GET /api/language": () => new Promise((resolve) => replies.push(resolve)) });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+sock.fire("language", { setting: "es", current: "es" });
+for (const reply of replies) reply({ status: 200, body: { setting: "auto", current: "en" } });
+await settle();
+assert.equal(doc.documentElement.lang, "es");
+assert.equal($("lang-es").getAttribute("aria-pressed"), "true");
+""",
+    )
+
+
+@needs_node
+def test_status_poll_sets_the_language_and_older_servers_hide_the_switch(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+// No socket.io: the status poll is the only news of the language.
+const http = installFetch({ "GET /api/language": { status: 404, body: { error: "not found" } } });
+http.setStatus({ language: "auto", current_language: "es" });
+await import("./dashboard/main.js");
+await settle();
+assert.equal(doc.documentElement.lang, "es");
+assert.equal($("conn-text").textContent, "Conectado (se actualiza cada pocos segundos)");
+assert.equal($("lang-auto").getAttribute("aria-pressed"), "true");
+""",
+    )
+    run_node(
+        tmp_path / "older",
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+const http = installFetch({ "GET /api/language": { status: 404, body: { error: "not found" } } });
+http.setStatus({ language: undefined, current_language: undefined });
+await import("./dashboard/main.js");
+await settle();
+assert.equal($("lang-switch").hidden, true);
+assert.equal(doc.documentElement.lang, "en");
+""",
+    )
+
+
+@needs_node
+def test_dashboard_first_paint_uses_the_language_it_showed_last(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const store = { "sar.dashboard.language": "es" };
+globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); } };
+installIo();
+let reply;
+const http = installFetch({ "GET /api/language": () => new Promise((resolve) => { reply = resolve; }) });
+http.setStatus({ language: undefined, current_language: undefined });
+await import("./dashboard/main.js");
+await settle();
+// Before the server answers: last time's Spanish, not a flash of English.
+assert.equal(doc.documentElement.lang, "es");
+assert.equal($("status-text").textContent, "Conectando…");
+assert.equal($("timeline-empty").children.map(text).join(" ").startsWith("Las respuestas van a aparecer aquí"), true);
+reply({ status: 200, body: { setting: "en", current: "en" } });
+await settle();
+assert.equal(doc.documentElement.lang, "en");
+assert.equal(store["sar.dashboard.language"], "en");
+""",
+    )
+
+
+SPANISH_HISTORY = [
+    {"query": "¿cuál es el siguiente paso?", "spoken_text": "Resta cinco de los dos lados de tres equis más cinco igual a veinte.",
+     "display_text": "Resta 5 de los dos lados de 3x + 5 = 20.", "language": "es", "animation_state": "pointing",
+     "ink_regions": 1, "had_frame": True, "latency_s": 4, "mode": "help", "task_kind": None, "sources": []},
+    {"query": "¿es 5?", "spoken_text": "Casi. ¿Qué deshace sumar cinco?", "language": "es", "animation_state": "error",
+     "ink_regions": 0, "had_frame": False, "latency_s": 2.6, "mode": "quiz", "task_kind": "quiz",
+     "sources": ["ecuaciones.pdf"], "failed": False},
+]  # fmt: skip
+# English a Spanish page must not show (user data aside: file names, model names, the activity log).
+ENGLISH_WORDS = re.compile(
+    r"\b(the|and|your|you|with|files?|ready|connected|camera|answers?|board|step|tick(ed)?|thinking|worksheets?|"
+    r"notes|please|try|again|here|press|couldn't|can't|isn't|won't|right|first|glare)\b",
+    re.I,
+)
+
+
+@needs_node
+def test_dashboard_in_spanish_leaves_no_english_behind(tmp_path: Path) -> None:
+    out = run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + f"const ITEMS = {json.dumps(SPANISH_HISTORY)};\nconst QUIZ = {QUIZ};\n"
+        + """
+const sock = installIo();
+const http = installFetch({
+  "GET /api/language": { status: 200, body: { setting: "es", current: "es" } },
+  "GET /api/history": { status: 200, body: { interactions: ITEMS } },
+  "GET /api/config": { status: 200, body: { profile: "math", language: "es", current_language: "es", listen_mode: "push",
+                                            tts_backend: "edge", camera_size: [1920, 1080], checkerboard: [9, 6] } },
+  "GET /api/documents": { status: 200, body: { documents: [
+    { source: "ecuaciones.pdf", type: "pdf", chunks: 3, active: true },
+    { source: "foto_tarea.jpg", type: "image", chunks: 1, active: false },
+  ] } },
+  "GET /api/tutor": { status: 200, body: { mode: "quiz", learn_topic: "ecuaciones", quiz: QUIZ } },
+  "POST /api/upload": { status: 200, body: { files: [{ name: "a.pdf", chunks: 2 }, { name: "scan.pdf", chunks: 0,
+                                                       error: "no readable text found" }] } },
+});
+http.setStatus({ language: "es", current_language: "es", calibrated: false, total_documents: 2, active_documents: 1,
+                 tts_backend: "edge", last_latency_s: 3.2, uptime_s: 75,
+                 glare: { fraction: 0.03, severe: true, hotspots: [[10, 10, 80, 60]] } });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+sock.fire("status", { state: "listening" });
+$("ask-input").value = "ayuda";
+await $("ask-form").fire("submit");
+$("file-input").files = [new File(["x"], "a.pdf")];
+await $("file-input").fire("change");
+await settle();
+assert.equal(doc.documentElement.lang, "es");
+assert.equal($("status-text").textContent,
+  "Escuchando… haz tu pregunta ahora. El micrófono se apaga solo en unos 5 segundos.");
+assert.equal($("ask-msg").textContent, "¡Enviada! Mira el pizarrón para ver la respuesta.");
+assert.equal($("upload-msg").textContent,
+  "Se agregó a.pdf. No se pudo leer scan.pdf (parece un escaneo sin texto; pásalo a mano o sube una foto más clara).");
+assert.equal($("files-summary").textContent, "El asistente usa 1 de 2 archivos al contestar.");
+assert.equal($("badge-board").textContent, "reflejo en el pizarrón");
+assert.equal($("quiz-progress").textContent, "Problema 2 de 8 · 1 bien a la primera");
+assert.equal($("uptime").textContent, "1 min 15 s");
+const entries = $("timeline").children;
+const part = (li, cls) => li.children.find((c) => c.className === cls);
+// Answers keep their math notation and say which language they are in.
+assert.equal(part(entries[0], "a").textContent, "Resta 5 de los dos lados de 3x + 5 = 20.");
+assert.equal(part(entries[0], "a").getAttribute("lang"), "es");
+assert.equal(part(entries[0], "margin-note").textContent, "ayuda paso a paso · señaló tu trabajo · no usó tus archivos · tardó 4 s");
+assert.equal(part(entries[1], "margin-note").textContent,
+  "quiz · esa respuesta todavía no está bien · leyó ecuaciones.pdf · no pudo ver el pizarrón · tardó 3 s");
+// Sweep everything a student can read, attributes included.
+const seen = [];
+const walk = (node) => {
+  if (node.id === "log") return;
+  for (const attr of ["placeholder", "title", "alt"]) if (node[attr]) seen.push(node[attr]);
+  if (node.attributes["aria-label"]) seen.push(node.attributes["aria-label"]);
+  if (node.textContent) seen.push(node.textContent);
+  for (const c of node.children) if (typeof c === "string") seen.push(c); else walk(c);
+};
+walk(doc.body);
+console.log(JSON.stringify(seen));
+""",
+    )
+    seen = json.loads(out.splitlines()[-2])
+    assert len(seen) > 80
+    for text in seen:
+        # The hardware guide is only in English, so its section name stays as written there.
+        plain = text.replace("“Checking for glare”", "")
+        assert not ENGLISH_WORDS.search(plain), f"English left on the Spanish page: {text!r}"
+
+
+@needs_node
+def test_text_written_by_the_page_switches_language_with_it(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+installFetch({
+  "GET /api/documents": { status: 200, body: { documents: [{ source: "unit 1.md", type: "md", chunks: 1, active: true }] } },
+  "POST /api/calibrate": { status: 200, body: { ok: true } },
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+$("ask-input").value = "help";
+await $("ask-form").fire("submit");
+await $("calibrate-btn").fire("click");
+sock.fire("transcript", { text: "what now" });
+assert.equal($("files-summary").textContent, "The assistant uses all 1 file when answering.");
+sock.fire("language", { setting: "es", current: "es" });
+// Not the template's "No files yet." in Spanish: the page wrote these, and they say what they said, in Spanish.
+assert.equal($("files-summary").textContent, "El asistente usa tu único archivo al contestar.");
+assert.equal($("ask-msg").textContent, "¡Enviada! Mira el pizarrón para ver la respuesta.");
+assert.equal($("calib-msg").textContent, "¡Listo, quedó alineado! El asistente ya sabe dónde está el pizarrón.");
+assert.equal($("files").children[0].children[1].children[0].textContent, "Apuntes · 1 sección");
+const pending = $("timeline").children[0];
+assert.deepEqual(pending.children.map((c) => c.textContent), ["Preguntaste", "what now", "Pensando…"]);
+""",
+    )
+
+
+@needs_node
+def test_projector_follows_the_server_language(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR
+        + f"const QUIZ = {QUIZ};\n"
+        + """
+installFetch({ "GET /api/language": { status: 200, body: { setting: "auto", current: "es" } } });
+sock.fire("connect");
+await settle();
+const label = () => $("status-label").textContent;
+const title = [...doc.body.descendants()].find((n) => n.tagName === "TITLE");
+assert.equal(doc.documentElement.lang, "es");
+assert.equal(label(), "Listo – presiona Espacio para hablar");
+assert.equal(title.textContent, "Asistente del pizarrón – proyector");
+assert.equal($("text-input").placeholder, "Escribe una pregunta: Enter para enviar, Esc para cancelar");
+assert.equal($("debug-conn").textContent, "conexión: conectada");
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: QUIZ });
+assert.equal($("quiz-card-count").textContent, "Quiz · problema 2 de 8");
+sock.fire("status", { state: "thinking", detail: "busy" });
+assert.equal(label(), "Todavía ocupado – espera un momento");
+// The answer is shown as the model wrote it, whatever the page's language.
+sock.fire("avatar_update", { animation_state: "idle", spoken_text: "x is 5", display_text: "x = 5" });
+assert.equal($("bubble").textContent, "x = 5");
+sock.fire("language", { setting: "en", current: "en" });
+assert.equal(doc.documentElement.lang, "en");
+assert.equal(label(), "Still busy – wait a moment");
+assert.equal($("quiz-card-count").textContent, "Quiz · problem 2 of 8");
+assert.equal($("bubble").textContent, "x = 5");
+sock.fire("language", { setting: "es", current: "es" });
+sock.fire("disconnect");
+assert.equal(label(), "Sin conexión");
+const space = { code: "Space", key: " ", repeat: false, preventDefault() {} };
+for (const fn of doc.listeners.keydown) fn(space);
+assert.equal(label(), "Sin conexión – no se envió la pregunta");
+""",
+    )
+
+
+# ---- board: glare line and the projector-shaped camera box ----------------------------
+
+
+@needs_node
+def test_board_checklist_reports_glare_and_the_badge_follows_it(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+installFetch();
+const { renderStatus } = await import("./dashboard/status.js");
+const base = { camera_running: true, calibrated: true, total_documents: 1, active_documents: 1, audio_available: true,
+               vlm_backend: "ollama", vlm_model: "qwen2.5vl:3b", tts_backend: "edge" };
+const lines = () => $("checks").children;
+const glare = () => lines().map(text).find((line) => /glare|bright spot/i.test(line));
+const badge = () => [$("badge-board").textContent, $("tab-board").dataset.tone];
+renderStatus({ ...base, glare: { fraction: 0, severe: false, hotspots: [] } });
+assert.match(text(lines()[1]), /^✓ No glare on the board$/);
+assert.deepEqual(badge(), ["ready", "ok"]);
+renderStatus({ ...base, glare: { fraction: 0.004, severe: false, hotspots: [[10, 20, 40, 30]] } });
+assert.equal(lines()[1].dataset.tone, "warn");
+assert.match(glare(), /^! A small bright spot on the board Writing inside it may be missed\\./);
+assert.deepEqual(badge(), ["ready", "ok"]);
+// Severe glare: what to do, and where the hardware guide explains it. It outranks lining up on the badge.
+renderStatus({ ...base, calibrated: false, glare: { fraction: 0.03, severe: true, hotspots: [[10, 20, 400, 300]] } });
+assert.equal(lines()[1].dataset.tone, "bad");
+assert.match(glare(), /^✗ Glare on the board: move the camera Projector light bounces off the board/);
+assert.match(glare(), /Move the webcam further out on the same side as the projector lens/);
+assert.match(glare(), /“Checking for glare” in the hardware guide \\(docs\\/HARDWARE_SETUP\\.md\\)\\.$/);
+assert.deepEqual(badge(), ["glare on the board", "bad"]);
+renderStatus({ ...base, calibrated: false, glare: { fraction: 0, severe: false, hotspots: [] } });
+assert.deepEqual(badge(), ["not lined up yet", "warn"]);
+// No camera: glare is null and the camera line says what to fix; an older server sends no glare at all.
+renderStatus({ ...base, camera_running: false, glare: null });
+assert.equal(glare(), undefined);
+assert.deepEqual(badge(), ["camera not found", "bad"]);
+renderStatus({ ...base });
+assert.equal(glare(), undefined);
+assert.equal(lines().length, 6);
+""",
+    )
+
+
+@needs_node
+def test_camera_box_has_the_projector_shape_and_the_overlay_sits_on_the_picture(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        """
+const doc = installDom(NODES, { bodyData: { projectorWidth: "1280", projectorHeight: "800" } });
+const $ = (id) => doc.getElementById(id);
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sock = installIo();
+installFetch({ "GET /api/ink": { status: 200, body: {
+  regions: [{ x: 100, y: 200, w: 300, h: 80, cx: 250, cy: 240 }], size: [1280, 800] } } });
+const { selectStep } = await import("./dashboard/tabs.js");
+const { containedBox } = await import("./dashboard/camera.js");
+$("ink-toggle").checked = true;
+await import("./dashboard/main.js");
+// Epson WXGA, 1280×800: a 16:10 box, so the lined-up picture fills it edge to edge.
+assert.equal($("viewport").style.aspectRatio, "1280 / 800");
+const near = (box, want) => Object.keys(want).every((k) => Math.abs(box[k] - want[k]) < 0.001);
+assert.ok(near(containedBox(1280, 800, 1280, 800), { left: 0, top: 0, width: 100, height: 100 }));
+// What object-fit: contain does with another shape: a 16:9 picture gets bars above and below, 4:3 at the sides.
+assert.ok(near(containedBox(1280, 800, 1920, 1080), { left: 0, top: 5, width: 100, height: 90 }));
+assert.ok(near(containedBox(1280, 800, 640, 480), { left: 8.333, top: 0, width: 83.333, height: 100 }));
+sock.fire("connect");
+sock.fire("avatar_update", { animation_state: "pointing", target_x: 640, target_y: 400 });
+await settle();  // the empty file list suggests step 1 first
+selectStep("board");
+await wait(1700);
+const svg = $("ink-overlay");
+assert.equal(svg.getAttribute("viewBox"), "0 0 1280 800");
+const [rect, dot, ring] = svg.children;
+assert.deepEqual(["x", "y", "width", "height"].map((k) => rect.getAttribute(k)), ["100", "200", "300", "80"]);
+assert.deepEqual([dot.getAttribute("cx"), dot.getAttribute("cy")], ["250", "240"]);
+// The target ring is in the same projector space as the ink boxes, sized for this board.
+assert.equal(ring.getAttribute("class"), "target");
+assert.deepEqual([ring.getAttribute("cx"), ring.getAttribute("cy")], ["640", "400"]);
+assert.ok(Math.abs(parseFloat(ring.getAttribute("r")) - 26 * 1280 / 1920) < 1e-9);
+// The overlay goes exactly where the picture is drawn.
+const img = $("frame");
+const placed = () => ["left", "top", "width", "height"].map((k) => svg.style[k]);
+Object.assign(img, { naturalWidth: 1280, naturalHeight: 800 });
+img.onload();
+assert.deepEqual(placed(), ["0%", "0%", "100%", "100%"]);
+Object.assign(img, { naturalWidth: 1920, naturalHeight: 1080 });
+img.onload();
+assert.deepEqual(placed(), ["0%", "5%", "100%", "90%"]);
+// An answer with no target clears the ring instead of drawing one at "undefined".
+sock.fire("avatar_update", { animation_state: "idle" });
+await wait(1600);
+assert.equal(svg.children.filter((c) => c.getAttribute("class") === "target").length, 0);
+""",
+    )
+
+
+@needs_node
+def test_viewport_css_defaults_to_the_kit_projector_shape() -> None:
+    css = (STATIC / "css" / "dashboard.css").read_text(encoding="utf-8")
+    rule = re.search(r"\.viewport\s*\{([^}]*)\}", css)
+    assert rule and re.search(r"aspect-ratio:\s*16\s*/\s*10", rule.group(1))
+    assert re.search(r"\.lang\[hidden\]\s*\{\s*display:\s*none", css)
 
 
 # ---- seed documents ------------------------------------------------------------------
@@ -1099,9 +1688,10 @@ def test_guides_have_no_lines_a_worksheet_parser_would_take() -> None:
 # ---- docs stay true to the code ------------------------------------------------------
 
 
+@needs_node
 def test_docs_call_the_files_tab_by_its_name_in_each_subject() -> None:
-    js = (STATIC / "js" / "dashboard" / "profile.js").read_text(encoding="utf-8")
-    math_name, biology_name = re.findall(r'filesTab:\s*"([^"]+)"', js)
+    en = strings()["en"]
+    math_name, biology_name = en["tab.files.math"], en["tab.files.biology"]
     for name in ("README.md", "docs/BUILD_PLAN.md"):
         text = re.sub(r"[*_]", "", DOCS[name])
         assert math_name in text, f"{name} never names the math tab '{math_name}'"
