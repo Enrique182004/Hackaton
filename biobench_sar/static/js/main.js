@@ -381,7 +381,9 @@ function renderStatus(d) {
   quizCard.classList.toggle("capturing", capturing);
   // A new question: the last answer's outline is stale, and the camera must not see it as writing.
   if (capturing) clearHighlight(true);
-  if (s === "thinking") dropHeldCaption();
+  // Like the quiz card: the camera reads the board right after "thinking", so a held caption goes as soon as a
+  // question starts (the microphone opening gives seconds of margin; "thinking" alone may come too late).
+  if (capturing) dropHeldCaption();
   uiChanged();
 }
 
@@ -598,6 +600,8 @@ setInterval(reportUi, UI_TICK_MS);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) uiChanged(); });
 
 function openTextInput() {
+  // A typed question has no "listening" state: the held caption goes now, before the board is read.
+  dropHeldCaption();
   textOverlay.classList.remove("hidden");
   textInput.value = "";
   textInput.focus();

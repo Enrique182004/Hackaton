@@ -1214,6 +1214,22 @@ def test_push_speech_rate_before_the_services_are_attached_is_harmless() -> None
     assert [name for name, _ in events] == ["accessibility"]
 
 
+def test_changes_from_two_devices_at_once_leave_the_voice_and_pages_on_the_saved_settings(h: Harness) -> None:
+    tts = _rated(h)
+    bodies = [{"speech_rate": "slower"}, {"speech_rate": "faster"}, {"calm": True}, {"text_size": "large"}]
+
+    def device(body: dict[str, Any]) -> None:
+        for _ in range(25):
+            h.assistant.set_accessibility(body)
+
+    threads = [threading.Thread(target=device, args=(body,)) for body in bodies]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    saved = h.assistant.accessibility_body()
+    assert h.payloads("accessibility")[-1] == saved, "the last push is what the room has"
+    assert tts.rates[-1] == {"slower": 0.75, "faster": 1.25}[str(saved["speech_rate"])], "and the voice too"
+
+
 # ---- display text and spoken text -------------------------------------------------------------------------------
 
 

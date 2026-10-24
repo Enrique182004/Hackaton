@@ -98,8 +98,9 @@ class AccessibilityStore:
 
     @property
     def current(self) -> AccessibilitySettings:
-        with self._lock:
-            return self._settings
+        # No lock: the settings are frozen and swapped whole, so a reader (a socket connect, a page, an answer)
+        # never waits on update()'s file write.
+        return self._settings
 
     def update(self, changes: Mapping[str, bool | str]) -> AccessibilitySettings:
         """Apply changes parse_changes already checked, save them and return the new settings."""

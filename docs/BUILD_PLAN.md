@@ -537,7 +537,8 @@ Accessibility on the projector (contract M): `<body>` carries `data-text-size="n
 `GET /api/accessibility` on every reconnect keep them current, with a version counter like the language's. Every
 change re-fits the bubble and sends `ui_rects` again.
 - **Captions stay up**: the bubble gets no hide timer. The next answer replaces it, and a real new question
-  (`transcript`, or status `thinking`) clears it, so it never covers the board while the camera reads it. The
+  (status `listening`, `transcribing` or `thinking` like the quiz card, the typing box opening, or `transcript`)
+  clears it, so it never covers the board while the camera reads it. The
   heard words stay until the answer arrives instead of 5 s. Switching captions off while one is held hides it
   after 4 s.
 - **Text size**: `var(--text-scale)` (1 / 1.25 / 1.5) multiplies the font sizes of the bubble, the quiz card's
@@ -645,7 +646,7 @@ Seed docs in `biobench_sar/knowledge/biology/`. The assistant must:
 | G Tutor / H Quiz bank / I Math speech / J Language | ✅ built and merged; `grading.py` in the final round | contracts above |
 | K Phones | 🟡 groundwork merged (`lan.py`, manifest, icons, `sw.js`); server wiring in the final round | `tests/test_lan.py`, `tests/test_mobile.py` |
 | L Desktop builds | ✅ Windows installer + macOS arm64 app, smoke-tested in CI (#66) | the launcher's self-test prints `SELF-TEST OK` |
-| M Accessibility | ✅ built: captions stay up, text size, voice speed (edge, `say`, pyttsx3), calm mode, high contrast; one atomic JSON write (`jsonfile.py`) shared with the file selection and the quiz bank | `tests/test_accessibility.py`; routes, push and on-connect in `tests/test_app.py`; the voice in `tests/test_tts.py`; both pages under node in `tests/test_frontend.py` |
+| M Accessibility | ✅ built: captions stay up, text size, voice speed (edge, `say`, pyttsx3), calm mode, high contrast; one atomic JSON write (`jsonfile.py`) shared with the file selection and the quiz bank | `tests/test_accessibility.py` and `tests/test_jsonfile.py`; routes, push and on-connect in `tests/test_app.py`; the voice in `tests/test_tts.py`; both pages under node in `tests/test_frontend.py` |
 | Phase 2 integrate | ✅ both profiles | full suite green on `release/candidate`; live loop verified in the browser with `qwen2.5vl:3b` |
 | Phase 3 hardware | 🟡 pending: runbook ready ([HARDWARE_DAY.md](HARDWARE_DAY.md)), kit is a C930e + Epson WXGA on a cart | camera + mic need OS permissions; projector not yet connected |
 

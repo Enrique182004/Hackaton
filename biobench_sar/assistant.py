@@ -291,6 +291,9 @@ class Assistant:
         self.quiz_bank = QuizBank(settings.quiz_bank_file)
         # Captions, text size, voice speed, calm mode, high contrast: one set for the whole room, kept as JSON.
         self.accessibility = AccessibilityStore(settings.accessibility_file)
+        # One change at a time from save to push: two devices changing it at once can't leave the voice or the
+        # pages on the older settings.
+        self._access_lock = threading.Lock()
         self.tutor = TutorSession()
         self._tutor_lock = threading.Lock()
         self._tutor_pushed = self.tutor.to_dict()
@@ -309,9 +312,11 @@ class Assistant:
     def set_accessibility(self, body: object) -> dict[str, bool | str]:
         """Apply a partial change ({"speech_rate": "slower"}, ...); ValueError, with nothing saved or pushed, for
         anything else. The voice takes the new speed and every open page gets every key."""
-        saved = self.accessibility.update(parse_changes(body)).to_dict()
-        self.push_speech_rate()
-        self._emit("accessibility", saved)
+        changes = parse_changes(body)
+        with self._access_lock:
+            saved = self.accessibility.update(changes).to_dict()
+            self.push_speech_rate()
+            self._emit("accessibility", saved)
         return saved
 
     def push_speech_rate(self) -> None:

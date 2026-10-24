@@ -78,7 +78,8 @@ event and by `GET /api/accessibility` in `resync()` (with a version counter, lik
 change: `fitBubble(); uiChanged();` so placement and the masked `ui_rects` follow at once.
 
 - **Captions stay up** (`data-captions="stay"`): `armBubbleTimer` never arms a hide timer. The bubble is replaced
-  by the next answer and cleared when a real new question starts (`transcript` event or status `thinking`), so
+  by the next answer and cleared as soon as a question starts (status `listening`, `transcribing` or `thinking`,
+  like the quiz card; the typing box opening; or the `transcript` event), so
   it never covers the board while the camera reads it. The student's heard words (`#transcript`) stay until the
   answer arrives instead of 5 s. Switching captions off while a caption is held arms a 4 s hide.
 - **Text size**: a `--text-scale` (1 / 1.25 / 1.5) chosen by `body[data-text-size]` multiplies the font sizes of
@@ -128,7 +129,9 @@ change: `fitBubble(); uiChanged();` so placement and the masked `ui_rects` follo
 
 - `tests/test_accessibility.py` (new): defaults; `parse_changes` accepts each key and rejects non-objects, empty
   bodies, unknown keys, wrong types and wrong values; the store saves and reloads; a broken file or bad values
-  give defaults; a failed save keeps the value; `rate_factor`; `save_json` writes atomically and reports failure.
+  give defaults; a failed save keeps the value; `rate_factor`.
+- `tests/test_jsonfile.py` (new): `save_json` writes atomically, reports failure, and the selection and quiz bank
+  save through it.
 - `tests/test_app.py`: GET/PUT round trip, partial updates, 400 leaves the file and clients untouched, every page
   hears the push, the on-connect list gains `accessibility`, the projector template gets the body attributes.
 - `tests/test_lan_wiring.py`: a phone without the PIN gets 401 on `PUT /api/accessibility`; the route is

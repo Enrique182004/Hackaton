@@ -574,8 +574,6 @@ from biobench_sar.config import DATA_DIR, PACKAGE_DIR, Settings
 ```
   Then add these two tests after `test_selection_file_env_override` (lines 275–277) and before the `# ---- LAN mode` banner (line 280). The default+override shape mirrors `test_quiz_bank_file_default_and_override` (lines 259–263):
 ```python
-
-
 def test_accessibility_file_default_and_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("SAR_ACCESSIBILITY_FILE", raising=False)
     assert Settings().accessibility_file == DATA_DIR / "accessibility.json"
@@ -603,8 +601,6 @@ import errno
 ```
   Then append this after `test_self_test_gives_up_after_its_timeout`, which ends at line 466 (`assert any("no result after" in line for line in lines)`):
 ```python
-
-
 def test_self_test_keeps_every_data_file_in_its_temp_folder(tmp_path: Path) -> None:
     data_dir = tmp_path / "self-test"
     settings = launcher.self_test_settings(data_dir, 5051)
@@ -781,14 +777,14 @@ def no_lan_from_the_shell(monkeypatch: pytest.MonkeyPatch) -> None:
 ```
   Then in the `settings` fixture (line 183):
 ```python
-        quiz_bank_file=tmp_path / "quiz_bank.json",
-        projector_width=640,
+quiz_bank_file = (tmp_path / "quiz_bank.json",)
+projector_width = (640,)
 ```
 →
 ```python
-        quiz_bank_file=tmp_path / "quiz_bank.json",
-        accessibility_file=tmp_path / "accessibility.json",
-        projector_width=640,
+quiz_bank_file = (tmp_path / "quiz_bank.json",)
+accessibility_file = (tmp_path / "accessibility.json",)
+projector_width = (640,)
 ```
 
   **3d.** In `packaging/launcher.py` `self_test_settings` (lines 748–750):
@@ -929,8 +925,6 @@ class _Pyttsx3Engine:
 
 1e. Append these at the end of the file:
 ```python
-
-
 # ---- voice speed (accessibility) -------------------------------------------------------------------------------------
 
 
@@ -1265,8 +1259,6 @@ new:
 
 (c) `tests/test_assistant.py`: append after `test_set_language_works_without_an_audio_service` (lines 1101–1102), before `# ---- display text and spoken text ----`. No new imports: `json`, `Any`, `pytest`, `Settings`, `Assistant` and `estimate_speech_seconds` are already imported (lines 4, 12, 15, 18, 19).
 ```python
-
-
 # ---- accessibility ----------------------------------------------------------------------------------------------
 
 ACCESS_DEFAULTS = {
@@ -1381,8 +1373,6 @@ def test_push_speech_rate_before_the_services_are_attached_is_harmless() -> None
 
 (d) `tests/test_app.py`: append after `test_answers_carry_display_and_spoken_text`, whose last line is line 1162 (`assert (history["display_text"], history["language"]) == ("x + 2 = 5", "en")`), before `# ---- glare ----`. No new imports: `json`, `Any`, `Path`, `pytest`, `Settings`, `app_module`, `EVIL` (line 419) and `collect` (line 36) already exist. `flask.template_rendered` is imported inside the test, like the local import in `test_answers_carry_display_and_spoken_text`. It reads the render context directly, so the stub templates in conftest stay as they are.
 ```python
-
-
 # ---- accessibility ----------------------------------------------------------------------------------------------
 
 ACCESS = "/api/accessibility"
@@ -1547,8 +1537,6 @@ Line 564:
 
 (f) `tests/test_lan_wiring.py`: append after `test_a_phone_without_the_cookie_cannot_open_a_socket`, which ends at line 163 with `assert len(flask_app.config["SAR_PHONES"]) == 0`, before `# ---- joining ----`. No new imports.
 ```python
-
-
 def test_a_phone_needs_the_pin_to_change_accessibility(lan_app: tuple[Flask, SocketIO]) -> None:
     flask_app, _ = lan_app
     client = phone(flask_app)
@@ -1768,8 +1756,6 @@ from biobench_sar.config import Settings
 
 Append at the end of the file:
 ```python
-
-
 # ---- accessibility: the projector follows the room's settings -------------------------------------------------------
 
 # The server's body for a room that changed nothing, as GET /api/accessibility and the "accessibility" event send it.
@@ -2498,8 +2484,6 @@ Notes before starting:
 
 - [ ] **Step 1: Failing tests** (append at the end of `tests/test_frontend.py`: after `test_dashboard_steps_fit_one_laptop_screen` and after any projector tests Task 5 appended there. No new imports: `json`, `Path`, `DASHBOARD`, `TIMERS`, `run_node` and `needs_node` already exist.)
 ```python
-
-
 # ---- dashboard: accessibility card -----------------------------------------------------------------------------------
 
 ROOM_ACCESS = {

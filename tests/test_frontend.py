@@ -2798,12 +2798,19 @@ sock.fire("speak", { url: null, text: answer.spoken_text, display_text: answer.d
 assert.deepEqual(armed(mark), [], "no timer may take a held caption down");
 assert.ok(shown(bubble));
 assert.equal(bubble.textContent, "Subtract 5.");
-// The next answer replaces it; the microphone waking up is not a question yet.
+// The next answer replaces it.
 sock.fire("avatar_update", { ...answer, display_text: "Now divide by 3." });
 assert.equal(bubble.textContent, "Now divide by 3.");
+// A new question takes it down before the camera reads the board, like the quiz card: the microphone opening...
 sock.fire("status", { state: "listening" });
+assert.ok(!shown(bubble));
+// ...the typing box opening (a typed question has no "listening")...
+sock.fire("avatar_update", answer);
 assert.ok(shown(bubble));
-// A real new question takes it down before the camera reads the board: the student's words...
+for (const fn of doc.listeners.keydown) fn({ code: "KeyT", key: "t", repeat: false, preventDefault() {} });
+assert.ok(!shown(bubble));
+// ...the student's words (a question typed on the dashboard)...
+sock.fire("avatar_update", answer);
 sock.fire("transcript", { text: "and then?" });
 assert.ok(!shown(bubble));
 // ...or the board being read, whichever the projector hears first.
@@ -3077,6 +3084,38 @@ assert.deepEqual(card(), shows({ ...ACCESS, captions_stay: true, text_size: "lar
 await $("access-size-large").fire("click");
 assert.equal(puts(http).length, 4);
 assert.equal($("access-msg").textContent, "");
+""",
+    )
+
+
+@needs_node
+def test_accessibility_card_keeps_keyboard_focus(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+const sock = installIo();
+installFetch({
+  "GET /api/accessibility": { status: 200, body: ACCESS },
+  "PUT /api/accessibility": (init) => ({ status: 200, body: { ...ACCESS, ...JSON.parse(init.body) } }),
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+// A keyboard user presses Space on a size: the card is disabled while it saves, then focus comes back to it.
+const button = $("access-size-large");
+const focused = [];
+button.focus = () => focused.push("access-size-large");
+doc.activeElement = button;
+await button.fire("click");
+assert.deepEqual(focused, ["access-size-large"]);
+// A change made with the mouse (focus elsewhere) moves no focus.
+doc.activeElement = null;
+$("access-calm").focus = () => focused.push("access-calm");
+$("access-calm").checked = true;
+await $("access-calm").fire("change");
+assert.deepEqual(focused, ["access-size-large"]);
 """,
     )
 

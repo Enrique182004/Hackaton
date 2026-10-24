@@ -57,6 +57,8 @@ export async function refreshAccessibility() {
 async function change(key, value) {
   if (last && last[key] === value) return;
   const all = controls();
+  // Disabling the focused control drops keyboard focus to the page; it goes back once the change is done.
+  const focused = all.find((c) => c === document.activeElement);
   for (const c of all) c.disabled = true;
   try {
     renderAccessibility(await request("/api/accessibility", { method: "PUT", json: { [key]: value } }));
@@ -68,6 +70,7 @@ async function change(key, value) {
     if (last) draw(last);
   } finally {
     for (const c of all) c.disabled = false;
+    focused?.focus();
   }
 }
 
