@@ -140,15 +140,17 @@ export class FakeElement {
   }
 }
 
-// `nodes` are ids, or {id, tag, data, hidden} as test_frontend.template_nodes reads them from the template.
+// `nodes` are ids, or {id, tag, data, hidden, classes} as test_frontend.template_nodes reads them from the template.
 export function installDom(nodes, { bodyData = {} } = {}) {
   const body = new FakeElement("body");
   Object.assign(body.dataset, bodyData);
   for (const spec of nodes) {
-    const { id = "", tag = "div", data = {}, hidden = false } = typeof spec === "string" ? { id: spec } : spec;
+    const { id = "", tag = "div", data = {}, hidden = false, classes = [] } = typeof spec === "string" ? { id: spec } : spec;
     const node = new FakeElement(tag);
     node.id = id;
     node.hidden = hidden;
+    node.classList.add(...classes);
+    node.className = classes.join(" ");
     Object.assign(node.dataset, data);
     body.appendChild(node);
   }

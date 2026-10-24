@@ -57,7 +57,8 @@ class _NodeReader(HTMLParser):
         values = {name: value or "" for name, value in attrs}
         data = {_dataset_key(name): value for name, value in values.items() if name.startswith("data-")}
         if "id" in values or any(key.startswith("i18n") for key in data):
-            self.nodes.append({"id": values.get("id", ""), "tag": tag, "data": data, "hidden": "hidden" in values})
+            node = {"id": values.get("id", ""), "tag": tag, "data": data, "hidden": "hidden" in values}
+            self.nodes.append({**node, "classes": values.get("class", "").split()})
 
 
 def template_nodes(name: str) -> list[dict[str, object]]:
@@ -1845,3 +1846,709 @@ def test_documented_settings_exist_in_config() -> None:
     pending = {"SAR_QUIZ_LENGTH"} - known
     assert pending <= {"SAR_QUIZ_LENGTH"}
     assert documented - known - pending == set()
+
+
+# ---- final integration contract: highlight, ui_rects, stop confirmation, phone mode, join page ----------------
+
+# Every timer is recorded, so a test can run the 8 s fade (or any other one) now instead of waiting for it.
+TIMERS = """
+const timers = [];
+const realSetTimeout = globalThis.setTimeout;
+globalThis.setTimeout = (fn, ms, ...args) => {
+  const id = realSetTimeout(fn, ms, ...args);
+  timers.push({ fn, ms, id });
+  return id;
+};
+const runTimer = (ms) => {
+  const timer = timers.filter((x) => x.ms === ms).at(-1);
+  assert.ok(timer, `no ${ms} ms timer`);
+  clearTimeout(timer.id);
+  timer.fn();
+};
+"""
+PROJECTOR_TIMED = PROJECTOR.replace('await import("./main.js");', TIMERS + 'await import("./main.js");')
+assert PROJECTOR_TIMED != PROJECTOR
+
+
+@needs_node
+def test_projector_outlines_the_ink_the_answer_is_about(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR_TIMED
+        + """
+const hl = $("highlight");
+const shown = () => !hl.classList.contains("hidden");
+const box = () => ["left", "top", "width", "height"].map((k) => hl.style[k]);
+sock.fire("connect");
+assert.ok(!shown());
+// A 1920×1080 projector on a 1920×1080 window: the outline sits 14 px out from the ink, plus its 3 px border,
+// so it frames the writing and never lights it up.
+sock.fire("avatar_update", { animation_state: "pointing", target_x: 380, target_y: 350,
+                             display_text: "Subtract 5 from both sides.", highlight: [400, 300, 200, 100] });
+assert.ok(shown());
+assert.ok(hl.classList.contains("pulse"));
+assert.deepEqual(box(), ["383px", "283px", "234px", "134px"]);
+assert.equal(hl.dataset.tone, undefined);
+// The speak event of the same answer keeps it; so does one from a server that sends no highlight at all.
+sock.fire("speak", { url: null, display_text: "Subtract 5 from both sides.", highlight: [400, 300, 200, 100] });
+sock.fire("speak", { url: null, text: "still the same answer" });
+assert.ok(shown() && !hl.classList.contains("fading"));
+// About 8 s later it fades, then goes.
+runTimer(8000);
+assert.ok(hl.classList.contains("fading"));
+runTimer(800);
+assert.ok(!shown());
+// A wrong answer glows amber; the next answer without a highlight fades it straight away.
+sock.fire("avatar_update", { animation_state: "error", target_x: 380, target_y: 350, highlight: [10, 20, 30, 40] });
+assert.ok(shown() && !hl.classList.contains("fading"));
+assert.equal(hl.dataset.tone, "error");
+sock.fire("avatar_update", { animation_state: "idle", target_x: 1700, target_y: 540, highlight: null });
+assert.ok(hl.classList.contains("fading"));
+runTimer(800);
+assert.ok(!shown());
+// Anything but four finite numbers with a size is no highlight.
+for (const bad of [[1, 2, 3], [0, 0, -5, 10], [0, 0, 10, "x"], "400,300,200,100", { x: 1 }]) {
+  sock.fire("avatar_update", { animation_state: "pointing", highlight: bad });
+  assert.ok(!shown(), JSON.stringify(bad));
+}
+// A new question: gone at once, before the camera reads the board.
+sock.fire("avatar_update", { animation_state: "celebrating", highlight: [400, 300, 200, 100] });
+assert.equal(hl.dataset.tone, "celebrate");
+sock.fire("status", { state: "listening" });
+assert.ok(!shown());
+// Near a corner it stays on the screen.
+sock.fire("avatar_update", { animation_state: "pointing", highlight: [1900, 1070, 100, 50] });
+assert.deepEqual(box(), ["1883px", "1053px", "37px", "27px"]);
+// A reconnect drops it with the rest of the transient UI.
+sock.fire("disconnect");
+sock.fire("connect");
+assert.ok(!shown());
+// The stop-the-quiz question is an answer like any other: it shows in the bubble.
+const ask = "Do you want to end the quiz? Say yes to stop, or keep going.";
+sock.fire("avatar_update", { animation_state: "idle", spoken_text: ask, display_text: ask, highlight: null });
+sock.fire("speak", { url: null, text: ask, display_text: ask, highlight: null });
+assert.equal($("bubble").textContent, ask);
+assert.ok(!$("bubble").classList.contains("hidden"));
+assert.ok(!shown());
+""",
+    )
+
+
+@needs_node
+def test_projector_bubble_keeps_off_the_highlighted_writing(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR
+        + """
+const avatar = $("avatar");
+const bubble = $("bubble");
+Object.assign(avatar, { offsetWidth: 160, offsetHeight: 160 });
+Object.assign(bubble, { offsetWidth: 400, offsetHeight: 100 });
+sock.fire("connect");
+// Pointing at a tall block of working: centred over the avatar, the bubble would cover its top lines, so it
+// moves to the right of the outline (the left side has no room for it).
+const answer = { animation_state: "pointing", target_x: 380, target_y: 350, display_text: "What comes next?" };
+sock.fire("avatar_update", { ...answer, highlight: [400, 200, 300, 300] });
+assert.equal(bubble.style.left, "514px");
+assert.ok(!avatar.classList.contains("bubble-below"));
+// No room beside it either: the bubble goes under the avatar instead.
+sock.fire("avatar_update", { ...answer, highlight: [400, 230, 1500, 100] });
+assert.ok(avatar.classList.contains("bubble-below"));
+// Without a highlight it is centred over the avatar, as always.
+sock.fire("avatar_update", { ...answer, highlight: null });
+assert.equal(bubble.style.left, "-120px");
+assert.ok(!avatar.classList.contains("bubble-below"));
+""",
+    )
+
+
+@needs_node
+def test_projector_reports_where_its_ui_is(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        """
+// A 1280×800 projector on a 2560×1600 window: every window px is half a projector px.
+const doc = installDom(NODES, { bodyData: { projectorWidth: "1280", projectorHeight: "800" } });
+window.innerWidth = 2560;
+window.innerHeight = 1600;
+const $ = (id) => doc.getElementById(id);
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sock = installIo();
+installFetch();
+await import("./main.js");
+const sent = () => sock.emitted.filter(([name]) => name === "ui_rects").map(([, body]) => body.rects);
+const latest = () => sent().at(-1);
+$("avatar").rect = { left: 1000, top: 600, width: 160, height: 160 };
+$("bubble").rect = { left: 900, top: 480, width: 400, height: 100 };
+$("quiz-card").rect = { left: 32, top: 28, width: 300, height: 80 };
+$("status").rect = { left: 2300, top: 1540, width: 240, height: 40 };
+await wait(300);
+assert.deepEqual(sent(), [], "nothing goes out before the socket connects");
+sock.fire("connect");
+await settle();
+// The avatar and the status corner; the hidden bubble, quiz card, transcript and outline are not on the board.
+// Each box gets 10 px of glow around it.
+const AVATAR = [495, 295, 90, 90];
+const STATUS = [1145, 765, 130, 30];
+assert.deepEqual(latest(), [AVATAR, STATUS]);
+// An answer with a highlight: the bubble, and the outline as its four edges, so the writing inside it is never
+// counted as UI. (No target: the avatar's box is pinned above, and a walk would announce its own end.)
+const ink = [500, 300, 200, 100];
+sock.fire("avatar_update", { animation_state: "pointing", display_text: "Look here", highlight: ink });
+await settle();
+const rects = latest();
+assert.equal(rects.length, 7);
+assert.deepEqual(rects.slice(0, 2), [AVATAR, [445, 235, 210, 60]]);
+const edges = rects.slice(2, 6);
+const overlap = (a, b) => Math.max(0, Math.min(a[0] + a[2], b[0] + b[2]) - Math.max(a[0], b[0]))
+  * Math.max(0, Math.min(a[1] + a[3], b[1] + b[3]) - Math.max(a[1], b[1]));
+for (const edge of edges) assert.equal(overlap(edge, ink), 0, `edge ${edge} covers the ink`);
+const left = Math.min(...edges.map((e) => e[0]));
+const top = Math.min(...edges.map((e) => e[1]));
+const right = Math.max(...edges.map((e) => e[0] + e[2]));
+const bottom = Math.max(...edges.map((e) => e[1] + e[3]));
+assert.ok(left < 500 && top < 300 && right > 700 && bottom > 400, "the edges go all the way round the ink");
+assert.deepEqual(rects[6], STATUS);
+// The quiz card is on the board while a quiz runs...
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: { active: true, number: 1, total: 5, score: 0, problem: "2x = 6" } });
+await settle();
+assert.deepEqual(latest()[2], [11, 9, 160, 50]);
+// ...but not while the board is read, and the outline is gone by then too.
+sock.fire("status", { state: "thinking" });
+await settle();
+assert.deepEqual(latest(), [AVATAR, [445, 235, 210, 60], STATUS]);
+// Unchanged boxes go again once a second, so the server's copy (kept 3 s) never runs out while the page is up.
+const before = sent().length;
+await wait(600);
+assert.equal(sent().length, before, "nothing changed, and a second hasn't passed");
+await wait(700);
+assert.equal(sent().length, before + 1);
+assert.deepEqual(latest(), [AVATAR, [445, 235, 210, 60], STATUS]);
+// A move no handler announces (the avatar mid-walk) goes out within a tick; the idle bob doesn't.
+$("avatar").rect = { left: 1004, top: 602, width: 160, height: 160 };
+await wait(400);
+assert.equal(sent().length, before + 1, "a few px of bobbing is not news");
+$("avatar").rect = { left: 1200, top: 600, width: 160, height: 160 };
+await wait(400);
+assert.equal(sent().length, before + 2);
+assert.deepEqual(latest()[0], [595, 295, 90, 90]);
+// The checkerboard covers everything while it is up.
+sock.fire("show_calibration", {});
+await settle();
+assert.deepEqual(latest(), []);
+sock.fire("hide_calibration", {});
+await settle();
+assert.ok(latest().length > 0);
+// A hidden tab projects nothing new and sends nothing; it reports again the moment it is shown.
+doc.hidden = true;
+const hiddenAt = sent().length;
+await wait(1300);
+assert.equal(sent().length, hiddenAt);
+doc.hidden = false;
+for (const fn of doc.listeners.visibilitychange) fn();
+await settle();
+assert.equal(sent().length, hiddenAt + 1);
+// Never while disconnected: socket.io would replay stale boxes after the reconnect.
+sock.fire("disconnect");
+const offline = sock.emitted.length;
+await wait(1300);
+assert.equal(sock.emitted.length, offline);
+""",
+    )
+
+
+@needs_node
+def test_quiz_bar_waits_for_yes_or_no_before_ending_the_quiz(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + f"const QUIZ = {QUIZ};\n"
+        + """
+const sock = installIo();
+const http = installFetch({
+  "GET /api/tutor": { status: 200, body: { mode: "quiz", learn_topic: null, quiz: QUIZ, confirm_stop: true } },
+  "POST /api/tutor/quiz/stop": { status: 200, body: { mode: "help", learn_topic: null, quiz: null, confirm_stop: false } },
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+const line = $("quiz-confirm");
+// A page opened while the assistant waits for the answer shows it too (GET /api/tutor).
+assert.equal(line.hidden, false);
+assert.equal(line.textContent, "Waiting for yes/no to end the quiz");
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: QUIZ, confirm_stop: false });
+assert.equal(line.hidden, true);
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: QUIZ, confirm_stop: true });
+assert.equal(line.hidden, false);
+assert.equal($("quiz-stop-btn").hidden, false);
+assert.equal($("quiz-progress").textContent, "Problem 2 of 8 · 1 right on the first try");
+sock.fire("language", { setting: "es", current: "es" });
+assert.equal(line.textContent, "Esperando un «sí» o un «no» para terminar el quiz");
+sock.fire("language", { setting: "en", current: "en" });
+// The dashboard's Stop quiz button never asks: it stops at once.
+let asked = false;
+globalThis.confirm = () => { asked = true; return false; };
+await $("quiz-stop-btn").fire("click");
+assert.ok(http.calls.some((c) => c.method === "POST" && c.path === "/api/tutor/quiz/stop"));
+assert.equal(asked, false);
+assert.equal(line.hidden, true);
+assert.equal($("ask-msg").textContent, "Quiz stopped.");
+// Only a running quiz waits for an answer; servers without the flag never show the line.
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: { ...QUIZ, active: false }, confirm_stop: true });
+assert.equal(line.hidden, true);
+sock.fire("tutor", { mode: "quiz", learn_topic: null, quiz: QUIZ });
+assert.equal(line.hidden, true);
+""",
+    )
+
+
+@needs_node
+def test_board_overlay_outlines_the_highlighted_ink(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+installFetch({ "GET /api/ink": { status: 200, body: { regions: [], size: [1920, 1080] } } });
+const { selectStep } = await import("./dashboard/tabs.js");
+$("ink-toggle").checked = true;
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+selectStep("board");
+const outlines = () => $("ink-overlay").children.filter((c) => c.getAttribute("class") === "highlight");
+sock.fire("avatar_update", { animation_state: "pointing", target_x: 380, target_y: 350, highlight: [400, 300, 200, 100] });
+await wait(1600);
+const [rect] = outlines();
+assert.deepEqual(["x", "y", "width", "height"].map((k) => rect.getAttribute(k)), ["400", "300", "200", "100"]);
+// A server without highlights leaves it; the next answer's null clears it.
+sock.fire("avatar_update", { animation_state: "idle", target_x: 1700, target_y: 540 });
+await wait(1600);
+assert.equal(outlines().length, 1);
+sock.fire("avatar_update", { animation_state: "idle", target_x: 1700, target_y: 540, highlight: null });
+await wait(1600);
+assert.equal(outlines().length, 0);
+""",
+    )
+
+
+@needs_node
+def test_file_list_warns_about_files_that_still_have_answers(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+const sock = installIo();
+installFetch({ "GET /api/documents": { status: 200, body: { documents: [
+  { source: "my_worksheet.md", type: "md", chunks: 3, active: true, has_answers: true },
+  { source: "clean.md", type: "md", chunks: 2, active: true },
+] } } });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+const [flagged, clean] = $("files").children;
+const warning = flagged.children[1].children[1];
+assert.equal(warning.className, "file-warn");
+assert.equal(warning.textContent, "This file still has its answers. Upload it again so the assistant can't see them.");
+assert.equal(clean.children[1].children.length, 1, "a clean file has its meta line only");
+assert.deepEqual([$("badge-files").textContent, $("tab-files").dataset.tone], ["1 file has answers", "warn"]);
+sock.fire("language", { setting: "es", current: "es" });
+assert.equal($("files").children[0].children[1].children[1].textContent,
+  "Este archivo todavía tiene sus respuestas. Vuelve a subirlo para que el asistente no las pueda ver.");
+assert.equal($("badge-files").textContent, "1 archivo con respuestas");
+// Uploaded again without its answers: the warning and the badge go.
+sock.fire("documents_changed", { documents: [{ source: "my_worksheet.md", type: "md", chunks: 3, active: true }] });
+assert.equal($("files").children[0].children[1].children.length, 1);
+assert.deepEqual([$("badge-files").textContent, $("tab-files").dataset.tone], ["1 en uso", "ok"]);
+""",
+    )
+
+
+LAN = {
+    "enabled": True,
+    "urls": ["http://192.168.1.20:5050/join?pin=482913", "http://10.0.0.7:5050/join?pin=482913"],
+    "pin": "482913",
+    "phones": 2,
+    "locked_for": 0,
+}
+PHONE_DASHBOARD = DASHBOARD.replace("installDom(NODES)", 'installDom(NODES, { bodyData: { lan: "1" } })')
+assert PHONE_DASHBOARD != DASHBOARD
+
+
+@needs_node
+def test_phone_card_shows_the_qr_code_pin_and_phones(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        PHONE_DASHBOARD
+        + f"const LAN = {json.dumps(LAN)};\n"
+        + """
+const added = [];
+globalThis.qrcode = (type, level) => {
+  assert.deepEqual([type, level], [0, "M"]);
+  return { addData: (url) => added.push(url), make() {}, getModuleCount: () => 2, isDark: (row, col) => row === col };
+};
+let lan = structuredClone(LAN);
+let disconnectReply = { status: 200, body: { ok: true } };
+const sock = installIo();
+const http = installFetch({
+  "GET /api/lan": () => ({ status: 200, body: structuredClone(lan) }),
+  "POST /api/lan/rotate": () => {
+    lan = { ...lan, pin: "105377", phones: 0, urls: lan.urls.map((u) => u.replace("482913", "105377")) };
+    return { status: 200, body: structuredClone(lan) };
+  },
+  "POST /api/lan/disconnect": () => {
+    if (disconnectReply.status === 200) lan = { ...lan, phones: 0 };
+    return disconnectReply;
+  },
+});
+const { refreshPhone } = await import("./dashboard/phone.js");
+await import("./dashboard/main.js");
+await settle();
+assert.equal($("phone-card").hidden, false);
+assert.equal($("phone-pin").textContent, "482 913");
+// The address to type has no ?pin=, so typing it opens the PIN form; the QR code carries the PIN.
+assert.equal($("phone-url").textContent, "http://192.168.1.20:5050/join");
+assert.equal($("phone-other").textContent, "Other addresses: http://10.0.0.7:5050/join");
+assert.equal($("phone-other").hidden, false);
+assert.equal($("phone-count").textContent, "2 phones or tablets connected");
+assert.deepEqual(added, [LAN.urls[0]]);
+// One SVG path for the dark modules, black on white, with a 4-module quiet zone.
+const svg = $("phone-qr").children[0];
+assert.equal(svg.getAttribute("viewBox"), "0 0 10 10");
+const [paper, dark] = svg.children;
+assert.equal(paper.getAttribute("fill"), "#ffffff");
+assert.equal(dark.getAttribute("fill"), "#000000");
+assert.equal(dark.getAttribute("d"), "M4 4h1v1h-1zM5 5h1v1h-1z");
+// New PIN asks first; Cancel changes nothing.
+globalThis.confirm = () => false;
+await $("phone-rotate-btn").fire("click");
+assert.ok(!http.calls.some((c) => c.path === "/api/lan/rotate"));
+globalThis.confirm = () => true;
+await $("phone-rotate-btn").fire("click");
+assert.ok(http.calls.some((c) => c.method === "POST" && c.path === "/api/lan/rotate"));
+assert.equal($("phone-pin").textContent, "105 377");
+assert.equal($("phone-count").textContent, "No phones connected");
+assert.equal($("phone-msg").textContent, "New PIN made. Every phone was signed out.");
+assert.equal(added.at(-1), "http://192.168.1.20:5050/join?pin=105377");
+// Disconnect all phones: its reply is not the card's body, so the card asks for it again.
+lan = { ...lan, phones: 1 };
+await refreshPhone();
+assert.equal($("phone-count").textContent, "1 phone or tablet connected");
+await $("phone-disconnect-btn").fire("click");
+assert.ok(http.calls.some((c) => c.method === "POST" && c.path === "/api/lan/disconnect"));
+assert.equal($("phone-count").textContent, "No phones connected");
+assert.equal($("phone-msg").textContent, "Every phone was disconnected.");
+disconnectReply = { status: 500, body: { error: "RuntimeError: socket gone" } };
+await $("phone-disconnect-btn").fire("click");
+assert.equal($("phone-msg").textContent,
+  "Couldn't disconnect the phones. Check the assistant is still running (restart the assistant if it closed), then try again.");
+assert.equal($("phone-msg").dataset.tone, "bad");
+assert.match(logText(), /RuntimeError: socket gone/);
+// A guesser locked everyone out: say so, and for how long.
+lan = { ...lan, locked_for: 90 };
+await refreshPhone();
+assert.equal($("phone-msg").textContent, "Too many wrong PINs: nobody can join for 2 minutes.");
+assert.equal($("phone-msg").dataset.tone, "warn");
+lan = { ...lan, locked_for: 0 };
+await refreshPhone();
+assert.equal($("phone-msg").textContent, "");
+// Off the network: no code to scan, and what to do about it.
+lan = { ...lan, urls: [] };
+await refreshPhone();
+assert.equal($("phone-qr").hidden, true);
+assert.equal($("phone-url").textContent, "This laptop isn't on a network. Join the classroom Wi-Fi.");
+assert.equal($("phone-other").hidden, true);
+// A reconnect asks again: a restarted server has a new PIN.
+lan = structuredClone(LAN);
+const asked = http.calls.filter((c) => c.path === "/api/lan").length;
+sock.fire("connect");
+await settle();
+assert.equal(http.calls.filter((c) => c.path === "/api/lan").length, asked + 1);
+assert.equal($("phone-pin").textContent, "482 913");
+assert.equal($("phone-qr").hidden, false);
+sock.fire("language", { setting: "es", current: "es" });
+assert.equal($("phone-count").textContent, "2 dispositivos conectados");
+assert.equal($("phone-other").textContent, "Otras direcciones: http://10.0.0.7:5050/join");
+""",
+    )
+
+
+@needs_node
+@pytest.mark.parametrize(
+    ("lan", "reply"), [("1", "403"), ("1", "404"), ("1", "disabled"), ("0", "ok")], ids=["phone", "old", "off", "local"]
+)
+def test_phone_card_stays_hidden_off_the_laptop_or_outside_lan_mode(tmp_path: Path, lan: str, reply: str) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD.replace("installDom(NODES)", f'installDom(NODES, {{ bodyData: {{ lan: "{lan}" }} }})')
+        + f"const LAN = {json.dumps(LAN)};\nconst REPLY = {json.dumps(reply)};\n"
+        + """
+const replies = {
+  "403": { status: 403, body: { error: "local only" } },
+  "404": { status: 404, body: { error: "not found" } },
+  disabled: { status: 200, body: { enabled: false, urls: [], pin: null, phones: 0 } },
+  ok: { status: 200, body: LAN },
+};
+const sock = installIo();
+const http = installFetch({ "GET /api/lan": replies[REPLY] });
+const { refreshPhone } = await import("./dashboard/phone.js");
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+assert.equal($("phone-card").hidden, true);
+assert.doesNotMatch($("phone-pin").textContent, /\\d/, "no PIN written anywhere");
+const calls = () => http.calls.filter((c) => c.path === "/api/lan").length;
+// Outside LAN mode the page never asks; a phone (403) or an older server (404) is asked once, then left alone.
+if (REPLY === "ok") assert.equal(calls(), 0);
+else if (REPLY !== "disabled") {
+  const seen = calls();
+  await refreshPhone().catch(() => {});
+  assert.equal(calls(), seen);
+}
+""",
+    )
+
+
+@needs_node
+def test_phone_qr_code_from_the_vendored_library(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + f"const VENDOR = {json.dumps(str(STATIC / 'vendor' / 'qrcode.min.js'))};\n"
+        + """
+const { readFileSync } = await import("node:fs");
+// A classic script that defines a global `qrcode`, as the template loads it.
+new Function(readFileSync(VENDOR, "utf8") + "\\nglobalThis.qrcode = qrcode;")();
+const { groupPin, qrSvg, typedUrl } = await import("./dashboard/phone.js");
+const svg = qrSvg("http://192.168.1.20:5050/join?pin=482913");
+const size = Number(svg.getAttribute("viewBox").split(" ")[2]);
+// Version v has 4v + 17 modules a side; this address needs version 3 or 4 at level M. Plus 4 + 4 quiet zone.
+assert.ok([29, 33].includes(size - 8), `size ${size}`);
+const d = svg.children[1].getAttribute("d");
+// The top-left finder pattern: its first row is 7 dark modules from (4, 4).
+for (let col = 0; col < 7; col++) assert.ok(d.includes(`M${col + 4} 4h1v1h-1z`), `finder module ${col}`);
+assert.ok(!d.includes("M11 4h1v1h-1z"), "the separator after the finder is light");
+assert.equal(groupPin("482913"), "482 913");
+assert.equal(groupPin("12345"), "12345");
+assert.equal(typedUrl("http://[fe80::1]:5050/join?pin=123456"), "http://[fe80::1]:5050/join");
+delete globalThis.qrcode;
+assert.equal(qrSvg("http://x/join"), null, "no library: no code, and no crash");
+""",
+    )
+
+
+@needs_node
+def test_service_worker_only_in_lan_mode(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installFetch();
+const registered = [];
+let unregistered = 0;
+const deleted = [];
+const workers = {
+  register: (url, options) => { registered.push([url, options]); return Promise.resolve(); },
+  getRegistrations: () => Promise.resolve([{ unregister: () => { unregistered += 1; } }]),
+};
+Object.defineProperty(globalThis, "navigator", { value: { serviceWorker: workers }, configurable: true });
+globalThis.caches = { keys: async () => ["sar-shell-v3", "someone-else"], delete: async (name) => deleted.push(name) };
+const { initServiceWorker } = await import("./dashboard/phone.js");
+doc.body.dataset.lan = "1";
+initServiceWorker();
+await settle();
+assert.deepEqual(registered, [["/sw.js", { scope: "/" }]]);
+assert.equal(unregistered, 0);
+assert.deepEqual(deleted, []);
+// Outside LAN mode a worker left from an earlier phone-mode run goes, with its caches (and only its own).
+doc.body.dataset.lan = "0";
+initServiceWorker();
+await settle();
+assert.equal(registered.length, 1);
+assert.equal(unregistered, 1);
+assert.deepEqual(deleted, ["sar-shell-v3"]);
+// Plain-HTTP phones have no serviceWorker at all.
+Object.defineProperty(globalThis, "navigator", { value: {}, configurable: true });
+initServiceWorker();
+""",
+    )
+
+
+def render_page(name: str, **variables: object) -> str:
+    """A template as Flask renders it, with only the variables a test passes (a server may not send them all)."""
+    from flask import Flask, render_template
+
+    app = Flask("pages", template_folder=str(TEMPLATES), static_folder=str(STATIC))
+    with app.test_request_context():
+        return render_template(name, **variables)
+
+
+def test_phone_mode_parts_render_only_in_lan_mode() -> None:
+    size = {"projector_width": 1280, "projector_height": 800}
+    on = render_page("precharge.html", lan_enabled=True, **size)
+    for page in (render_page("precharge.html", lan_enabled=False, **size), render_page("precharge.html", **size)):
+        assert 'data-lan="0"' in page
+        for part in ('rel="manifest"', "qrcode.min.js", 'id="phone-card"', "apple-touch-icon"):
+            assert part not in page, part
+    assert 'data-lan="1"' in on
+    assert '<link rel="manifest" href="/static/manifest.webmanifest">' in on
+    assert 'id="phone-card"' in on and "apple-touch-icon.png" in on
+    # The QR library is a classic script, loaded before the module that draws with it.
+    assert on.index("/static/vendor/qrcode.min.js") < on.index("/static/js/dashboard/main.js")
+    projector = render_page("index.html", lan_enabled=True, **size)
+    assert 'rel="manifest"' not in projector and "qrcode" not in projector
+
+
+def test_join_page_form_error_and_lockout() -> None:
+    base = {"language": "en", "lan_enabled": True}
+    plain = render_page("join.html", error=False, locked_for=0, **base)
+    assert 'id="join-error"' not in plain and 'id="join-locked"' not in plain
+    form = re.search(r"<form\b[^>]*>", plain).group(0)
+    assert 'method="post"' in form and 'action="/join"' in form
+    pin = re.search(r"<input\b[^>]*>", plain).group(0)
+    for attr in ('name="pin"', 'inputmode="numeric"', 'autocomplete="one-time-code"', "required"):
+        assert attr in pin, attr
+    # no-referrer would make the PIN form post Origin: null, which the cross-origin guard refuses.
+    assert '<meta name="referrer" content="same-origin">' in plain and "no-referrer" not in plain
+    assert 'rel="manifest"' in plain
+    wrong = render_page("join.html", error=True, locked_for=0, **base)
+    assert 'id="join-error"' in wrong and 'id="join-locked"' not in wrong
+    locked = render_page("join.html", error=True, locked_for=90, lockout="Too many", message="Too many", **base)
+    assert 'data-locked-for="90"' in locked and 'id="join-error"' not in locked
+    spanish = render_page("join.html", error=False, language="es")
+    assert '<html lang="es">' in spanish and 'data-language="es"' in spanish
+    # Only the contract's two variables: still a working form, and no phone-mode extras.
+    bare = render_page("join.html", error=False, language="en")
+    assert 'id="join-form"' in bare and 'rel="manifest"' not in bare and 'id="join-locked"' not in bare
+
+
+JOIN = """
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const ticks = [];
+let stopped = false;
+globalThis.setInterval = (fn) => { ticks.push(fn); return ticks.length; };
+globalThis.clearInterval = () => { stopped = true; };
+const join = (nodes, { language = "", browser = ["en-US"] } = {}) => {
+  const doc = installDom(nodes, { bodyData: { language } });
+  Object.defineProperty(globalThis, "navigator", { value: { languages: browser }, configurable: true });
+  return doc;
+};
+"""
+
+
+@needs_node
+def test_join_page_speaks_the_browser_language_and_counts_down_a_lockout(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "join.html",
+        JOIN
+        + """
+// The server renders one alert at most: here the lockout, 61 s long.
+const doc = join(NODES.filter((n) => n.id !== "join-error"), { language: "en", browser: ["es-MX", "en-US"] });
+const $ = (id) => doc.getElementById(id);
+$("join-locked").dataset.lockedFor = "61";
+const { browserLanguage, lockoutText } = await import("./join.js");
+assert.equal(doc.documentElement.lang, "es");
+const title = [...doc.body.descendants()].find((n) => n.tagName === "TITLE");
+assert.equal(title.textContent, "Entrar al Asistente del pizarrón");
+assert.equal($("join-btn").textContent, "Entrar");
+assert.equal($("join-locked").textContent, "Demasiados PIN incorrectos. Vuelve a intentarlo en 2 minutos.");
+// Guesses during a lockout are refused, so the button waits for the countdown.
+assert.equal($("join-btn").disabled, true);
+ticks[0]();
+assert.equal($("join-locked").textContent, "Demasiados PIN incorrectos. Vuelve a intentarlo en 1 minuto.");
+ticks[0]();
+assert.equal($("join-locked").textContent, "Demasiados PIN incorrectos. Vuelve a intentarlo en 59 segundos.");
+for (let i = 0; i < 58; i++) ticks[0]();
+assert.equal($("join-locked").textContent, "Demasiados PIN incorrectos. Vuelve a intentarlo en 1 segundo.");
+assert.equal($("join-btn").disabled, true);
+ticks[0]();
+assert.equal($("join-locked").hidden, true);
+assert.equal($("join-btn").disabled, false);
+assert.equal($("join-msg").textContent, "Ya puedes volver a intentarlo.");
+assert.ok(stopped);
+// The browser's language first, then the one the server rendered, then English.
+assert.equal(browserLanguage(["EN-gb", "es"], "es"), "en");
+assert.equal(browserLanguage(["fr-FR", "de"], "es"), "es");
+assert.equal(browserLanguage(["fr-FR"], "xx"), "en");
+assert.equal(browserLanguage([undefined], undefined), "en");
+assert.equal(browserLanguage(undefined, "es"), "es");
+assert.equal(lockoutText(60), "Demasiados PIN incorrectos. Vuelve a intentarlo en 1 minuto.");
+assert.equal(lockoutText(125), "Demasiados PIN incorrectos. Vuelve a intentarlo en 3 minutos.");
+""",
+    )
+
+
+@needs_node
+def test_join_page_after_a_wrong_pin(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "join.html",
+        JOIN
+        + """
+const doc = join(NODES.filter((n) => n.id !== "join-locked"), { language: "es", browser: ["en-US"] });
+const $ = (id) => doc.getElementById(id);
+$("pin").value = "48291";
+await import("./join.js");
+// An English phone gets English, whatever the class language.
+assert.equal(doc.documentElement.lang, "en");
+assert.equal($("join-error").textContent, "That PIN didn't work. Check it on the laptop and try again.");
+assert.equal($("join-btn").disabled, false);
+assert.equal($("pin").value, "", "the next try starts from an empty box");
+assert.equal(ticks.length, 0, "no countdown without a lockout");
+""",
+    )
+
+
+@needs_node
+def test_help_texts_never_assume_a_terminal_window() -> None:
+    for table in strings().values():
+        for key, text in table.items():
+            for phrase in ("Terminal window", "ventana de Terminal", "Ctrl+C"):
+                assert phrase not in text, f"{key} assumes a Terminal window: {text}"
+    en, es = strings()["en"], strings()["es"]
+    for key in ("hint.offline", "conn.unreachable", "lang.failed"):
+        assert "restart the assistant" in en[key], key
+        assert "vuelve a iniciar el asistente" in es[key], key
+    # The desktop app on either system, not only a Terminal on a Mac.
+    assert "On a Mac" in en["check.camera.fix"] and "Let desktop apps access your camera" in en["check.camera.fix"]
+    assert "En una Mac" in es["check.camera.fix"] and "En Windows" in es["check.camera.fix"]
+
+
+def css_block(css: str, opener: str) -> str:
+    """The body of the `opener { ... }` block, nested braces included."""
+    start = css.index(opener)
+    depth, i = 0, css.index("{", start)
+    for j in range(i, len(css)):
+        depth += {"{": 1, "}": -1}.get(css[j], 0)
+        if depth == 0:
+            return css[i + 1 : j]
+    raise AssertionError(f"{opener} is not closed")
+
+
+def test_dashboard_steps_fit_one_laptop_screen() -> None:
+    css = (STATIC / "css" / "dashboard.css").read_text(encoding="utf-8")
+    # A fixed panel height forced page scroll on short laptop screens.
+    assert not re.search(r"\.panel\s*\{[^}]*min-height:\s*\d{3}px", css)
+    shell = re.sub(r"/\*.*?\*/", "", css_block(css, "@media (min-width: 761px) and (min-height: 480px)"), flags=re.S)
+    rules = {sel.strip(): body for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", shell)}
+    assert "height: 100vh" in rules[".page"] and "flex-direction: column" in rules[".page"]
+    assert "min-height: 0" in rules["main"] and "flex: 1 1 auto" in rules["main"]
+    assert "overflow-y: auto" in rules[".panel"] and "min-height: 0" in rules[".panel"]
+    # The long parts fill what is left and scroll inside: no "100vh - N px" guesses at the header's height.
+    entries = next(body for sel, body in rules.items() if sel.startswith(".panel > .entries"))
+    assert "flex: 1 1 0" in entries and "max-height: none" in entries
+    assert "overflow-y: auto" in rules[".panel > .files"]
+    assert "overflow-y: auto" in rules[".board-side .checks"] and "flex: none" in rules[".board-side .calibrate"]
+    assert "overflow-y: auto" in rules[".more-col"] and "overflow-y: auto" in rules[".more-col > .config"]
+    assert "100vh -" not in shell

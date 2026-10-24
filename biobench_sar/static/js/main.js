@@ -216,8 +216,10 @@ function uiRects() {
   const sx = PROJ_W / window.innerWidth;
   const sy = PROJ_H / window.innerHeight;
   const boxes = [];
-  for (const node of [avatar, bubble, quizCard, highlightEl, transcriptEl, statusEl, textInput, debugEl]) {
-    if (!onBoard(node)) continue;
+  // [what is drawn, what decides whether it shows]: the typing box shows with its overlay.
+  const parts = [[avatar], [bubble], [quizCard], [highlightEl], [transcriptEl], [statusEl], [textInput, textOverlay], [debugEl]];
+  for (const [node, holder = node] of parts) {
+    if (!onBoard(holder) || !onBoard(node)) continue;
     const r = node.getBoundingClientRect();
     if (!(r.width > 0 && r.height > 0)) continue;
     boxes.push(...(node === highlightEl ? edges(r) : [r]));
