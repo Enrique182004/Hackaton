@@ -1724,6 +1724,12 @@ def test_claude_md_keeps_the_specs_non_negotiables() -> None:
         assert r"$env:SAR_PROFILE='biology'; .\.venv\Scripts\python.exe -m biobench_sar" in DOCS[name]
 
 
+def test_agent_docs_point_at_the_cleanup_pass() -> None:
+    assert "## Cleanup pass (every branch and PR)" in DOCS["CONTRIBUTING.md"]
+    for name in ("CLAUDE.md", "AGENTS.md"):
+        assert "CONTRIBUTING.md#cleanup-pass-every-branch-and-pr" in DOCS[name], name
+
+
 def test_documented_knowledge_paths_exist() -> None:
     for name, text in DOCS.items():
         for folder, file in re.findall(r"knowledge/([a-z_]+)/([\w.]+\.\w+)?", text):
