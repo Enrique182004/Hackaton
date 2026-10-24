@@ -440,7 +440,13 @@ class TutorSession:
         if index >= self._total:
             return None
         if index not in self._invented:
-            self._invented[index] = invent_problem(index + 1, self._total, self._rng)
+            given = {p.problem for p in self._invented.values()}
+            # Neighbouring numbers share a generator (only 176 one-step problems), so a draw can repeat one.
+            for _ in range(20):
+                problem = invent_problem(index + 1, self._total, self._rng)
+                if problem.problem not in given:
+                    break
+            self._invented[index] = problem
         return self._invented[index]
 
     @property
