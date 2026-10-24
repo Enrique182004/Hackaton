@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import re
+import statistics
 import tempfile
 import threading
 import time
@@ -56,6 +57,12 @@ AVATAR_HALF = 80
 AVATAR_REACH = AVATAR_HALF + 20
 # Ink regions are word and symbol blobs; blobs this many line heights apart or closer, side by side, are one line.
 LINE_GAP = 1.5
+# Rows of blobs this close above one another (a share of the board's glyph height), overlapping side to side, are one
+# written line too: a stacked fraction's numerators, bars and denominators, an exponent over its base. A second line
+# of writing sits further down. A flat row (a fraction bar on its own) keeps its glyphs a little further off.
+STACK_GAP = 0.35
+BAR_GAP = 0.6
+FLAT_ROW = 0.5
 NO_ANSWER_TEXT = "I can't see an answer on the board yet. Write it, then ask me to check it."
 TEXTS = {
     "en": {
@@ -251,22 +258,63 @@ def _same_line(a: Box, b: Box) -> bool:
     return shared >= 0.5 * min(a[3], b[3]) and gap <= LINE_GAP * max(a[3], b[3])
 
 
-def ink_lines(boxes: Iterable[Box]) -> list[Box]:
-    """Blobs grouped into written lines ("x", "=", "7" -> "x = 7"): boxes that share half the smaller height or more
-    and sit within LINE_GAP heights of each other side by side. Each line is the union of its blobs."""
+def _stacked(a: Box, b: Box, glyph: float) -> bool:
+    """One row right above the other, overlapping side to side: the rows of a stacked fraction, an exponent."""
+    across = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
+    if across < 0.5 * min(a[2], b[2]):
+        return False
+    upper, lower = (a, b) if a[1] <= b[1] else (b, a)
+    gap = lower[1] - (upper[1] + upper[3])
+    flat = min(a[3], b[3]) <= FLAT_ROW * glyph
+    return gap <= (BAR_GAP if flat else STACK_GAP) * glyph
+
+
+def _merged(boxes: list[Box], joined: Callable[[Box, Box], bool]) -> list[Box]:
     lines = sorted(boxes, key=lambda b: b[0])
     merged = True
     while merged:
         merged = False
         for i in range(len(lines)):
             for j in range(i + 1, len(lines)):
-                if _same_line(lines[i], lines[j]):
+                if joined(lines[i], lines[j]):
                     lines[i] = _union(lines[i], lines.pop(j))
                     merged = True
                     break
             if merged:
                 break
     return lines
+
+
+def ink_lines(boxes: Iterable[Box]) -> list[Box]:
+    """Blobs grouped into written lines ("x", "=", "7" -> "x = 7"): boxes that share half the smaller height or more
+    and sit within LINE_GAP heights of each other side by side form rows; rows stacked within STACK_GAP glyph heights
+    (BAR_GAP next to a flat row), overlapping side to side, are one line ("1/2 + 1/2" written as two stacked
+    fractions). Each line is the union of its blobs."""
+    blobs = list(boxes)
+    if not blobs:
+        return []
+    rows = _merged(blobs, _same_line)
+    # The board's glyph height: the median blob, leaving out flat strokes (fraction bars, minus signs).
+    glyph = statistics.median([b[3] for b in blobs if b[3] > 0.4 * b[2]] or [b[3] for b in blobs])
+    # Judged row by row before any union, so a fraction bar joins its numerator and its denominator even after one
+    # of them has made the bar's row taller than a bar.
+    group = list(range(len(rows)))
+
+    def root(i: int) -> int:
+        while group[i] != i:
+            i = group[i]
+        return i
+
+    for i in range(len(rows)):
+        for j in range(i + 1, len(rows)):
+            if _stacked(rows[i], rows[j], glyph):
+                group[root(j)] = root(i)
+    stacks: dict[int, Box] = {}
+    for i, row in enumerate(rows):
+        r = root(i)
+        stacks[r] = _union(stacks[r], row) if r in stacks else row
+    # A "+" or "=" beside a stacked fraction, out of reach of the bar's short row, is on the line it now spans.
+    return _merged(list(stacks.values()), _same_line)
 
 
 def _distance(x: float, y: float, box: Box) -> float:

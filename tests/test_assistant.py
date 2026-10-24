@@ -1749,6 +1749,130 @@ def test_ink_lines_groups_blobs_into_written_lines() -> None:
     assert ink_lines([]) == []
 
 
+# Blobs as vision_loop.find_ink_regions finds them on a 1920×1080 board, digits ~55 px tall (marker strokes drawn with
+# OpenCV). Stacked fractions: the gap between each glyph and its bar, in board px.
+Blob = tuple[int, int, int, int]
+HALVES = {  # "1/2 + 1/2 = 1"
+    8: [
+        (394, 441, 78, 66),
+        (410, 520, 44, 55),
+        (494, 480, 44, 43),
+        (561, 441, 139, 76),
+        (577, 520, 44, 55),
+        (732, 476, 43, 54),
+    ],
+    14: [
+        (394, 494, 78, 13),
+        (410, 526, 44, 55),
+        (411, 435, 43, 54),
+        (494, 480, 44, 43),
+        (561, 486, 139, 31),
+        (577, 526, 44, 55),
+        (578, 435, 43, 54),
+        (732, 476, 43, 54),
+    ],
+    22: [
+        (394, 494, 78, 13),
+        (410, 534, 44, 55),
+        (411, 427, 43, 54),
+        (494, 480, 44, 43),
+        (561, 486, 139, 31),
+        (577, 534, 44, 55),
+        (578, 427, 43, 54),
+        (732, 476, 43, 54),
+    ],
+}
+THREE_QUARTERS = {
+    14: [(394, 494, 78, 13), (408, 527, 48, 54), (409, 435, 45, 55)],
+    22: [(394, 494, 78, 13), (408, 535, 48, 54), (409, 427, 45, 55)],
+}
+PROBLEM_7_4 = [
+    (398, 341, 43, 42),
+    (455, 338, 44, 43),
+    (515, 329, 98, 54),
+    (632, 329, 41, 54),
+    (672, 323, 39, 66),
+    (707, 329, 48, 54),
+]  # "x + 1 = 7/4", written inline
+ANSWER_3_4 = {  # "x = 3/4" under it, the fraction stacked
+    14: [(398, 488, 96, 42), (519, 494, 78, 13), (533, 527, 48, 54), (534, 435, 45, 55)],
+    22: [(398, 488, 96, 42), (519, 494, 78, 13), (533, 535, 48, 54), (534, 427, 45, 55)],
+}
+TWO_LINES = [
+    (399, 349, 45, 55),
+    (442, 361, 43, 42),
+    (499, 358, 44, 43),
+    (558, 349, 44, 55),
+    (620, 348, 98, 55),
+    (718, 348, 44, 56),
+    (398, 461, 96, 42),
+    (511, 449, 44, 55),
+]  # "3x + 5 = 20" over "x = 5"
+TIGHT_LINES = [
+    (399, 349, 45, 55),
+    (442, 361, 90, 42),
+    (611, 348, 98, 55),
+    (399, 434, 45, 55),
+    (442, 446, 96, 42),
+    (555, 433, 88, 56),
+    (398, 531, 96, 42),
+    (511, 518, 88, 56),
+    (597, 513, 39, 66),
+    (633, 519, 45, 55),
+]  # "3x - 5 = 20", "3x = 25", "x = 25/3", 85 px apart
+
+
+def _boxes(blobs: list[Blob]) -> list[tuple[float, float, float, float]]:
+    return [tuple(map(float, b)) for b in blobs]  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    ("blobs", "line"),
+    [
+        (HALVES[8], (394, 441, 381, 134)),
+        (HALVES[14], (394, 435, 381, 146)),
+        (HALVES[22], (394, 427, 381, 162)),
+        (THREE_QUARTERS[14], (394, 435, 78, 146)),  # a bar alone in its row holds its glyphs a little further off
+        (THREE_QUARTERS[22], (394, 427, 78, 162)),
+    ],
+)
+def test_ink_lines_keeps_a_stacked_fraction_on_one_line(blobs: list[Blob], line: Blob) -> None:
+    from biobench_sar.assistant import ink_lines
+
+    assert ink_lines(_boxes(blobs)) == [tuple(map(float, line))]
+
+
+@pytest.mark.parametrize(
+    ("blobs", "lines"),
+    [
+        (TWO_LINES, [(398, 449, 157, 55), (399, 348, 363, 56)]),
+        (TIGHT_LINES, [(398, 513, 280, 66), (399, 348, 310, 56), (399, 433, 244, 56)]),
+        (PROBLEM_7_4 + ANSWER_3_4[14], [(398, 323, 357, 66), (398, 435, 199, 146)]),
+        (PROBLEM_7_4 + ANSWER_3_4[22], [(398, 323, 357, 66), (398, 427, 199, 162)]),
+    ],
+)
+def test_ink_lines_keeps_lines_of_writing_apart(blobs: list[Blob], lines: list[Blob]) -> None:
+    from biobench_sar.assistant import ink_lines
+
+    assert sorted(ink_lines(_boxes(blobs))) == [tuple(map(float, b)) for b in lines]
+
+
+def test_quiz_check_highlights_a_stacked_fraction_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The lowest row of "x = 3/4" is its denominator alone; the answer is the whole line.
+    monkeypatch.setenv("SAR_PROJECTOR_WIDTH", "1920")
+    monkeypatch.setenv("SAR_PROJECTOR_HEIGHT", "1080")
+    h = Harness()
+    _bank(h, "a.md", ("x + 1 = 7/4", "x = 3/4", 1), ("x + 1 = 2", "x = 1", 1))
+    _ask(h, "quiz me")
+    blobs = PROBLEM_7_4 + ANSWER_3_4[22]
+    _with_ink(
+        monkeypatch, *({"x": x, "y": y, "w": w, "h": b, "cx": x + w // 2, "cy": y + b // 2} for x, y, w, b in blobs)
+    )
+    avatar = _reply(h, "check my answer", AvatarAction("Correct!", "celebrating", 556, 562))
+    assert avatar["highlight"] == [398, 427, 199, 162]
+    assert (avatar["target_x"], avatar["target_y"]) == (398 - BESIDE, 508), "beside the whole line, not its 4"
+
+
 def test_math_highlight_outlines_the_whole_answer_line(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
     _bank(h, "a.md", ("3x + 5 = 20", "x = 5", 1), ("x + 1 = 2", "x = 1", 1))
     _ask(h, "quiz me")
