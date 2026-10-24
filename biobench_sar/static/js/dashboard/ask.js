@@ -1,5 +1,5 @@
 import { $, el, request, setNote } from "./api.js";
-import { has, onLanguageChange, t } from "../i18n.js";
+import { onLanguageChange, t } from "../i18n.js";
 import { logEvent } from "./log.js";
 import { currentProfile, modeLabel, onProfileChange, words } from "./profile.js";
 import { listeningNote } from "./status.js";
@@ -23,7 +23,7 @@ const MIC_NOTES = {
 function modeNote(item) {
   if (currentProfile() !== "math") return null;
   if (item.task_kind === "learn") return t("note.learning");
-  return has(`mode.${item.mode}`) ? modeLabel(item.mode) : null;
+  return ["help", "practice", "quiz"].includes(item.mode) ? modeLabel(item.mode) : null;
 }
 
 // The server's own texts for a model call or pipeline that failed, for servers that send no `failed` flag.

@@ -1,9 +1,12 @@
 import { $, el, formatDuration } from "./api.js";
-import { bindText, has, onLanguageChange, plural, t } from "../i18n.js";
+import { bindText, onLanguageChange, plural, t } from "../i18n.js";
 import { words } from "./profile.js";
 import { setBadge } from "./tabs.js";
 
 export const listeningNote = () => t("state.listening");
+
+// Server states with a state.<state> sentence; the busy ones also have a badge.ask.<state> word.
+const STATES = ["idle", "listening", "transcribing", "thinking", "speaking"];
 
 let connected = false;
 let lastState = "idle";
@@ -79,7 +82,7 @@ export function renderStatus(s) {
 }
 
 function sentence(state, detail) {
-  const text = has(`state.${state}`) ? t(`state.${state}`) : state;
+  const text = STATES.includes(state) ? t(`state.${state}`) : state;
   return detail === "busy" ? `${text} ${t("state.busy")}` : text;
 }
 
@@ -91,7 +94,7 @@ export function renderState(state, detail) {
   bindText($("status-text"), () => sentence(state, detail));
   $("listen-btn").dataset.live = state === "listening" ? "1" : "0";
   if (state === "idle") setBadge("ask", idleBadge, "ok");
-  else setBadge("ask", () => (has(`badge.ask.${state}`) ? t(`badge.ask.${state}`) : state), "warn");
+  else setBadge("ask", () => (STATES.includes(state) ? t(`badge.ask.${state}`) : state), "warn");
 }
 
 // `label` is a function of the current language, or nothing for "ready".

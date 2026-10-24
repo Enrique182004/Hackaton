@@ -40,10 +40,6 @@ GENERIC_FAMILIES = {"serif", "sans-serif", "monospace", "cursive", "system-ui", 
 BLAND_FIRST_CHOICES = {"inter", "roboto", "arial", "helvetica", "system-ui", "-apple-system"}
 
 
-def template_ids(name: str) -> list[str]:
-    return re.findall(r'\bid="([^"]+)"', (TEMPLATES / name).read_text(encoding="utf-8"))
-
-
 def _dataset_key(attr: str) -> str:
     return re.sub(r"-([a-z0-9])", lambda m: m.group(1).upper(), attr.removeprefix("data-"))
 

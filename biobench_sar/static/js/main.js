@@ -1,4 +1,4 @@
-import { bindText, has, languageFor, setLanguage, t } from "./i18n.js";
+import { bindText, languageFor, setLanguage, t } from "./i18n.js";
 
 const body = document.body;
 const PROJ_W = parseFloat(body.dataset.projectorWidth) || 1920;
@@ -13,6 +13,8 @@ const MOVE_MS = 1500;
 // While the student asks and the assistant reads the board, the quiz card steps aside: projected text in the
 // camera picture looks like ink, and the model would read the printed problem as the student's work.
 const CAPTURE_STATES = ["listening", "transcribing", "thinking"];
+// Server states with a proj.<state> label; anything else is shown as sent.
+const LABELLED_STATES = ["idle", "listening", "transcribing", "thinking", "speaking"];
 
 const $ = (id) => document.getElementById(id);
 const avatar = $("avatar");
@@ -159,7 +161,7 @@ function renderStatus(d) {
   clearTimeout(offlineHintTimer);
   statusEl.dataset.state = s;
   // The corner is read from across the room, so it says what to do rather than the internal state name.
-  bindText(statusLabel, () => (d.detail === "busy" ? t("proj.busy") : has(`proj.${s}`) ? t(`proj.${s}`) : s));
+  bindText(statusLabel, () => (d.detail === "busy" ? t("proj.busy") : LABELLED_STATES.includes(s) ? t(`proj.${s}`) : s));
   quizCard.classList.toggle("capturing", CAPTURE_STATES.includes(s));
 }
 
