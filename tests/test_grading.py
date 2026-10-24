@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from fractions import Fraction
 
 import pytest
@@ -616,3 +618,82 @@ def test_several_lines_grade_as_one_answer() -> None:
 def test_to_math_keeps_line_breaks() -> None:
     assert to_math("x  =  5\n\n x = -3 ") == "x = 5\nx = -3"
     assert solve_text("x + y = 10\nx - y = 4") == solve_text("x + y = 10 and x - y = 4")
+
+
+# ---- nothing takes long ------------------------------------------------------------------------------------------
+
+TOWER = "x = " + "(" * 9 + "9" + ")^6" * 9  # 9^(6^9) worked out exactly: about ten million digits
+BIG_BASE_TOWER = "x = " + "(" * 7 + "9" * 40 + ")^6" * 7
+POLY_TOWER = "(" * 4 + "x + 1" + ")^6" * 4 + " = 0"  # degree 1296 multiplied out
+
+
+def test_a_short_power_tower_never_freezes_the_process() -> None:
+    from biobench_sar.llm import vlm_client as vc
+    from biobench_sar.schemas import AvatarAction
+
+    task = {"kind": "quiz", "stage": "check", "number": 1, "total": 3, "problem": "3x + 5 = 20", "answer": "x = 5"}
+    praise = AvatarAction("Correct, great job!", "celebrating", 1, 1)
+    vc.check_quiz_answer(praise, task, "x = 5")  # sympy and the parser loaded before the clock starts
+    gaps: list[float] = []
+    done = threading.Event()
+
+    def tick() -> None:  # the camera loop's 30 Hz
+        last = time.perf_counter()
+        while not done.is_set():
+            time.sleep(1 / 30)
+            now = time.perf_counter()
+            gaps.append(now - last)
+            last = now
+
+    ticker = threading.Thread(target=tick, daemon=True)
+    ticker.start()
+    time.sleep(0.1)
+    try:
+        read = [parse_answers(text) for text in (TOWER, BIG_BASE_TOWER)]
+        solved = [solve_text(text) for text in (POLY_TOWER, TOWER)]
+        checked = [vc.check_quiz_answer(praise, task, text) for text in (TOWER, BIG_BASE_TOWER)]
+        guarded = [vc.solutions_for("help", None, text) for text in (POLY_TOWER, TOWER)]
+        hinted = hint_for(POLY_TOWER)
+    finally:
+        done.set()
+        ticker.join()
+    assert max(gaps) < 0.25, f"the 30 Hz ticker stalled for {max(gaps):.2f} s"
+    assert read == [frozenset(), frozenset()] and solved == [None, None] and guarded == [None, None]
+    assert all(a.verdict is None for a in checked) and hinted is None  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "x = " + "(" * 4 + "9" + ")^6" * 4,  # 9^1296: past MAX_BITS before it is worked out
+        "x = " + "(" * 9 + "1/9" + ")^6" * 9,
+        "x = " + "(" * 9 + "9" + ")^-6" * 9,
+        "x = " + "(" * 6 + "√2 + √3" + ")^6" * 6,
+        "x = √(" + "*".join(["(" + "9" * 50 + ")^6"] * 4) + ")",  # sympy looked for square factors for seconds
+    ],
+)
+def test_powers_and_roots_too_big_to_work_out_are_no_value(text: str) -> None:
+    assert parse_answers(text) == frozenset()
+
+
+def test_powers_a_problem_needs_still_work() -> None:
+    assert _plain(parse_answers("x = 2^3")) == {("x", 8)} and _plain(parse_answers("x = √(2^6)")) == {("x", 8)}
+    assert _plain(parse_answers("x = ((9)^6)^6")) == {("x", 9**36)}, "300 digits is still a number"
+    assert format_answers(solve_text("(x + 1)^2 = 9") or frozenset()) == "x = 2 or x = -4"
+    assert format_answers(solve_text("(2x - 1)^2 = 25") or frozenset()) == "x = 3 or x = -2"
+
+
+def test_only_what_solves_fast_is_solved() -> None:
+    assert format_answers(solve_text("x^4 - 5x^2 + 4 = 0") or frozenset()) == "x = 2 or x = 1 or x = -1 or x = -2"
+    assert format_answers(solve_text("x^3 = 8") or frozenset()) == "x = 2", "it factors: one real root"
+    assert format_answers(solve_text("x^3 - 6x^2 + 11x - 6 = 0") or frozenset()) == "x = 3 or x = 2 or x = 1"
+    for slow in (
+        "3x^4 - 7x^3 + x - 11 = 0",  # no factors: roots in radicals took a third of a second
+        "2x^3 - 3x + 7 = 0",
+        "3x^2 + 5y^2 - 7xy = 11 and 2xy + 3y = 13",  # two quadratics: four seconds
+        "x^4 + y^4 = 17 and x^3 y = 8",
+        "(x+y+z+1)^6 * (x+y+z+2)^6 = 0",
+        POLY_TOWER,
+    ):
+        assert solve_text(slow) is None, slow
+    assert format_answers(solve_text("x + y = 10 and x - y = 4") or frozenset()) == "x = 7 and y = 3"

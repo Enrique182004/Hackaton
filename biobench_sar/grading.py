@@ -9,7 +9,10 @@ problem itself (linear, quadratic, a system), so a help reply can be checked for
 (solution_sentences) and a wrong quiz answer can get one hint for the next step (hint_for).
 
 Nothing here raises on bad input: unreadable text gives an empty set or None. The parser is our own (no eval), so a
-model's reply or an uploaded file can never run code. Without sympy, plain numbers and one-letter linear problems
+model's reply or an uploaded file can never run code. Nothing here takes long either (it runs on the assistant
+thread, and a big-int power holds the GIL): the size of a power or a root and the degree of an equation are bounded
+before they are worked out (MAX_BITS, MAX_POWER_DEGREE, MAX_DEGREE), and only what solves fast is solved (linear
+systems, one letter up to a quadratic or what factors into them). Without sympy, plain numbers and one-letter linear problems
 still work (quiz_bank.solve_problem); square roots, quadratics and systems then give None.
 """
 
@@ -34,6 +37,11 @@ MAX_CHARS = 240
 MAX_EXPONENT = 6
 MAX_LETTERS = 3
 MAX_DEGREE = 4
+# What a power or a root may come to, checked before it is worked out: a 37-character tower "((((9)^6)^6)^6)^6..."
+# is 9^(6^8), 1.6 million digits that a big-int pow works out holding the GIL (camera and sockets frozen for
+# seconds). 1024 bits is about 300 digits, far past any school answer, and still instant.
+MAX_BITS = 1024
+MAX_POWER_DEGREE = 2 * MAX_EXPONENT
 TOLERANCE = 1e-9
 _NONE: Answers = frozenset()
 
@@ -423,6 +431,9 @@ class _Parser:
             raise _Bad("exponent") from exc
         if whole != exponent or abs(whole) > MAX_EXPONENT:
             raise _Bad("exponent")
+        bits, degree = _size(base)
+        if bits * abs(whole) > MAX_BITS or degree * abs(whole) > MAX_POWER_DEGREE:
+            raise _Bad("too big")  # never worked out: each level of a tower is six times the last one
         if whole < 0:
             return _divide(1, base**-whole)
         return base**whole
@@ -438,13 +449,43 @@ class _Parser:
         if kind == "sqrt":
             if self.sp is None:
                 raise _Bad("root")
-            return self.sp.sqrt(self.atom())
+            inside = self.atom()
+            if _size(inside)[0] > MAX_BITS:
+                raise _Bad("too big")  # sympy looks for square factors of the number
+            return self.sp.sqrt(inside)
         if text == "(":
             value = self.expr()
             if self.take()[1] != ")":
                 raise _Bad("brackets")
             return value
         raise _Bad(f"unexpected {text!r}")
+
+
+def _size(value: Value) -> tuple[int, int]:
+    """(bits, degree): upper bounds on how big the numbers in `value` get and on its degree once multiplied out,
+    read off its tree without working anything out. A root counts as a letter: (√2 + √3)^6 multiplies out too."""
+    sp = _sympy()
+    if isinstance(value, (Fraction, int)):
+        exact = Fraction(value)
+        return abs(exact.numerator).bit_length() + exact.denominator.bit_length(), 0
+    if sp is None or not isinstance(value, sp.Basic):
+        return 0, 0
+    if value.is_Rational:
+        return abs(int(value.p)).bit_length() + int(value.q).bit_length(), 0
+    if value.is_Symbol:
+        return 1, 1
+    if value.is_Pow:
+        bits, degree = _size(value.base)
+        if value.exp.is_Integer:
+            n = abs(int(value.exp))
+            return bits * n, degree * n
+        return bits, max(degree, 1)
+    sizes = [_size(arg) for arg in value.args]
+    if not sizes:
+        return 1, 1
+    if value.is_Add:
+        return max(b for b, _ in sizes) + len(sizes), max(d for _, d in sizes)
+    return sum(b for b, _ in sizes), sum(d for _, d in sizes)
 
 
 def _divide(a: Value, b: Value) -> Value:
@@ -925,27 +966,35 @@ def _solve(parts: list[str], sp: Any) -> Answers | None:
     if len(parts) == 1 and "=" not in parts[0]:
         value = _expression(parts[0])
         return frozenset({("", sp.nsimplify(value))}) if value is not None and _number(value) is not None else None
-    equations: list[Any] = []
+    differences: list[Any] = []
     for part in parts:
         sides = _sides(part)
         if sides is None:
             return None
-        equations.append(sp.expand(sides[0] - sides[1]))
+        differences.append(sides[0] - sides[1])
     if len(parts) == 1:
         left, right = _sides(parts[0]) or (None, None)
         if isinstance(left, sp.Symbol) and _number(right) is not None:
             return None  # "x = 5": already solved
         if isinstance(right, sp.Symbol) and _number(left) is not None:
             return None
-    symbols = sorted(set().union(*(e.free_symbols for e in equations)), key=str)
-    if not symbols or len(symbols) > MAX_LETTERS or (len(equations) < len(symbols) and len(symbols) > 1):
+    symbols = sorted(set().union(*(d.free_symbols for d in differences)), key=str)
+    if not symbols or len(symbols) > MAX_LETTERS or (len(differences) < len(symbols) and len(symbols) > 1):
         return None
+    # A system only when linear: sympy took seconds on two quadratics with messy roots.
+    most = 1 if len(symbols) > 1 else MAX_DEGREE
+    if any(_size(d)[1] > most for d in differences):
+        return None  # never multiplied out: "(((x + 1)^6)^6)^6 = 0" took seconds
+    equations = [sp.expand(d) for d in differences]
     for equation in equations:
         try:
-            if sp.Poly(equation, *symbols).total_degree() > MAX_DEGREE:
-                return None
+            poly = sp.Poly(equation, *symbols)
         except sp.PolynomialError:
             return None
+        if poly.total_degree() > most:
+            return None
+        if poly.total_degree() > 2 and any(factor.degree() > 2 for factor, _ in poly.factor_list()[1]):
+            return None  # a cubic or quartic that does not factor: its roots in radicals took a third of a second
     found: set[Answer] = set()
     for solution in sp.solve(equations, symbols, dict=True):
         if set(solution) != set(symbols):
@@ -1145,7 +1194,7 @@ def _hint(parts: list[str], texts: dict[str, str], sp: Any) -> str | None:
         return texts["eliminate"]
     left, right = pairs[0]
     symbols = sorted((left - right).free_symbols, key=str)
-    if len(symbols) != 1:
+    if len(symbols) != 1 or _size(left - right)[1] > MAX_DEGREE:
         return None
     letter = symbols[0]
     poly = sp.Poly(sp.expand(left - right), letter)
