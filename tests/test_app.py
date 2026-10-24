@@ -105,7 +105,8 @@ def test_query_event_order(built: Any) -> None:
     assert names.index("status") < names.index("avatar_update") < names.index("speak")
     assert names[-1] == "status"
     avatar = next(m for m in got if m["name"] == "avatar_update")["args"][0]
-    assert avatar["animation_state"] == "pointing" and avatar["target_x"] == 100
+    # No camera frame -> no ink, so the server downgrades the fake VLM's "pointing" to "idle".
+    assert avatar["animation_state"] == "idle" and avatar["target_x"] == 100
     speak = next(m for m in got if m["name"] == "speak")["args"][0]
     assert speak == {"url": "/tts/fake.mp3", "text": "Look here"}
     assert got[-1]["args"][0]["state"] == "idle"
@@ -256,7 +257,7 @@ def test_history_empty_then_after_query(built: Any) -> None:
     collect(sio, ["interaction"])
     items = client.get("/api/history").get_json()["interactions"]
     assert len(items) == 1
-    assert items[0]["query"] == "what is this?" and items[0]["animation_state"] == "pointing"
+    assert items[0]["query"] == "what is this?" and items[0]["animation_state"] == "idle"
     assert items[0]["error"] is False
 
 

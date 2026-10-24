@@ -7,7 +7,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -124,7 +124,7 @@ class Assistant:
             self._emit("transcript", {"text": text})
             self.emit_status("thinking")
             frame = svc.vision.latest_warped()
-            ink = find_ink_regions(frame) if frame is not None else []
+            ink = find_ink_regions(frame, **self.settings.ink_kwargs) if frame is not None else []
             try:
                 context = svc.store.query(text, self.settings.rag_top_k)
             except Exception:
@@ -133,6 +133,9 @@ class Assistant:
             sources = list(dict.fromkeys(chunk.source for chunk in context))
             image = encode_jpeg(frame) if frame is not None else None
             action = svc.vlm.evaluate(text, image, context, ink, self.settings.projector_size)
+            if action.animation_state == "pointing" and not ink:
+                # Nothing on the board to point at; small VLMs still pick "pointing" for plain questions.
+                action = replace(action, animation_state="idle")
             self._emit("avatar_update", action.to_dict())
             self.emit_status("speaking")
             audio_name = svc.tts.speak(action.spoken_text)

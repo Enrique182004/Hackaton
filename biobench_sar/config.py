@@ -76,5 +76,15 @@ class Settings:
     port: int = field(default_factory=lambda: _env_int("SAR_PORT", 5000))
 
     @property
+    def ink_kwargs(self) -> dict[str, int]:
+        """Keyword arguments for vision_loop.find_ink_regions."""
+        return {
+            "min_area": self.ink_min_area,
+            "max_regions": self.ink_max_regions,
+            "block_size": self.ink_block_size,
+            "c": self.ink_c,
+        }
+
+    @property
     def projector_size(self) -> tuple[int, int]:
         return (self.projector_width, self.projector_height)

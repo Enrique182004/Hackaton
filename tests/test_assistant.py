@@ -393,3 +393,24 @@ def test_emit_status_detail_only_when_given(h: Harness) -> None:
     h.assistant.emit_status("idle")
     h.assistant.emit_status("thinking", "why")
     assert h.payloads("status") == [{"state": "idle"}, {"state": "thinking", "detail": "why"}]
+
+
+def test_pointing_kept_when_there_is_ink(h: Harness) -> None:
+    h.vision.frame = np.zeros((4, 4, 3), np.uint8)
+    h.assistant.handle_query("q")
+    assert h.payloads("avatar_update")[0]["animation_state"] == "pointing"
+
+
+def test_pointing_without_ink_becomes_idle(h: Harness) -> None:
+    h.assistant.handle_query("q")
+    assert h.payloads("avatar_update")[0]["animation_state"] == "idle"
+    assert h.assistant.history()[0]["animation_state"] == "idle"
+
+
+def test_ink_thresholds_come_from_settings(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+    vision = sys.modules["biobench_sar.core.vision_loop"]
+    monkeypatch.setattr(vision, "find_ink_regions", lambda frame, **kw: seen.update(kw) or [])
+    h.vision.frame = np.zeros((4, 4, 3), np.uint8)
+    h.assistant.handle_query("q")
+    assert seen == Settings().ink_kwargs

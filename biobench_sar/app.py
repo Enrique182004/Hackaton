@@ -42,7 +42,7 @@ def build_services(settings: Settings, on_query: Any, on_state: Any, should_list
     from biobench_sar.llm.vlm_client import VLMClient
     from biobench_sar.rag.vector_store import VectorStore
 
-    calibration = Calibration.load(settings.calibration_file)
+    calibration = Calibration.load(settings.calibration_file, expected_projector_size=settings.projector_size)
     if calibration is None:
         calibration = Calibration.identity(
             (settings.camera_width, settings.camera_height), settings.projector_size
@@ -223,7 +223,7 @@ def create_app(
         if frame is None:
             return jsonify({"regions": [], "size": list(settings.projector_size), "error": "no frame"}), 503
         height, width = frame.shape[:2]
-        return jsonify({"regions": find_ink_regions(frame), "size": [width, height]})
+        return jsonify({"regions": find_ink_regions(frame, **settings.ink_kwargs), "size": [width, height]})
 
     @app.post("/api/query")
     def api_query() -> Any:
@@ -346,7 +346,7 @@ def _load_initial_calibration(settings: Settings) -> bool:
     try:
         from biobench_sar.core.homography import Calibration
 
-        return Calibration.load(settings.calibration_file) is not None
+        return Calibration.load(settings.calibration_file, expected_projector_size=settings.projector_size) is not None
     except Exception:
         log.exception("could not load calibration")
         return False
