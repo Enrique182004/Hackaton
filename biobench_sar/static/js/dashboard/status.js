@@ -29,6 +29,20 @@ function cameraFixKey(hostOs) {
   return { mac: "check.camera.fixMac", windows: "check.camera.fixWindows", other: "check.camera.fixOther" }[hostOs] ?? "check.camera.fix";
 }
 
+function micSilentFixKey(hostOs) {
+  return (
+    { mac: "check.mic.silentFixMac", windows: "check.mic.silentFixWindows", other: "check.mic.silentFixOther" }[hostOs] ??
+    "check.mic.silentFix"
+  );
+}
+
+// A microphone that records only zeros is there but muted or blocked (on a Mac: no microphone access for the app).
+function micCheck(s) {
+  if (!s.audio_available) return check("bad", t("check.mic.bad"), t("check.mic.fix"));
+  if (s.mic_silent) return check("bad", t("check.mic.silent"), t(micSilentFixKey(s.host_os)));
+  return check("ok", t("check.mic.ok"));
+}
+
 function filesCheck(s) {
   const w = words();
   const total = s.total_documents;
@@ -71,7 +85,7 @@ export function renderStatus(s) {
       s.calibrated ? check("ok", t("check.calib.ok")) : check("warn", t("check.calib.warn"), t("check.calib.fix")),
       filesCheck(s),
       modelCheck(s),
-      s.audio_available ? check("ok", t("check.mic.ok")) : check("bad", t("check.mic.bad"), t("check.mic.fix")),
+      micCheck(s),
       s.tts_backend === "none" ? check("warn", t("check.voice.off")) : check("ok", t("check.voice.ok")),
     ].filter(Boolean),
   );

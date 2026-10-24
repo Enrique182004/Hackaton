@@ -379,3 +379,55 @@ def test_setup_mac_keeps_an_existing_sar_env(mac_checkout: tuple[Path, dict[str,
 def test_setup_mac_accepts_python_3_10_and_3_11() -> None:
     text = SETUP_SH.read_text(encoding="utf-8")
     assert "for candidate in python3.12 python3.11 python3.10" in text
+
+
+@pytest.mark.parametrize(
+    ("rms", "status"),
+    [(0.0, "FAIL"), (0.00005, "FAIL"), (0.0005, "WARN"), (0.0136, "PASS")],
+)
+def test_mic_status_fails_on_digital_silence(rms: float, status: str) -> None:
+    got, hint = hc.mic_status(rms, "darwin")
+    assert got == status
+    assert ("Privacy & Security > Microphone" in hint) is (status == "FAIL")
+
+
+class _FakeStream:
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+    def read(self, count: int, exception_on_overflow: bool = True) -> bytes:
+        return self.data[: count * 2]
+
+    def stop_stream(self) -> None: ...
+    def close(self) -> None: ...
+
+
+def _fake_pyaudio(monkeypatch: pytest.MonkeyPatch, sample: int) -> None:
+    import sys
+
+    class PyAudio:
+        def get_device_count(self) -> int:
+            return 1
+
+        def get_device_info_by_index(self, i: int) -> dict[str, Any]:
+            return {"name": "MacBook Air Microphone", "maxInputChannels": 1}
+
+        def open(self, **kwargs: Any) -> _FakeStream:
+            return _FakeStream(sample.to_bytes(2, "little", signed=True) * 1024)
+
+        def terminate(self) -> None: ...
+
+    monkeypatch.setitem(sys.modules, "pyaudio", types.SimpleNamespace(PyAudio=PyAudio, paInt16=8))
+
+
+def test_check_mic_fails_when_the_microphone_sends_only_zeros(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_pyaudio(monkeypatch, 0)
+    [(name, status, detail)] = hc.check_mic()
+    assert (name, status) == ("microphone", "FAIL")
+    assert "RMS 0.0000 over 2 s" in detail and "only digital silence" in detail and "microphone" in detail.lower()
+
+
+def test_check_mic_passes_with_sound(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_pyaudio(monkeypatch, 1000)
+    [(_, status, detail)] = hc.check_mic()
+    assert status == "PASS" and "MacBook Air Microphone" in detail

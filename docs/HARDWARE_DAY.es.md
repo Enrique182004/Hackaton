@@ -86,8 +86,11 @@ Calcula unos 45 minutos y haz la parte A un día antes.
     - En una Mac, la primera vez te pregunta si Terminal puede usar la cámara y el micrófono: haz clic en
       **OK**. Solo el primer intento de usar la cámara muestra esa pregunta; si no la viste, permítelo en
       Ajustes del Sistema como se explica abajo.
-    - `microphone FAIL` en una Mac → permite el micrófono para Terminal (o para la app) en Ajustes del
-      Sistema → Privacidad y seguridad → Micrófono. Haz lo mismo con la Cámara.
+    - `microphone FAIL` en una Mac (`only digital silence`), o Pip dice «No puedo oír el micrófono» cada vez →
+      permite el micrófono para la app que inició el asistente (Terminal, o Claude si lo iniciaste desde la
+      terminal de Claude) en Ajustes del Sistema → Privacidad y seguridad → Micrófono y reinicia el
+      asistente. Si lo iniciaste desde la terminal de Claude y sigue grabando silencio, inícialo desde
+      Terminal. Haz lo mismo con la Cámara.
     - Cámara o micrófono sin imagen ni sonido en Windows → Configuración → Privacidad y seguridad → Cámara (y
       Micrófono) → activa **Permitir que las aplicaciones de escritorio accedan a la cámara**.
     - No sale la línea `projector`, o `displays ... skipped` → revisa a ojo en la configuración de pantallas
@@ -134,6 +137,7 @@ página del proyector. Las frases van en inglés, tal cual.
 | "Quiz me" | Empieza un quiz. Lee el problema 1 de 10 y lo muestra en una tarjeta arriba a la izquierda del proyector. Escribe la respuesta y di "check my answer". El programa califica lo que escribiste: si está bien hay 🎉 y el siguiente problema; si está mal, una pista en ámbar (nunca la respuesta) y el contorno alrededor de tu respuesta. Si no puede leer la respuesta, te dice que no pudo leerla bien y que se la vuelvas a pedir. |
 | "I'm stuck" (durante el quiz) | Una pista sobre el mismo problema. El quiz y la calificación no cambian. |
 | "I want to learn how to solve fractions" (pizarrón vacío) | Una introducción corta y luego "Do you have an exercise in mind, or should I make one up for you?". Responde "make one up" y dicta un problema para empezar. |
+| Presiona **Talk** y no digas nada | Pip dice "I didn't catch that. Please say it again, a little closer to the microphone." Si en cambio dice "I can't hear the microphone…", el micrófono solo mandó silencio: ve el arreglo del micrófono en el paso 10. |
 | "Stop the quiz" | Pip pregunta "Do you want to end the quiz? Say yes to stop, or keep going." Di "yes" y te dice tu calificación. Cualquier otra cosa sigue con el quiz. El botón **Terminar quiz** del panel lo termina de inmediato. |
 
 ✅ La voz nunca lee símbolos ("three x plus five equals twenty", no "3x+5=20").
@@ -148,6 +152,7 @@ Cambia el idioma del panel a **Español** (o deja **Auto** y simplemente habla e
 | «Dame un problema parecido» | Dicta una ecuación nueva en palabras («dos x más tres es igual a once»). |
 | «Hazme un quiz» (o «Examíname») | Empieza el quiz en español. Una respuesta escrita como `x = 5` o «x es igual a cinco» se califica igual. |
 | «Quiero aprender a resolver fracciones» | Una introducción corta y la pregunta «¿Tienes un ejercicio en mente o quieres que invente uno?». Responde «invéntame uno». |
+| Presiona **Hablar** y no digas nada | «No te entendí. Dilo otra vez, un poco más cerca del micrófono.» Si en cambio dice «No puedo oír el micrófono…», el micrófono solo mandó silencio: ve el paso 10. |
 | «Termina el quiz» | Pregunta: ¿Quieres terminar el quiz? Di «sí» para terminar o sigue con tu respuesta. Responde «sí» (o «claro», «dale») y te dice tu calificación. |
 
 ✅ La voz en español es mexicana y lee las matemáticas con palabras en español.
@@ -192,6 +197,7 @@ repórtalo como un issue nuevo con las fotos.
 | El avatar señala junto a lo escrito, o el contorno brillante sale en otro lugar | Vuelve a alinear (paso 12) y revisa que la página del proyector esté en pantalla completa. |
 | Lee mal los símbolos pequeños (decimales, signos menos) | Escribe más grande y más grueso, y revisa que la cámara de verdad esté a 1920×1080 (paso 10). |
 | Dice una y otra vez que no pudo leer tu respuesta | Escribe la respuesta sola en el último renglón, grande, como `x = 5`. |
+| Pip dice «No puedo oír el micrófono», o la lista del Pizarrón dice «El micrófono solo manda silencio» | El micrófono solo graba ceros: permítelo para la app que inició el asistente (paso 10) y reinicia el asistente. |
 | Una mancha deslavada en el pizarrón en la imagen de la cámara | Es un reflejo: ve el paso 13. |
 | No hay sonido | Haz clic una vez en la página del proyector y revisa la salida de audio de la laptop. |
 | El español suena con voz en inglés (sin internet) | Instala una voz de español (México) (paso 6). |

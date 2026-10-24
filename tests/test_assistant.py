@@ -1358,3 +1358,98 @@ def test_empty_board_sends_the_whole_board_without_a_crop(h: Harness, monkeypatc
     h.assistant.services.vision = RawVision(np.full((100, 100, 3), 128, np.uint8))
     h.assistant.handle_query("hello")
     assert h.vlm.seen[-1][1] == b"jpeg" and "crop" not in h.vlm.kwargs[-1]
+
+
+# ---- push-to-talk that caught no words ---------------------------------------------
+
+
+def test_a_silent_push_is_answered_out_loud(h: Harness, clock: FakeClock) -> None:
+    assert h.assistant.on_unheard("silent", "en") is True
+    avatar = h.payloads("avatar_update")[-1]
+    line = "I can't hear the microphone. Check that it's on and that this app may use it: the Board tab shows how."
+    assert avatar["display_text"] == avatar["spoken_text"] == line
+    assert avatar["animation_state"] == "idle" and "target_x" not in avatar, "the avatar stays where it is"
+    assert h.payloads("speak") == [
+        {"url": "/tts/a.mp3", "text": line, "display_text": line, "spoken_text": line, "language": "en"}
+    ]
+    assert h.states() == ["speaking", "idle"] and h.tts.langs == ["en"]
+    assert h.vlm.seen == [] and h.assistant.history() == [], "not a question: nothing asked, nothing recorded"
+    assert h.assistant.busy is False
+    assert h.assistant.should_listen() is False, "the wake listener must not hear Pip say it"
+
+
+@pytest.mark.parametrize(
+    ("reason", "language", "line"),
+    [
+        ("unclear", "en", "I didn't catch that. Please say it again, a little closer to the microphone."),
+        ("error", "en", "Sorry, something went wrong. Please try again."),
+        (
+            "silent",
+            "es",
+            "No puedo oír el micrófono. Revisa que esté encendido y que esta app pueda usarlo: la pestaña Pizarrón te dice cómo.",
+        ),
+        ("unclear", "es", "No te entendí. Dilo otra vez, un poco más cerca del micrófono."),
+        ("error", "es", "Perdón, algo salió mal. Inténtalo de nuevo."),
+    ],
+)
+def test_unheard_lines_in_both_languages(h: Harness, reason: str, language: str, line: str) -> None:
+    h.assistant.on_unheard(reason, language)
+    assert h.payloads("speak")[-1]["text"] == line and h.tts.langs == [language]
+
+
+def test_a_forced_language_wins_over_what_the_microphone_heard_last(h: Harness) -> None:
+    _with_audio(h)
+    h.assistant.set_language("es")
+    h.assistant.on_unheard("unclear", "en")
+    assert h.payloads("speak")[-1]["language"] == "es"
+
+
+def test_unheard_while_a_question_runs_says_nothing(deferred: Harness) -> None:
+    deferred.assistant.handle_query("first")
+    assert deferred.assistant.on_unheard("silent", "en") is False
+    assert deferred.payloads("avatar_update") == [] and len(deferred.pending) == 1
+
+
+def test_unheard_line_is_shown_even_when_speech_fails(h: Harness) -> None:
+    h.tts.error = RuntimeError("edge offline")
+    h.assistant.on_unheard("silent", "en")
+    assert h.payloads("avatar_update")[-1]["display_text"].startswith("I can't hear the microphone.")
+    assert h.states()[-1] == "idle" and h.assistant.busy is False
+
+
+def test_unheard_waits_while_an_answer_is_still_being_played(h: Harness, clock: FakeClock) -> None:
+    h.assistant.handle_query("q")
+    before = len(h.events)
+    assert h.assistant.on_unheard("unclear", "en") is False
+    assert h.events[before:] == [] and h.assistant.busy is False
+
+
+class _PushingAudio:
+    """AudioTrigger.push_active: the student pressed Talk again while the line was being synthesized."""
+
+    push_active = True
+    last_language = "en"
+
+
+def test_a_new_push_keeps_its_own_status_while_the_line_is_said(h: Harness) -> None:
+    h.assistant.services.audio = _PushingAudio()
+    assert h.assistant.on_unheard("unclear", "en") is True
+    assert h.states() == [], "no speaking/idle over the new push's listening"
+    assert h.payloads("speak") and h.assistant.busy is False
+
+
+def test_the_unheard_line_does_not_switch_the_reply_language(h: Harness) -> None:
+    h.assistant.handle_query("¿Qué hago con esta ecuación?")
+    assert h.assistant.current_language == "es"
+    before = len(h.payloads("language"))
+    h.assistant._speaking_until = 0.0  # the answer has finished playing
+    h.assistant.on_unheard("unclear", "en")
+    assert len(h.payloads("language")) == before and h.assistant.current_language == "es"
+
+
+def test_without_a_voice_nothing_is_still_playing(h: Harness, clock: FakeClock) -> None:
+    # SAR_TTS_BACKEND=none: the answer is only shown, so a wordless push right after it still gets a reply.
+    h.assistant.settings = dataclasses.replace(h.assistant.settings, tts_backend="none")
+    h.tts.name = None
+    h.assistant.handle_query("q")
+    assert h.assistant.on_unheard("unclear", "en") is True

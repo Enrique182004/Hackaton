@@ -167,7 +167,7 @@ class Dummy:
         self.args, self.kwargs = args, kwargs
 
 
-def _build(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> object:
+def _build(monkeypatch: pytest.MonkeyPatch, settings: Settings, **callbacks: object) -> object:
     from biobench_sar import app as app_module
     from biobench_sar.core import vision_loop
     from biobench_sar.llm import tts_engine, vlm_client
@@ -180,12 +180,20 @@ def _build(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> object:
         (tts_engine, "TTSEngine"),
     ):
         monkeypatch.setattr(module, name, Dummy)
-    return app_module.build_services(settings, on_query=lambda q: None, on_state=lambda s: None)
+    return app_module.build_services(settings, on_query=lambda q: None, on_state=lambda s: None, **callbacks)
 
 
 def test_build_services_passes_silence_rms_to_audio(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     svc = _build(monkeypatch, Settings(silence_rms=0.042, calibration_file=tmp_path / "calibration.json"))
     assert svc.audio.silence_rms == 0.042  # type: ignore[attr-defined]
+
+
+def test_build_services_passes_on_unheard_to_audio(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def unheard(reason: str, language: str) -> None:
+        pass
+
+    svc = _build(monkeypatch, Settings(calibration_file=tmp_path / "calibration.json"), on_unheard=unheard)
+    assert svc.audio.on_unheard is unheard  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize(("language", "whisper"), [("auto", "auto"), ("es", "es"), ("en", "en")])
