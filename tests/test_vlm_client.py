@@ -2061,7 +2061,12 @@ def test_help_reply_still_stating_the_solution_loses_that_sentence() -> None:
             "Not quite. One half plus one third equals five sixths, not two fifths. Find a common denominator first.",
             "Not quite. Find a common denominator first.",
         ),
-        ("en", "Is this right?", "Not quite: 1/2 + 1/3 = 5/6. Find a common denominator.", "Find a common denominator."),
+        (
+            "en",
+            "Is this right?",
+            "Not quite: 1/2 + 1/3 = 5/6. Find a common denominator.",
+            "Find a common denominator.",
+        ),
         (
             "es",
             "¿Está bien?",
