@@ -80,8 +80,10 @@ class TTS:
     def __init__(self) -> None:
         self.name: str | None = "a.mp3"
         self.error: Exception | None = None
+        self.langs: list[str | None] = []
 
-    def speak(self, text: str) -> str | None:
+    def speak(self, text: str, lang: str | None = None) -> str | None:
+        self.langs.append(lang)
         if self.error:
             raise self.error
         return self.name
@@ -200,7 +202,8 @@ def test_event_order_and_final_idle(h: Harness) -> None:
     h.assistant.handle_query("q")
     assert h.names() == ["transcript", "status", "avatar_update", "status", "speak", "interaction", "status"]
     assert h.states() == ["thinking", "speaking", "idle"]
-    assert h.payloads("speak") == [{"url": "/tts/a.mp3", "text": "one two three four"}]
+    said = {"display_text": "one two three four", "spoken_text": "one two three four", "language": "en"}
+    assert h.payloads("speak") == [{"url": "/tts/a.mp3", "text": "one two three four", **said}]
     assert h.assistant.state == "idle"
 
 
@@ -651,7 +654,7 @@ def _bank(h: Harness, source: str, *problems: tuple[str, str, int]) -> None:
 
 def test_model_gets_help_mode_and_conversation_so_far(h: Harness) -> None:
     first = _ask(h, "what is this?", spoken="A fraction.")
-    assert first == {"mode": "help", "task": None, "recent_turns": []}
+    assert first == {"mode": "help", "task": None, "recent_turns": [], "language": "en"}
     second = _ask(h, "and this?")
     assert second["recent_turns"] == [{"q": "what is this?", "a": "A fraction."}]
     for n in range(4):
@@ -979,7 +982,7 @@ def test_biology_profile_has_no_tutor_tasks_but_remembers(monkeypatch: pytest.Mo
     bio = Harness()
     assert not bio.assistant.tutoring
     first = _ask(bio, "quiz me", spoken="Sure.")
-    assert first == {"mode": "help", "task": None, "recent_turns": []}
+    assert first == {"mode": "help", "task": None, "recent_turns": [], "language": "en"}
     second = _ask(bio, "I want to learn how to solve fractions")
     assert second["task"] is None and second["recent_turns"] == [{"q": "quiz me", "a": "Sure."}]
     assert bio.assistant.tutor.mode == "help" and _tutor_events(bio) == []
