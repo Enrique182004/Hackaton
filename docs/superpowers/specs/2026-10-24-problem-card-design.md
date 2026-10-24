@@ -1,0 +1,125 @@
+# Problem card in every mode + board watcher — design
+
+Date: 2026-10-24 · Branches: `feat/problem-card` (PR 1), then `feat/board-watch` (PR 2), both from
+`release/candidate`.
+
+## Goal
+
+The projector shows the problem the student is working on, in symbols (`4x + 7 = 19`), in every tutor mode —
+not only what THEO says about the next step. Today only a running quiz shows its problem (`#quiz-card`). The
+card also follows what the student writes on the board, without the student having to talk to THEO.
+
+## Where the problem text comes from
+
+| Mode | Source | Card heading (en / es) |
+| --- | --- | --- |
+| Quiz | `TutorSession.current().problem` (worksheet or invented; exact) | `Quiz · problem {n} of {total}` (unchanged) |
+| Practice ("similar problem") | new reply key `new_problem` — the problem THEO dictates | `Try this` / `Prueba este` |
+| Learn a topic, stage `example` | new reply key `new_problem` — the starter problem | `Try this` / `Prueba este` |
+| Help | new reply key `board_problem` in help mode — the student's problem copied from the board | `Your problem` / `Tu problema` |
+| Board watcher (PR 2) | short read-only model call returning only `board_problem` | `Your problem` / `Tu problema` |
+
+Practice already returns `board_problem` (the old problem on the board) so code can reject a new problem that
+is the old one read back; it keeps doing that. Quiz keeps its schema: the problem is known in code.
+
+## PR 1 — card in every mode, from the replies
+
+### Model replies (`llm/vlm_client.py`)
+
+- `HELP_SCHEMA` = `MATH_SCHEMA` with `board_problem` first; help rules (en + es) say: FIRST copy the problem
+  written on the board into `board_problem`, exactly (`""` if the board is empty). Examples updated.
+- `PRACTICE_SCHEMA` gains `new_problem` after `board_problem`; rules: write the new problem in symbols in
+  `new_problem`, the same one dictated in `spoken_text`. Examples updated.
+- `LEARN_SCHEMA` = `MATH_SCHEMA` with `new_problem` first; learn rules: stage `example` fills it with the starter
+  problem in symbols, every other stage leaves it `""`. Examples updated.
+- `RawReply` gains `new_problem`; `TutorAction` gains `board_problem` and `new_problem` (not in `to_dict()`, so
+  the four-key schema sent to clients is unchanged). `evaluate` copies them from the reply that is returned
+  (the retry's when it is used, falling back to the first reply's).
+- The mock backend fills `new_problem` for practice and learn `example`, so demos without a model show the card.
+
+### Tutor state (`tutor.py`)
+
+`TutorSession` keeps the displayed problem: `problem_text: str | None` and `problem_source:
+"dictated" | "board" | None`.
+
+- `show_problem(text, source)` — trims, collapses whitespace, caps at 80 characters (cut at a word, `…`);
+  empty text is ignored (the card keeps what it shows).
+- `clear_problem()` — on `start_learning` (a new topic starts clean) and on `set_mode("quiz")`.
+- `to_dict()` gains `"problem": {"text": …, "source": …}` or `None`. During an active quiz the quiz block stays
+  the source of truth and `problem` is `None`.
+
+### Assistant (`assistant.py`)
+
+After each finished math turn (practice, learn, help; not quiz), in this order: `new_problem` non-empty →
+`show_problem(new_problem, "dictated")`; else `board_problem` non-empty → `show_problem(board_problem,
+"board")`. Then `push_tutor()` as today. A failed call (`TutorAction.failed`) changes nothing.
+
+### Projector (`templates/index.html`, `static/js/main.js`, `static/css/style.css`, `static/js/i18n.js`)
+
+- `#quiz-card` becomes `#problem-card` (`#problem-card-label`, `#problem-card-text`); same place and style.
+- `onTutor`: active quiz → label `proj.quiz`, text = quiz problem (as today). Else `d.problem` → label
+  `proj.problem.dictated` or `proj.problem.board`, text = `d.problem.text`. Else hidden.
+- Text is set with `textContent` only. The card still hides while the camera captures (`CAPTURE_STATES`) and
+  is still reported in `ui_rects`.
+- New i18n keys in en and es.
+
+### Tests (PR 1)
+
+- `test_vlm_client.py`: `new_problem` / help `board_problem` parsed from clean, missing, empty, numeric and
+  truncated replies; retry keeps the fields; prompts for help/practice/learn (en + es) contain the new keys.
+- `test_tutor.py`: `show_problem` trims/caps/ignores empty; `clear_problem` on new topic and quiz;
+  `to_dict()` shape; quiz active → `problem` is `None`.
+- `test_assistant.py`: practice/learn-example turns show `dictated`; help shows `board`; failed turn keeps the
+  previous card; quiz turn leaves it alone.
+- `test_frontend.py`: card shows quiz, dictated and board problems with the right label, hides when the tutor
+  sends none, and never renders HTML from the text.
+
+## PR 2 — board watcher + projector-UI masking
+
+### Masking fix (`assistant.py`)
+
+`app.py` already receives the projector page's `ui_rects` and calls `assistant.set_ui_rects`, which does not
+exist, so the projected UI is never masked. Add `Assistant.set_ui_rects(rects)`: keep the rects with their
+arrival time (dropped after 10 s without a refresh; the page sends a heartbeat). Before ink detection — for
+questions and for the watcher — paint those rects white on the warped frame (`mask_ui(warped, rects)` in
+`core/vision_loop.py`, a pure function).
+
+### Watcher (`core/board_watch.py`)
+
+`BoardWatcher` — one daemon thread, ~1 Hz, never on the camera thread:
+
+1. Skip unless: math profile, tutor mode is help or practice (not quiz, no pending offer), and
+   `assistant.should_listen()` (not busy, not speaking).
+2. Take `vision.latest_warped()`, `mask_ui`, `find_ink_regions`; fingerprint = ink mask downscaled to 64×36,
+   thresholded.
+3. Changed from the last read's fingerprint by more than 2 % of cells, then unchanged for 2 s (writing done,
+   hand away) → read, if ≥ 8 s since the last read.
+4. Read = `VLMClient.read_board(crop)`: a short prompt asking only for `{"board_problem": str}` on the ink crop;
+   never raises; mock backend returns `""`.
+5. Before applying the result, drop it if a question started meanwhile: `Assistant.query_count` (new; bumped
+   when `handle_query` accepts a question) differs from its value when the read began.
+   Non-empty → `show_problem(text, "board")` + `push_tutor()`.
+6. No ink at all and the card's source is `board` → `clear_problem()` + `push_tutor()`. A `dictated` problem
+   waiting to be written stays.
+
+The watcher does not take the assistant's busy lock: a student's question is never refused because of it. It
+may wait behind a read inside Ollama (a few seconds at most, capped by the read's own short timeout).
+
+Settings (`config.py`, `sar.env.example`): `SAR_BOARD_WATCH` (default `1`), `SAR_BOARD_WATCH_SETTLE_S` (2),
+`SAR_BOARD_WATCH_MIN_GAP_S` (8). Started and stopped with the other services in `app.py`.
+
+### Tests (PR 2)
+
+- `mask_ui` paints exactly the given rects, clipped to the frame.
+- `set_ui_rects` ages rects out.
+- `BoardWatcher` with a fake clock, fake frames and a fake VLM: no read while writing; one read after settle;
+  respects the min gap; skipped in quiz, while busy, while speaking; result dropped when a turn started; erase
+  clears a `board` card but not a `dictated` one.
+- `read_board` parses clean / empty / broken replies and never raises.
+- Hardware check: the camera loop still reaches ≥ 28 FPS with the watcher running (`scripts/hardware_check.py`).
+
+## Out of scope
+
+- The biology profile: tutor modes are math-only (`Assistant.tutoring`); the card does not show there.
+- Showing the current step on the card.
+- Changing the TTS voice (separate change).
