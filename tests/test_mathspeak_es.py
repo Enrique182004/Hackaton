@@ -569,7 +569,6 @@ RANGE_POLICY = [
     ("Réstale 3-8 muestras", "Réstale tres menos ocho muestras"),
     ("Quítale 2–4 g de sal", "Quítale dos menos cuatro gramos de sal"),
     ("x = 3-5 horas", "x es igual a tres menos cinco horas"),
-    ("Toma 3-5 muestras. Luego calcula x = 2.", "Toma tres menos cinco muestras. Luego calcula x es igual a dos."),
     ("Toma 3-5 muestras.\nLuego calcula x = 2.", "Toma tres a cinco muestras.\nLuego calcula x es igual a dos."),
     ("Toma 3-5 muestras y suma 2 + 3", "Toma tres a cinco muestras y suma dos más tres"),
     ("x + 3-5 muestras", "x más tres menos cinco muestras"),
@@ -589,6 +588,60 @@ RANGE_POLICY = [
     ),
     ("Dura 2-3 días = 48-72 horas", "Dura dos menos tres días es igual a cuarenta y ocho menos setenta y dos horas"),
     ("La distancia ≈ 2-3 km", "La distancia es aproximadamente igual a dos menos tres kilómetros"),
+    # Final round. A noun-before range ("ejercicios 1-10") still reads before a full stop or a list comma; only a
+    # decimal ("1-10.5", "1-10,12") or a touching operator keeps the minus.
+    ("Haz los ejercicios 1-10.", "Haz los ejercicios uno a diez."),
+    ("Resuelve las preguntas 1-5.", "Resuelve las preguntas uno a cinco."),
+    ("Los capítulos 2-4.", "Los capítulos dos a cuatro."),
+    ("Ve a la página 5-6.", "Ve a la página cinco a seis."),
+    ("Haz los ejercicios 1-10, por favor.", "Haz los ejercicios uno a diez, por favor."),
+    ("Resuelve los ejercicios 1-10, 12 y 15.", "Resuelve los ejercicios uno a diez, doce y quince."),
+    ("Haz los ejercicios 1-10.5", "Haz los ejercicios uno menos diez punto cinco"),
+    ("Haz los ejercicios 1-10,12", "Haz los ejercicios uno menos diez,doce"),
+    # The relation veto is per sentence (split on . ! ? ; or a newline, never on a decimal point): a reply reaches
+    # TTS as one line, so "x = 2" in one sentence leaves "3-5 muestras" in the next a range.
+    ("Toma 3-5 muestras. Luego calcula x = 2.", "Toma tres a cinco muestras. Luego calcula x es igual a dos."),
+    (
+        "La pendiente es m = 2. Ahora toma 3-5 muestras.",
+        "La pendiente es m es igual a dos. Ahora toma tres a cinco muestras.",
+    ),
+    ("x = 2? Toma 3-5 muestras.", "x es igual a dos? Toma tres a cinco muestras."),
+    (
+        "Usa 2-5 mL de agua. Después, 2x + 3 = 7.",
+        "Usa dos a cinco mililitros de agua. Después, dos x más tres es igual a siete.",
+    ),
+    (
+        "Incuba a 25-37 °C durante 24-48 horas. Si la población inicial es N = 100, ¿cuántas hay después?",
+        "Incuba a veinticinco a treinta y siete grados Celsius durante veinticuatro a cuarenta y ocho horas."
+        " Si la población inicial es N es igual a cien, ¿cuántas hay después?",
+    ),
+    (
+        "Acanthamoeba crece a 25-37 °C. Su tasa es r = 0.5 por día.",
+        "Acanthamoeba crece a veinticinco a treinta y siete grados Celsius. Su tasa es r es igual a cero punto cinco"
+        " por día.",
+    ),
+    (
+        "Incuba a unos 30 °C (rango 25-37 °C); a > 37 °C se seleccionan cepas termotolerantes.",
+        "Incuba a unos treinta grados Celsius (rango veinticinco a treinta y siete grados Celsius); a es mayor que"
+        " treinta y siete grados Celsius se seleccionan cepas termotolerantes.",
+    ),
+    (
+        "Incuba 24-48 horas; el pH debe ser ≥ 7.",
+        "Incuba veinticuatro a cuarenta y ocho horas; el pH debe ser es mayor o igual que siete.",
+    ),
+    # ...and the same sentence still vetoes, a decimal point included.
+    (
+        "Si x = 2, toma 3-5 muestras; luego 2-4 horas.",
+        "Si x es igual a dos, toma tres menos cinco muestras; luego dos a cuatro horas.",
+    ),
+    ("Si r = 0.5 toma 3-5 muestras.", "Si r es igual a cero punto cinco toma tres menos cinco muestras."),
+    ("Toma 3.5-7 mL. Luego x = 2.", "Toma tres punto cinco a siete mililitros. Luego x es igual a dos."),
+    # The entre / de / del cue reaches past a currency sign. A currency named after the pair still names only
+    # the second amount, a gap of the currency rule ("$100 a 200 pesos" reads the same).
+    ("Cuesta entre $5-10.", "Cuesta entre cinco dólares y diez."),
+    ("Cuesta entre $ 5-10.", "Cuesta entre cinco dólares y diez."),
+    ("Cuesta de $100-200 pesos.", "Cuesta de cien dólares a doscientos pesos."),
+    ("Quita $5-10.", "Quita cinco dólares menos diez."),
 ]
 # The amount is the whole number even when a currency or magnitude is glued to it.
 MONEY_GLUED = [
@@ -950,6 +1003,17 @@ def test_many_ranges_stay_linear() -> None:
     spoken = to_speech_es(text)
     assert time.perf_counter() - start < 0.5
     assert spoken.startswith("mil novecientos noventa a dos mil, ")
+
+
+def test_many_sentences_stay_linear() -> None:
+    # One relation test per sentence, not per range.
+    text = "Toma 3-5 muestras. Si x = 2, toma 2-4 horas. " * 1500
+    start = time.perf_counter()
+    spoken = to_speech_es(text)
+    assert time.perf_counter() - start < 0.5
+    assert spoken.startswith(
+        "Toma tres a cinco muestras. Si x es igual a dos, toma dos menos cuatro horas. Toma tres a"
+    )
 
 
 def test_membership_is_math() -> None:
