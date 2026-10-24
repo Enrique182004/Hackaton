@@ -297,7 +297,9 @@ class TTSEngine:
         # es-MX-DaliaNeural pitched +30Hz and +5% faster to sound like a kid: EDGE_PROSODY).
         # Only the kid voices exist (BACKENDS = edge | none): when the voice service fails (offline: every voice
         # waits EDGE_RETRY_AFTER_S) it returns None and the answer is shown, not spoken. No say/pyttsx3 fallback.
-    offline: bool  # a network failure in the last EDGE_RETRY_AFTER_S (/api/status voice_offline, Board checklist)
+    offline: bool  # the last try was a network failure and nothing worked since (/api/status voice_offline)
+    failing_voices: list[str]  # voices whose last try failed with the network up (/api/status voice_failed)
+    def probe(self) -> None  # one synthesis at startup (app._warm_up), so `offline` is known before the first answer
     def set_rate(self, factor: float) -> None  # voice speed (contract M), clamped to 0.5–2.0
         # the voice's own EDGE_PROSODY rate × factor (Ana at 0.75: "-25%"; Dalia's "+5%" at 0.75: "-21%"),
         # pitch unchanged. At 1.0 every call is the same as without it.
@@ -486,7 +488,7 @@ HTTP (F implements, E calls). Every `/api/*` response sends `Cache-Control: no-s
 | GET | `/api/search?q=&k=` | `{"results": [{"text", "source", "score"}]}`, k clamped 1–10 |
 | GET | `/api/ink` | `{"regions": [InkRegion], "size": [w, h]}`; 503 without a frame |
 | POST | `/api/upload` | multipart `files[]` → `{"files": [{"name", "chunks", "replaced"?, "error"?}], "total_chunks": int}`; with an explicit selection, uploaded files become active |
-| GET | `/api/status` | `{"fps", "camera_running", "calibrated", "doc_chunks", "active_documents", "total_documents", "vlm_backend", "vlm_model", "audio_available", "mic_silent", "tts_backend", "voice_offline", "listen_mode", "state", "busy", "last_latency_s", "uptime_s", "profile", "mode", "language", "current_language", "glare"}`. `glare` = `null` or `{"fraction", "hotspots": [[x, y, w, h]], "severe": bool}` (severe above 1 % of the board) |
+| GET | `/api/status` | `{"fps", "camera_running", "calibrated", "doc_chunks", "active_documents", "total_documents", "vlm_backend", "vlm_model", "audio_available", "mic_silent", "tts_backend", "voice_offline", "voice_failed", "listen_mode", "state", "busy", "last_latency_s", "uptime_s", "profile", "mode", "language", "current_language", "glare"}`. `glare` = `null` or `{"fraction", "hotspots": [[x, y, w, h]], "severe": bool}` (severe above 1 % of the board) |
 | GET | `/api/tutor` | `TutorSession.to_dict()`, including `"confirm_stop": bool` |
 | PUT | `/api/tutor/mode` | `{"mode": "help" \| "practice" \| "quiz"}` → `to_dict()`; 400 otherwise. Quiz mode starts a quiz on the next question or via `POST /api/tutor/quiz/start` |
 | POST | `/api/tutor/quiz/start` | → `to_dict()`; starts even with 0 problems (the code invents them); `total` = number of problems in the ticked files capped at `SAR_QUIZ_LENGTH`, or `SAR_QUIZ_LENGTH` (default 10) when they have none |
@@ -591,7 +593,7 @@ built, each with its reason.
 | Camera at 30+ FPS | The camera loop never waits on the model; the hardware check passes at ≥ 28 FPS | A 30 fps webcam that measures 29.x must still pass |
 | English only | English and Spanish end to end (`lang.py`, `mathspeak_es.py`, es-MX voices, translated dashboard) | The classroom is bilingual |
 | Nothing on accessibility (both specs) | An **Accessibility** card for the whole room: captions that stay up, text size on the board, voice speed, calm mode and high contrast (contract M, saved in `SAR_ACCESSIBILITY_FILE`) | A student with a disability uses the same board. It is additive: the defaults are exactly the specs' behaviour |
-| TTS is `edge-tts` (or pyttsx3) (biology §3) | Edge only, with its kid voices; no offline voice (`SAR_TTS_BACKEND` is `edge` or `none`) | The assistant must only ever sound like a kid, and the computer's own voices (`say`, pyttsx3) are adult; offline, answers are shown |
+| TTS is `edge-tts` (or local fallback) (math §3; "or pyttsx3", biology §3) | Edge only, with its kid voices; no offline voice (`SAR_TTS_BACKEND` is `edge` or `none`) | The assistant must only ever sound like a kid, and the computer's own voices (`say`, pyttsx3) are adult; offline, answers are shown |
 | `/precharge` dashboard (biology §5) | `/dashboard`, with `/precharge` kept as an alias | Clearer name for teachers |
 
 ---

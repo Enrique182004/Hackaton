@@ -94,7 +94,8 @@ def _env_profile() -> str:
 def _env_tts_backend() -> str:
     value = os.environ.get("SAR_TTS_BACKEND", "edge").strip().lower()
     # say and pyttsx3 (the computer's adult voices) were removed: an old sar.env that names them gets the kid voices.
-    return "edge" if value in ("say", "pyttsx3") else value
+    # Anything else means no voice, as TTSEngine treats it, so /api/status and the Board checklist say so too.
+    return "edge" if value in ("edge", "say", "pyttsx3") else "none"
 
 
 def normalize_block_size(value: int, default: int = 31) -> int:

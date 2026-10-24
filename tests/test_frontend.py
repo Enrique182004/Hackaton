@@ -889,6 +889,9 @@ assert.match(checks(), /Answers are shown but not read aloud: the kid voices nee
 assert.doesNotMatch(checks(), /are read aloud on the projector/);
 renderStatus({ ...base, tts_backend: "none", voice_offline: true });
 assert.match(checks(), /Answers are shown but not read aloud$/m);
+renderStatus({ ...base, tts_backend: "edge", voice_offline: false, voice_failed: ["es-MX-NoSuchNeural"] });
+assert.match(checks(), /Some answers are shown but not read aloud: the voice es-MX-NoSuchNeural doesn't work Check SAR_TTS_VOICE/);
+assert.doesNotMatch(checks(), /are read aloud on the projector/);
 """,
     )
 
@@ -2015,6 +2018,27 @@ const runTimer = (ms) => {
 """
 PROJECTOR_TIMED = PROJECTOR.replace('await import("./main.js");', TIMERS + 'await import("./main.js");')
 assert PROJECTOR_TIMED != PROJECTOR
+
+
+@needs_node
+def test_projector_holds_an_answer_without_audio_as_long_as_its_text(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR_TIMED
+        + """
+sock.fire("connect");
+await settle();
+const long = "x".repeat(200);  // 200 characters: 16 s at the 80 ms per character a written answer gets
+let mark = timers.length;
+sock.fire("speak", { url: null, display_text: long });
+assert.ok(timers.slice(mark).some((x) => x.ms === 16000), "held for its length");
+assert.ok(!timers.slice(mark).some((x) => x.ms === 4000), "not cut to 4 s");
+mark = timers.length;
+sock.fire("speak", { url: null, display_text: "x = 5" });
+assert.ok(timers.slice(mark).some((x) => x.ms === 4000), "a short one still gets 4 s");
+""",
+    )
 
 
 @needs_node

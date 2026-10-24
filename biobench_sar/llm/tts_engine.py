@@ -16,6 +16,8 @@ log = logging.getLogger(__name__)
 MAX_FILES = 50
 EDGE_TIMEOUT_S = 8.0
 EDGE_RETRY_AFTER_S = 60.0
+# What the startup probe asks the voice service to say (the file is deleted at once).
+PROBE_TEXT = "Hi."
 # Voice speed (accessibility): 1.0 is each voice's own pace; set_rate clamps to this range.
 MIN_RATE = 0.5
 MAX_RATE = 2.0
@@ -70,6 +72,9 @@ class TTSEngine:
         self.out_dir = Path(out_dir) if out_dir is not None else Settings().tts_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self._edge_failed_at: dict[str, float] = {}
+        # What the Board checklist shows, kept until a voice works again (the cooldowns above only time the retries).
+        self._offline = False
+        self._failing: set[str] = set()
         # Voice speed factor (set_rate); at 1.0 the voices get nothing extra.
         self._rate = 1.0
 
@@ -80,9 +85,26 @@ class TTSEngine:
 
     @property
     def offline(self) -> bool:
-        """The voice service failed with a network error in the last EDGE_RETRY_AFTER_S: answers are shown, not spoken."""
-        at = self._edge_failed_at.get(_ALL_VOICES)
-        return at is not None and time.monotonic() - at < EDGE_RETRY_AFTER_S
+        """The voice service last failed with a network error and nothing has been spoken since: answers are shown,
+        not spoken. False until the first try (see probe)."""
+        return self._offline
+
+    @property
+    def failing_voices(self) -> list[str]:
+        """Voices whose last try failed with the network up (a wrong SAR_TTS_VOICE): their language is only shown."""
+        return sorted(self._failing)
+
+    def probe(self) -> None:
+        """Ask the voice service once, at startup, so `offline` is known before the first answer."""
+        if self.backend != "edge":
+            return
+        try:
+            name = self._edge(PROBE_TEXT, self.edge_voice(self.default_language))
+        except Exception as exc:
+            log.warning("the kid voices can't be made (%s): answers are shown but not spoken until they can", exc)
+            return
+        with contextlib.suppress(OSError):
+            (self.out_dir / name).unlink()
 
     def set_rate(self, factor: float) -> None:
         """Voice speed for every later speak(): 0.75 slower, 1.25 faster, clamped to MIN_RATE..MAX_RATE."""
@@ -141,11 +163,18 @@ class TTSEngine:
             asyncio.run(asyncio.wait_for(speech.save(str(path)), EDGE_TIMEOUT_S))
         except BaseException as exc:
             # A bad voice override must not silence edge for the other language.
-            self._edge_failed_at[_ALL_VOICES if _is_network_error(exc) else voice] = time.monotonic()
+            network = _is_network_error(exc)
+            self._edge_failed_at[_ALL_VOICES if network else voice] = time.monotonic()
+            if network:
+                self._offline = True
+            else:
+                self._failing.add(voice)
             path.unlink(missing_ok=True)
             raise
         self._edge_failed_at.pop(voice, None)
         self._edge_failed_at.pop(_ALL_VOICES, None)
+        self._offline = False
+        self._failing.discard(voice)
         self._cleanup()
         return name
 

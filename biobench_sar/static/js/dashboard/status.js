@@ -43,10 +43,13 @@ function micCheck(s) {
   return check("ok", t("check.mic.ok"));
 }
 
-// The kid voices are online only: while the voice service can't be reached, answers are shown and not spoken.
+// The kid voices are online only: while the voice service can't be reached, or a voice override doesn't work, answers
+// (in that voice) are shown and not spoken.
 function voiceCheck(s) {
   if (s.tts_backend === "none") return check("warn", t("check.voice.off"));
   if (s.voice_offline) return check("warn", t("check.voice.offline"), t("check.voice.offlineFix"));
+  const failed = s.voice_failed || [];
+  if (failed.length) return check("warn", t("check.voice.failed", { voices: failed.join(", ") }), t("check.voice.failedFix"));
   return check("ok", t("check.voice.ok"));
 }
 

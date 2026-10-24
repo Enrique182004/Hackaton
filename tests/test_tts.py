@@ -308,7 +308,40 @@ def test_offline_while_a_network_failure_cools_down(tmp_path: Path, monkeypatch:
     eng.speak("hi", "en")
     assert eng.offline is True
     now["t"] += tts_engine.EDGE_RETRY_AFTER_S + 1
-    assert eng.offline is False, "tried again after the cooldown"
-    FakeComm.error = ValueError  # a bad voice is not a dead network
+    assert eng.offline is True, "still down: nothing has worked since"
+    FakeComm.fail = False
+    assert eng.speak("hi again", "en")
+    assert eng.offline is False, "back once a voice works again"
+    FakeComm.fail, FakeComm.error = True, ValueError  # a bad voice is not a dead network
+    now["t"] += tts_engine.EDGE_RETRY_AFTER_S + 1
     eng.speak("hola", "es")
     assert eng.offline is False
+
+
+def test_a_voice_that_fails_with_the_network_up_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    now = {"t": 1000.0}
+    monkeypatch.setattr(tts_engine.time, "monotonic", lambda: now["t"])
+    eng = TTSEngine("edge", out_dir=tmp_path, voices={"es": "es-MX-NoSuchNeural"})
+    assert eng.failing_voices == []
+    FakeComm.fail_voices, FakeComm.error = {"es-MX-NoSuchNeural"}, ValueError
+    eng.speak("hola", "es")
+    assert eng.speak("hi", "en")
+    now["t"] += tts_engine.EDGE_RETRY_AFTER_S + 1
+    assert eng.failing_voices == ["es-MX-NoSuchNeural"], "until it works again, not just for the cooldown"
+    FakeComm.fail_voices = set()
+    assert eng.speak("hola", "es")
+    assert eng.failing_voices == []
+
+
+@pytest.mark.parametrize(("fail", "offline"), [(False, False), (True, True)])
+def test_probe_finds_out_whether_the_voice_service_answers(tmp_path: Path, fail: bool, offline: bool) -> None:
+    FakeComm.fail, FakeComm.error = fail, OSError
+    eng = TTSEngine("edge", out_dir=tmp_path)
+    eng.probe()
+    assert eng.offline is offline and FakeComm.calls == 1
+    assert list(tmp_path.glob("*.mp3")) == [], "a probe leaves no file behind"
+
+
+def test_probe_with_the_voice_off_asks_nothing(tmp_path: Path) -> None:
+    TTSEngine("none", out_dir=tmp_path).probe()
+    assert FakeComm.calls == 0

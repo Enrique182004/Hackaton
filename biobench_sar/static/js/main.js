@@ -353,7 +353,8 @@ function onSpeak(d) {
   applyHighlight(d, pendingState);
   const text = d.display_text || d.text || d.spoken_text;
   if (text) showBubble(text); else armBubbleTimer(0);
-  if (!d.url) { armBubbleTimer(4000); return; }
+  // Without audio the answer is only read: hold it as long as an answer bubble of that length (onAvatarUpdate).
+  if (!d.url) { armBubbleTimer(Math.max(4000, (text || "").length * 80)); return; }
   const a = new Audio(d.url);
   audio = a;
   const done = () => {

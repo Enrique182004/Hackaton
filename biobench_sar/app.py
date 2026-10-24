@@ -496,6 +496,7 @@ def create_app(
                 "mic_silent": getattr(svc.audio, "mic_silent", None) is True,
                 "tts_backend": settings.tts_backend,
                 "voice_offline": getattr(svc.tts, "offline", False) is True,
+                "voice_failed": list(getattr(svc.tts, "failing_voices", None) or []),
                 "listen_mode": settings.listen_mode,
                 "state": assistant.state,
                 "busy": assistant.busy,
@@ -1151,6 +1152,10 @@ def _warm_up(svc: Services) -> None:
         from biobench_sar.core.audio_trigger import mic_silence_hint
 
         log.warning("the microphone sends only silence: %s", mic_silence_hint())
+    # Short too: whether the kid voices can be made, so the checklist never says answers are read aloud while offline.
+    tts_probe = getattr(getattr(svc, "tts", None), "probe", None)
+    if callable(tts_probe):
+        tts_probe()
     warmup = getattr(svc.vlm, "warmup", None)
     if callable(warmup):
         warmup()

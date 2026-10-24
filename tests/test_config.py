@@ -385,7 +385,15 @@ def test_lan_hostnames_passed_in_are_normalized() -> None:
 
 @pytest.mark.parametrize(
     ("value", "backend"),
-    [("edge", "edge"), ("none", "none"), ("say", "edge"), ("pyttsx3", "edge"), (" Say ", "edge")],
+    [
+        ("edge", "edge"),
+        ("none", "none"),
+        ("say", "edge"),
+        ("pyttsx3", "edge"),
+        (" Say ", "edge"),
+        ("off", "none"),  # anything else means no voice, as the engine treats it: status and checklist agree
+        ("egde", "none"),
+    ],
 )
 def test_the_removed_adult_voices_fall_back_to_the_kid_voices(
     monkeypatch: pytest.MonkeyPatch, value: str, backend: str

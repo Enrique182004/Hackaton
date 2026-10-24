@@ -1430,3 +1430,18 @@ def test_status_says_when_the_voice_service_is_unreachable(built: Any, fakes: ap
     assert app.test_client().get("/api/status").get_json()["voice_offline"] is False
     fakes.tts.offline = True  # type: ignore[attr-defined]
     assert app.test_client().get("/api/status").get_json()["voice_offline"] is True
+
+
+def test_status_names_a_voice_that_does_not_work(built: Any, fakes: app_module.Services) -> None:
+    app, _ = built
+    assert app.test_client().get("/api/status").get_json()["voice_failed"] == []
+    fakes.tts.failing_voices = ["es-MX-NoSuchNeural"]  # type: ignore[attr-defined]
+    assert app.test_client().get("/api/status").get_json()["voice_failed"] == ["es-MX-NoSuchNeural"]
+
+
+def test_warm_up_asks_the_voice_service_once() -> None:
+    # So the Board checklist knows at startup whether answers will be spoken.
+    probes: list[bool] = []
+    tts = types.SimpleNamespace(probe=lambda: probes.append(True))
+    app_module._warm_up(types.SimpleNamespace(vlm=object(), audio=_ProbedAudio(False), tts=tts))  # type: ignore[arg-type]
+    assert probes == [True]

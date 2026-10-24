@@ -1553,9 +1553,7 @@ def test_unheard_line_is_shown_even_when_speech_fails(h: Harness) -> None:
 
 
 def test_unheard_waits_while_an_answer_is_still_being_played(h: Harness, clock: FakeClock) -> None:
-    # Answers are voiced here, whatever SAR_TTS_BACKEND the shell has (the mock-app command sets it to none).
-    h.assistant.settings = dataclasses.replace(h.assistant.settings, tts_backend="edge")
-    h.assistant.handle_query("q")
+    h.assistant.handle_query("q")  # the fake voice returns audio, so the answer is playing
     before = len(h.events)
     assert h.assistant.on_unheard("unclear", "en") is False
     assert h.events[before:] == [] and h.assistant.busy is False
@@ -1595,17 +1593,9 @@ def test_the_unheard_line_does_not_switch_the_reply_language(h: Harness) -> None
     assert len(h.payloads("language")) == before and h.assistant.current_language == "es"
 
 
-def test_without_a_voice_nothing_is_still_playing(h: Harness, clock: FakeClock) -> None:
-    # SAR_TTS_BACKEND=none: the answer is only shown, so a wordless push right after it still gets a reply.
-    h.assistant.settings = dataclasses.replace(h.assistant.settings, tts_backend="none")
-    h.tts.name = None
-    h.assistant.handle_query("q")
-    assert h.assistant.on_unheard("unclear", "en") is True
-
-
 def test_an_answer_without_audio_is_not_still_playing(h: Harness, clock: FakeClock) -> None:
-    # The voice service is unreachable: the answer is only shown. There is no other voice, so nothing plays.
-    h.assistant.settings = dataclasses.replace(h.assistant.settings, tts_backend="edge")
+    # The voice is off or the voice service is unreachable: the answer is only shown. There is no other voice, so
+    # nothing plays and a wordless push right after it still gets a reply.
     h.tts.name = None
     h.assistant.handle_query("q")
     assert h.payloads("speak")[-1]["url"] is None
