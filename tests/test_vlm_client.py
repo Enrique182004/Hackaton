@@ -367,7 +367,9 @@ def test_quiz_check_prompt() -> None:
         "next_problem": "2x - 4 = 10",
     }
     text = vc.quiz_task_text(task)
-    assert "Quiz stage: check. Problem 1 of 5: 3x + 5 = 20" in text and "Next problem: 2x - 4 = 10" in text
+    assert "Quiz stage: check. Problem 1 of 5: 3x + 5 = 20" in text
+    # Shown the next problem, the model copied it as the student's answer: code reads it out after a correct check.
+    assert "2x - 4 = 10" not in text and "Next problem" not in text and "do not read out any problem" in text
     assert "board_answer" in text and "never the answer" in text
     # A numeric answer is graded in code; shown to the model, it gets copied into board_answer.
     assert "x = 5" not in text and "Expected answer" not in text
@@ -1145,6 +1147,7 @@ def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -
         *("H", "HA", "P", "PF", "QD", "QH", "QC", "QW", "QN", "QDI", "QCI", "QWI", "LO", "LE", "HF"),
         *("ELO", "ELE", "EH", "EHA", "EQD", "EQC", "EQW"),
         *("CR", "CRW", "CRH", "CRHW"),
+        *("EQCN", "EQWN", "QCN", "QWN", "HS", "EHS"),
     }
     assert all(b.MATH_SCENARIOS[k].language == "es" for k in ("ELO", "ELE", "EH", "EHA", "EQD", "EQC", "EQW"))
     assert set(b.BIO_SCENARIOS) == {"A", "B", "AB", "BA"}
@@ -1159,6 +1162,21 @@ def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -
     assert b.judge(offer, AvatarAction(OFFER_QUESTION, "idle", 960, 540)) == []
     assert b.judge(offer, AvatarAction("Fractions.", "pointing", 1, 1)) == ["state pointing", offer.check("Fractions.")]
     assert b.MATH_SCENARIOS["LE"].turns and b.MATH_SCENARIOS["QC"].task["answer"] == "x = 5"
+
+
+def test_bench_no_files_and_stored_notes_scenarios(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = _bench(monkeypatch)
+    for key in ("EQCN", "EQWN", "QCN", "QWN"):
+        assert b.MATH_SCENARIOS[key].chunks() == [], "every file switched off: no notes at all"
+    assert all(b.MATH_SCENARIOS[k].language == "es" for k in ("EQCN", "EQWN", "EHS"))
+    right = b.MATH_SCENARIOS["EQCN"]
+    assert right.check("¡Correcto, muy bien! Problema dos. dos x menos cuatro es igual a diez") is None
+    assert right.check(vc.TEXTS["es"]["no_answer"]), "the copied next problem made a right answer ungraded"
+    assert right.check(vc.TEXTS["es"]["reread"])
+    assert b.MATH_SCENARIOS["QCN"].check(vc.TEXTS["en"]["reread"])
+    notes = b.MATH_SCENARIOS["HS"].chunks()
+    assert notes and all("answer is" not in c.text and "Answer:" not in c.text for c in notes), "stored without them"
+    assert any("problem is 3x + 5 = 20" in c.text for c in notes)
 
 
 def test_bench_spanish_heuristics(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1266,7 +1284,8 @@ def test_spanish_user_prompt_labels() -> None:
     ):
         assert label in prompt
     quiz = build_prompt("¿Está bien?", [], [], SIZE, profile="math", mode="quiz", task=ES_QUIZ, language="es")
-    assert "Etapa del quiz: revisar. Problema 1 de 5: 3x + 5 = 20" in quiz and "Siguiente problema: 2x - 4 = 10" in quiz
+    assert "Etapa del quiz: revisar. Problema 1 de 5: 3x + 5 = 20" in quiz
+    assert "2x - 4 = 10" not in quiz and "Siguiente problema" not in quiz, "never shown: it was copied as the answer"
     assert "x = 5" not in quiz, "a numeric answer is checked in code, never shown"
     learn = vc.learn_task_text({"kind": "learn", "topic": "fracciones", "stage": "offer"}, "es")
     assert learn.startswith("Etapa de aprender: ofrecer. Tema: fracciones") and vc.OFFER_QUESTION_ES in learn
@@ -1518,3 +1537,100 @@ def test_lesson_starter_rule_only_for_fractions_and_equations() -> None:
     with patch.object(c.session, "post", return_value=_ollama_resp(json.dumps(reply))) as post:
         action = c.evaluate("make one up", None, [], [], SIZE, task=task)
     assert post.call_count == 1 and action.spoken_text == "Find the square root of sixteen."
+
+
+# ---- the next quiz problem, copied as the student's answer ----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("read", "copies"),
+    [
+        ("2x - 4 = 10", True),
+        ("2x-4=10.", True),
+        ("2x − 4 = 10", True),
+        ("two x minus four equals ten", True),
+        ("3x + 5 = 20, 2x - 4 = 10", True),
+        ("x = 5", False),
+        ("3x + 5 = 20", False),
+        ("x = 7", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_copies_problem(read: str | None, copies: bool) -> None:
+    assert vc.copies_problem(read, "2x - 4 = 10") is copies
+    assert vc.copies_problem(read, None) is False
+
+
+@pytest.mark.parametrize("read", ["3x + 5 = 20", "3x + 5 = 20, x = 5", "3x + 5 = 20 luego x = 5", "x = 5"])
+def test_copies_problem_needs_the_whole_problem(read: str) -> None:
+    # The next problem's text inside the current one's is no copy of it.
+    assert vc.copies_problem(read, "x + 5 = 20", "es") is False
+    assert vc.copies_problem("x + 5 = 20", "x + 5 = 20", "es") is True
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_board_answer_that_is_the_next_problem_is_not_graded(language: str) -> None:
+    praise = AvatarAction("¡Correcto!" if language == "es" else "Correct!", "celebrating", 1, 2)
+    for read in ("2x - 4 = 10", "dos x menos cuatro es igual a diez" if language == "es" else "2x-4=10"):
+        out = vc.check_quiz_answer(praise, ES_QUIZ, read, language=language)
+        assert out.verdict is None and out.animation_state == "idle"  # type: ignore[attr-defined]
+        assert out.spoken_text == vc.TEXTS[language]["reread"] and out.dictated is None  # type: ignore[attr-defined]
+
+
+def _check_replies(*reads: str, state: str = "celebrating", spoken: str = "¡Correcto, muy bien!") -> list[MagicMock]:
+    return [
+        _ollama_resp(
+            json.dumps(
+                {"board_answer": r, "spoken_text": spoken, "animation_state": state, "target_x": 9, "target_y": 9}
+            )
+        )
+        for r in reads
+    ]
+
+
+def test_spanish_check_that_copies_the_next_problem_is_asked_again_and_graded() -> None:
+    c = _math_client()
+    with patch.object(c.session, "post", side_effect=_check_replies("2x - 4 = 10", "x = 5")) as post:
+        action = c.evaluate("¿Está bien?", JPEG, [], REGIONS, SIZE, mode="quiz", task=ES_QUIZ, language="es")
+    assert post.call_count == 2
+    first, retry = (call.kwargs["json"]["messages"][1]["content"] for call in post.call_args_list)
+    assert "2x - 4 = 10" not in first, "the next problem is never in a check prompt"
+    assert vc.RETRY_NOTES["es"]["misread"] in retry and "2x - 4 = 10" not in retry
+    assert action.verdict == "correct" and action.dictated == "2x - 4 = 10"  # type: ignore[attr-defined]
+    assert action.spoken_text == "¡Correcto, muy bien! Problema dos. dos x menos cuatro es igual a diez"
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_check_that_copies_the_next_problem_twice_stays_ungraded(language: str) -> None:
+    c = _math_client()
+    replies = _check_replies("2x - 4 = 10", "2x-4=10", state="error", spoken="Casi." if language == "es" else "No.")
+    with patch.object(c.session, "post", side_effect=replies) as post:
+        action = c.evaluate("check it", JPEG, [], REGIONS, SIZE, mode="quiz", task=ES_QUIZ, language=language)
+    assert post.call_count == 2
+    assert action.verdict is None and action.animation_state == "idle"  # type: ignore[attr-defined]
+    assert action.spoken_text == vc.TEXTS[language]["reread"]
+
+
+def test_a_right_reading_is_not_asked_again() -> None:
+    c = _math_client()
+    with patch.object(c.session, "post", side_effect=_check_replies("x = 7", state="error", spoken="Casi.")) as post:
+        action = c.evaluate("¿Está bien?", JPEG, [], REGIONS, SIZE, mode="quiz", task=ES_QUIZ, language="es")
+    assert post.call_count == 1 and action.verdict == "wrong"  # type: ignore[attr-defined]
+
+
+def test_correct_praise_that_reads_a_problem_of_its_own_is_replaced() -> None:
+    # The old few-shot example read "Problem two. Two x equals fourteen."; only the quiz's next problem is read out.
+    own = AvatarAction("¡Correcto, muy bien! Problema dos. Dos x es igual a catorce.", "celebrating", 1, 2)
+    out = vc.check_quiz_answer(own, ES_QUIZ, "x = 5", language="es")
+    assert out.spoken_text == "¡Correcto, muy bien! Problema 2. 2x - 4 = 10"
+    for praise in ("¡Excelente trabajo!", "¡Correcto! Quitaste el más cinco.", "¡Bien! x es igual a cinco."):
+        kept = vc.check_quiz_answer(AvatarAction(praise, "celebrating", 1, 2), ES_QUIZ, "x = 5", language="es")
+        assert kept.spoken_text == f"{praise} Problema 2. 2x - 4 = 10", "praise without a problem of its own stays"
+
+
+def test_check_system_prompts_never_show_a_next_problem() -> None:
+    for language in ("en", "es"):
+        prompt = system_prompt("math", "quiz", language)
+        assert "Next problem" not in prompt and "Siguiente problema" not in prompt
+        assert "2x = 14" not in prompt and "catorce" not in prompt and "fourteen" not in prompt

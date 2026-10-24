@@ -64,6 +64,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "wrong": WRONG_TEXT,
         "step": STEP_TEXT,
         "correct": "Correct, great job!",
+        "reread": "I couldn't read your answer clearly. Ask me to check it again.",
         "next": " Problem {number}. {problem}",
         "last": " That was the last problem. You finished the quiz!",
         "dictation": "Problem {number} of {total}. {problem}. Write your answer on the board.",
@@ -85,6 +86,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "wrong": "Casi. Revisa tus pasos y vuelve a intentarlo.",
         "step": "Fíjate qué le están haciendo a la x y deshazlo en ambos lados. Escribe ese paso en el pizarrón.",
         "correct": "¡Correcto, muy bien!",
+        "reread": "No pude leer bien tu respuesta. Pídeme que la revise otra vez.",
         "next": " Problema {number}. {problem}",
         "last": " Ese fue el último problema. ¡Terminaste el quiz!",
         "dictation": "Problema {number} de {total}. {problem}. Escribe tu respuesta en el pizarrón.",
@@ -218,9 +220,8 @@ Do not solve it. board_answer "", "idle", target = screen center.
 NEVER say the answer. board_answer "", "pointing" at the ink to work on.
 - Stage check: FIRST look at the photo and copy the bottom line of the student's writing into board_answer, \
 exactly as written (the problem itself if no answer is written yet). Never solve the problem yourself.
-  - Correct: "celebrating"; praise briefly. If a next problem is given, also read it in words.
-  - Wrong: "error"; say "Not quite" and give ONE short hint. NEVER say the correct answer \
-and do not read the next problem.
+  - Correct: "celebrating"; praise briefly. Do not read out any problem: the next one is read after you.
+  - Wrong: "error"; say "Not quite" and give ONE short hint. NEVER say the correct answer.
   target = center of the answer's ink region.
 
 Examples (JSON only, 1920x1080 screen):
@@ -228,10 +229,10 @@ Quiz stage: dictate. Problem 1 of 5: x + 4 = 10
 {"board_answer": "", "spoken_text": "Problem one of five. x plus four equals ten. Write your answer on the board.", "animation_state": "idle", "target_x": 960, "target_y": 540}
 Quiz stage: hint. Problem 2 of 5: 2x + 3 = 11. Board: 2x + 3 = 11
 {"board_answer": "", "spoken_text": "First get two x alone. What can you subtract from both sides?", "animation_state": "pointing", "target_x": 800, "target_y": 400}
-Quiz stage: check. Problem 1 of 5: x + 4 = 10. Next problem: 2x = 14. Board: x + 4 = 10, then x = 9
+Quiz stage: check. Problem 1 of 5: x + 4 = 10. Board: x + 4 = 10, then x = 9
 {"board_answer": "x = 9", "spoken_text": "Not quite. What can you subtract from both sides to get x alone?", "animation_state": "error", "target_x": 800, "target_y": 600}
-Quiz stage: check. Problem 1 of 5: x + 4 = 10. Next problem: 2x = 14. Board: x + 4 = 10, then x = 6
-{"board_answer": "x = 6", "spoken_text": "Correct, great job! Problem two. Two x equals fourteen.", "animation_state": "celebrating", "target_x": 800, "target_y": 600}"""
+Quiz stage: check. Problem 1 of 5: x + 4 = 10. Board: x + 4 = 10, then x = 6
+{"board_answer": "x = 6", "spoken_text": "Correct, great job! You undid the plus four.", "animation_state": "celebrating", "target_x": 800, "target_y": 600}"""
 
 MATH_LEARN = f"""TASK: the student wants to learn a topic. The board may be empty. The message gives the topic \
 and the stage. Use plain words for a middle or high school student.
@@ -311,9 +312,8 @@ No lo resuelvas. board_answer "", "idle", target = centro de la pantalla.
 NUNCA digas la respuesta. board_answer "", "pointing" a la tinta que hay que trabajar.
 - Etapa revisar: PRIMERO mira la foto y copia en board_answer la última línea de lo que escribió el estudiante, \
 tal como está escrita (el mismo problema si todavía no hay respuesta). Nunca resuelvas tú el problema.
-  - Correcta: "celebrating"; felicítalo brevemente. Si se da un siguiente problema, léelo también con palabras.
-  - Incorrecta: "error"; di "Casi" y da UNA pista corta. NUNCA digas la respuesta correcta y no leas el siguiente \
-problema.
+  - Correcta: "celebrating"; felicítalo brevemente. No leas ningún problema: el siguiente se lee después de ti.
+  - Incorrecta: "error"; di "Casi" y da UNA pista corta. NUNCA digas la respuesta correcta.
   target = centro de la región de tinta de la respuesta.
 
 Ejemplos (solo JSON, pantalla de 1280x800):
@@ -321,10 +321,10 @@ Etapa del quiz: dictar. Problema 1 de 5: x + 4 = 10
 {"board_answer": "", "spoken_text": "Problema uno de cinco. x más cuatro es igual a diez. Escribe tu respuesta en el pizarrón.", "animation_state": "idle", "target_x": 640, "target_y": 400}
 Etapa del quiz: pista. Problema 2 de 5: 2x + 3 = 11. Pizarrón: 2x + 3 = 11
 {"board_answer": "", "spoken_text": "Primero deja solo el dos x. ¿Qué puedes restar en ambos lados?", "animation_state": "pointing", "target_x": 530, "target_y": 300}
-Etapa del quiz: revisar. Problema 1 de 5: x + 4 = 10. Siguiente problema: 2x = 14. Pizarrón: x + 4 = 10, luego x = 9
+Etapa del quiz: revisar. Problema 1 de 5: x + 4 = 10. Pizarrón: x + 4 = 10, luego x = 9
 {"board_answer": "x = 9", "spoken_text": "Casi. ¿Qué puedes restar en ambos lados para dejar sola la x?", "animation_state": "error", "target_x": 530, "target_y": 400}
-Etapa del quiz: revisar. Problema 1 de 5: x + 4 = 10. Siguiente problema: 2x = 14. Pizarrón: x + 4 = 10, luego x = 6
-{"board_answer": "x = 6", "spoken_text": "¡Correcto, muy bien! Problema dos. Dos x es igual a catorce.", "animation_state": "celebrating", "target_x": 530, "target_y": 400}"""
+Etapa del quiz: revisar. Problema 1 de 5: x + 4 = 10. Pizarrón: x + 4 = 10, luego x = 6
+{"board_answer": "x = 6", "spoken_text": "¡Correcto, muy bien! Quitaste el más cuatro.", "animation_state": "celebrating", "target_x": 530, "target_y": 400}"""
 
 MATH_LEARN_ES = f"""TAREA: el estudiante quiere aprender un tema. El pizarrón puede estar vacío. El mensaje da el tema y la \
 etapa. Usa palabras sencillas para un estudiante de secundaria o preparatoria.
@@ -567,14 +567,14 @@ def quiz_task_text(task: Mapping[str, Any] | None, language: str = "en") -> str:
         lines.append(f"Expected answer: {answer}. The student's answer is correct ONLY if its value is the same.")
     elif not answer:
         lines.append("Expected answer: not given, solve the problem yourself.")
-    if upcoming:
-        lines.append(f"Next problem: {upcoming}\nOnly if the answer is correct, also read the next problem in words.")
-    elif number >= total:
+    # The next problem is never in a check prompt: shown it, the model copied it as the student's answer. Code reads
+    # it out after a correct verdict (check_quiz_answer).
+    if not upcoming and number >= total:
         lines.append("This is the last problem: if the answer is correct, congratulate the student on finishing.")
     lines.append(
         "First copy the bottom line of the student's writing in the photo into board_answer, exactly as written "
         '(not a problem from this message); do not solve anything yourself. If the answer is wrong: "error", one '
-        "hint, never the answer."
+        "hint, never the answer. If it is correct, praise briefly and do not read out any problem."
     )
     return "\n".join(lines)
 
@@ -599,17 +599,12 @@ def _quiz_task_text_es(t: Mapping[str, Any]) -> str:
         lines.append(f"Respuesta esperada: {answer}. La respuesta del estudiante es correcta SOLO si vale lo mismo.")
     elif not answer:
         lines.append("Respuesta esperada: no se da, resuelve tú el problema.")
-    if upcoming:
-        lines.append(
-            f"Siguiente problema: {upcoming}\nSolo si la respuesta es correcta, lee también el siguiente problema "
-            "con palabras."
-        )
-    elif number >= total:
+    if not upcoming and number >= total:
         lines.append("Este es el último problema: si la respuesta es correcta, felicita al estudiante por terminar.")
     lines.append(
         "Primero copia en board_answer la última línea de lo que escribió el estudiante en la foto, tal como está "
         '(no un problema de este mensaje); no resuelvas nada tú. Si la respuesta está mal: "error", una pista, '
-        "nunca la respuesta."
+        "nunca la respuesta. Si está bien, felicítalo brevemente y no leas ningún problema."
     )
     return "\n".join(lines)
 
@@ -880,6 +875,14 @@ def dictates_problem(spoken: str, like: str | None = None, language: str = "en")
     return "equals" in said or "=" not in (like or "")
 
 
+def says_equation(spoken: str, language: str = "en") -> bool:
+    """Whether a reply reads out an equation: "equals" with two numbers or more ("two x equals fourteen"); a lone
+    "x equals five" is a value, not a problem."""
+    seq = _math_seq(spoken, language)
+    numbers = [word for word in seq if word not in ("plus", "minus", "times", "over", "equals")]
+    return "equals" in seq and len(numbers) >= 2
+
+
 def reads_back(spoken: str, problem: str | None, language: str = "en") -> bool:
     """Whether a reply says this exact problem (its numbers and operations in the same order)."""
     wanted, said = _math_seq(problem or "", language), _math_seq(spoken, language)
@@ -955,6 +958,31 @@ def _dictation(number: int, total: int, problem: str, language: str = "en") -> s
     return text_for(language, "dictation", number=number, total=total, problem=problem)
 
 
+def _problem_key(text: str) -> str:
+    plain = str(text).lower().replace("−", "-").replace("–", "-").replace("×", "*").replace("·", "*")
+    return re.sub(r"\s+", "", plain).rstrip(".?!")
+
+
+_READ_PARTS = re.compile(r"\s*(?:[,;]|\bthen\b|\bluego\b|\band\b|\by\b)\s*", re.I)
+
+
+def copies_problem(read: str | None, problem: str | None, language: str = "en") -> bool:
+    """Whether what the model "read off the board" is `problem` (the quiz's next one), not the student's answer:
+    all of it or one of its parts ("3x + 5 = 20, 2x - 4 = 10") is that problem, as written ("2x-4=10.") or said in
+    words. Whole parts only: a next problem "x + 5 = 20" is not in a read "3x + 5 = 20"."""
+    read, problem = _clean(read), _clean(problem)
+    if read is None or problem is None:
+        return False
+    parts = [read, *(part for part in _READ_PARTS.split(read) if part)]
+    key = _problem_key(problem)
+    if any(_problem_key(part) == key for part in parts):
+        return True
+    if re.search(r"\d", read):
+        return False  # written with digits and still not the problem
+    wanted = _math_seq(problem, language)
+    return len(wanted) >= 3 and any(_math_seq(part, language) == wanted for part in parts)
+
+
 def check_quiz_answer(
     action: AvatarAction,
     task: Mapping[str, Any] | None,
@@ -967,6 +995,9 @@ def check_quiz_answer(
     t = task or {}
     number, total = _as_int(t.get("number"), 1), _as_int(t.get("total"), 0)
     upcoming = _clean(t.get("next_problem"))
+    if copies_problem(answer_on_board, upcoming, language):
+        # The next problem is not on the board yet: this is no reading of the student's answer, so no grade either.
+        return _tutor(action, spoken_text=text_for(language, "reread"), animation_state="idle", verdict=None)
     expected, given = answer_value(expected_answer(t)), answer_value(answer_on_board)
     spoken, state = action.spoken_text, action.animation_state
     usable = (
@@ -994,6 +1025,8 @@ def check_quiz_answer(
         return _tutor(action, spoken_text=wrong, animation_state="error", verdict="wrong")
     else:
         praise = spoken if state == "celebrating" and usable else correct
+    if praise != correct and says_equation(praise, language) and not reads_problem(praise, upcoming, language):
+        praise = correct  # it read out a problem of its own (an example's): only the quiz's next one is read out
     if upcoming and not reads_problem(praise, upcoming, language):
         # The next turn checks it, so it must be read out now.
         praise += text_for(language, "next", number=number + 1, problem=upcoming)
@@ -1147,6 +1180,8 @@ RETRY_NOTES = {
         "reveal": "Your last reply gave away the value of the letter. Explain only the next step, never the answer.",
         "starter": "Your last reply did not dictate a problem. Dictate ONE easy problem on {topic} in words, with its "
         "numbers and operation, not a story.",
+        "misread": "Your last board_answer was not what the student wrote. Look at the photo again and copy the bottom "
+        "line of the student's own writing into board_answer, exactly as written.",
     },
     "es": {
         "echo": "Tu respuesta anterior solo repitió las palabras del estudiante. Responde lo que preguntó.",
@@ -1158,6 +1193,8 @@ RETRY_NOTES = {
         "reveal": "Tu respuesta anterior dio el valor de la letra. Explica solo el siguiente paso, nunca la respuesta.",
         "starter": "Tu respuesta anterior no dictó un problema. Dicta UN problema fácil de {topic} con palabras, con "
         "sus números y su operación, no una historia.",
+        "misread": "Tu board_answer anterior no era lo que escribió el estudiante. Mira otra vez la foto y copia en "
+        "board_answer la última línea de lo que escribió el estudiante, tal como está.",
     },
 }
 
@@ -1170,11 +1207,15 @@ def _retry_note(
     recent_turns: Any,
     board: str | None = None,
     language: str = "en",
+    read: str | None = None,
 ) -> str | None:
-    """Why a finished math reply must be asked for again, or None. Quiz dictation and grading are fixed in code."""
+    """Why a finished math reply must be asked for again, or None. Quiz dictation and grading are fixed in code; a
+    check is asked again only when what it read off the board (`read`) is the next problem instead."""
+    notes = RETRY_NOTES[normalize_reply_language(language)]
+    if kind == "quiz" and quiz_stage(task) == "check":
+        return notes["misread"] if copies_problem(read, _clean((task or {}).get("next_problem")), language) else None
     if kind == "quiz" and quiz_stage(task) != "hint":
         return None
-    notes = RETRY_NOTES[normalize_reply_language(language)]
     spoken = action.spoken_text
     if _is_echo(spoken, query, language):
         return notes["echo"]
@@ -1399,20 +1440,20 @@ class VLMClient:
         try:
             kind = resolve_mode(mode, task)
             action, board = self._finish(reply, mode, task, query, language), reply.board_problem
-            note = (
-                None
-                if self.backend == "mock"
-                else _retry_note(action, kind, task, query, recent_turns, board, language)
-            )
+            note = None
+            if self.backend != "mock":
+                note = _retry_note(action, kind, task, query, recent_turns, board, language, reply.board_answer)
             if note is None:
                 return action
             logger.info("asking the model again: %s", note)
             retry = self._evaluate(*args, note=note, **extra)
             if not retry.failed:
                 again, board = self._finish(retry, mode, task, query, language), retry.board_problem or board
-                if _retry_note(again, kind, task, query, recent_turns, board, language) is None:
+                if _retry_note(again, kind, task, query, recent_turns, board, language, retry.board_answer) is None:
                     return again
                 action = again
+            if kind == "quiz" and quiz_stage(task) == "check":
+                return action  # graded in code: still the next problem, so it stays ungraded ("ask me again")
             salvaged = _salvage(action, kind, task, query, recent_turns, bool(ink_regions), board, language)
             return speakable(salvaged, language)
         except Exception as exc:  # evaluate must never raise

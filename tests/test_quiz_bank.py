@@ -396,7 +396,8 @@ def test_answer_key_spanning_several_real_chunks_is_stripped(tmp_path: Path) -> 
     assert len(heading) == 1 and heading[0] < len(chunks) - 1, "the key really spans several chunks"
     later = [text for _, text in chunks[heading[0] + 1 :]]
     assert any(re.search(r"^\d+\. x = \d+ \(check", t, re.M) for t in later)
-    assert any(re.search(r"^\d+\. x = \d+ \(check", strip_answers(t), re.M) for t in later), "the gap: per chunk"
+    # A numbered "x = <value>" is never a problem, so even a chunk on its own loses those lines now.
+    assert not any(re.search(r"^\d+\. x = \d+ \(check", strip_answers(t), re.M) for t in later)
 
     stripped = strip_chunk_answers(chunks)
     assert not any(re.search(r"^\d+\. x = -?\d+", t, re.M) for t in stripped), stripped

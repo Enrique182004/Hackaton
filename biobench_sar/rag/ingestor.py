@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from biobench_sar.rag.quiz_bank import is_answer_column, strip_document_answers
 
 SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
     {".pdf", ".txt", ".md", ".csv", ".docx", ".pptx", ".png", ".jpg", ".jpeg"}
@@ -12,6 +15,10 @@ TESSERACT_HINT = (
     "Tesseract binary not found. Install it: macOS `brew install tesseract`, "
     "Ubuntu `sudo apt install tesseract-ocr`, Windows https://github.com/UB-Mannheim/tesseract/wiki"
 )
+
+
+# A whole document's texts (pages, slides or the one text) -> the same texts cleaned, before chunking.
+Cleaner = Callable[[list[str]], list[str]]
 
 
 class UnsupportedFileType(ValueError):
@@ -71,20 +78,29 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def _ingest_pdf(path: Path) -> list[Chunk]:
+def _cleaned(parts: list[str], clean: Cleaner | None) -> list[str]:
+    return clean(parts) if clean is not None else parts
+
+
+def _ingest_pdf(path: Path, clean: Cleaner | None = None) -> list[Chunk]:
     import pymupdf
 
-    out: list[Chunk] = []
     with pymupdf.open(str(path)) as doc:
-        for i, page in enumerate(doc, start=1):
-            out += _mk(chunk_paragraphs(page.get_text()), path.name, "pdf", page=i)
+        pages = [page.get_text() for page in doc]
+    out: list[Chunk] = []
+    for i, text in enumerate(_cleaned(pages, clean), start=1):
+        out += _mk(chunk_paragraphs(text), path.name, "pdf", page=i)
     return out
 
 
-def _ingest_csv(path: Path, max_chars: int = 1000) -> list[Chunk]:
+def _ingest_csv(path: Path, max_chars: int = 1000, *, drop_answers: bool = False) -> list[Chunk]:
     import pandas as pd
 
     df = pd.read_csv(path, dtype=str, keep_default_na=False)
+    if drop_answers:
+        df = df[[col for col in df.columns if not is_answer_column(str(col))]]
+        if df.columns.empty:
+            return []  # nothing but answers
     out: list[Chunk] = []
     group: list[str] = []
     first = 0
@@ -107,30 +123,32 @@ def _ingest_csv(path: Path, max_chars: int = 1000) -> list[Chunk]:
     return out
 
 
-def _ingest_docx(path: Path) -> list[Chunk]:
+def _ingest_docx(path: Path, clean: Cleaner | None = None) -> list[Chunk]:
     import docx
 
     text = "\n\n".join(p.text for p in docx.Document(str(path)).paragraphs if p.text.strip())
-    return _mk(chunk_paragraphs(text), path.name, "docx")
+    return _mk(chunk_paragraphs(_cleaned([text], clean)[0]), path.name, "docx")
 
 
-def _ingest_pptx(path: Path) -> list[Chunk]:
+def _ingest_pptx(path: Path, clean: Cleaner | None = None) -> list[Chunk]:
     from pptx import Presentation
 
-    out: list[Chunk] = []
-    for i, slide in enumerate(Presentation(str(path)).slides, start=1):
+    slides: list[str] = []
+    for slide in Presentation(str(path)).slides:
         paras = [
             "".join(r.text for r in p.runs) or p.text
             for shape in slide.shapes
             if shape.has_text_frame
             for p in shape.text_frame.paragraphs
         ]
-        text = "\n\n".join(p for p in paras if p.strip())
+        slides.append("\n\n".join(p for p in paras if p.strip()))
+    out: list[Chunk] = []
+    for i, text in enumerate(_cleaned(slides, clean), start=1):
         out += _mk(chunk_paragraphs(text), path.name, "pptx", slide=i)
     return out
 
 
-def _ingest_image(path: Path) -> list[Chunk]:
+def _ingest_image(path: Path, clean: Cleaner | None = None) -> list[Chunk]:
     import pytesseract
     from PIL import Image
 
@@ -139,24 +157,28 @@ def _ingest_image(path: Path) -> list[Chunk]:
             text = pytesseract.image_to_string(img)
     except pytesseract.TesseractNotFoundError as exc:
         raise RuntimeError(TESSERACT_HINT) from exc
-    return _mk(chunk_paragraphs(text), path.name, "image")
+    return _mk(chunk_paragraphs(_cleaned([text], clean)[0]), path.name, "image")
 
 
-def ingest_file(path: str | Path) -> list[Chunk]:
+def ingest_file(path: str | Path, *, strip_answers: bool = False) -> list[Chunk]:
+    """The file's text as chunks. strip_answers (the math profile): answer keys, "Answer:" lines, answer tables and a
+    CSV's answer columns are taken out of the whole document before it is chunked, so no chunk (and no embedding)
+    holds an answer. The quiz bank reads its problems and answers from the original file instead."""
     p = Path(path)
     ext = p.suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         raise UnsupportedFileType(f"Unsupported file type: {ext or p.name}")
+    clean = strip_document_answers if strip_answers else None
     if ext == ".pdf":
-        return _ingest_pdf(p)
+        return _ingest_pdf(p, clean)
     if ext in (".txt", ".md"):
-        return _mk(chunk_paragraphs(_read_text(p)), p.name, ext[1:])
+        return _mk(chunk_paragraphs(_cleaned([_read_text(p)], clean)[0]), p.name, ext[1:])
     if ext == ".csv":
-        return _ingest_csv(p)
+        return _ingest_csv(p, drop_answers=strip_answers)
     if ext == ".docx":
-        return _ingest_docx(p)
+        return _ingest_docx(p, clean)
     if ext == ".pptx":
-        return _ingest_pptx(p)
+        return _ingest_pptx(p, clean)
     if shutil.which("tesseract") is None and not Path("/opt/homebrew/bin/tesseract").exists():
         raise RuntimeError(TESSERACT_HINT)
-    return _ingest_image(p)
+    return _ingest_image(p, clean)

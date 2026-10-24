@@ -93,7 +93,7 @@ def ingest_texts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         source: str
         metadata: dict[str, str | int]
 
-    def ingest_file(path: Any) -> list[Chunk]:
+    def ingest_file(path: Any, *, strip_answers: bool = False) -> list[Chunk]:
         return [Chunk(t, str(path), {"source": str(path)}) for t in texts]
 
     ingestor.ingest_file = ingest_file  # type: ignore[attr-defined]
@@ -1020,10 +1020,10 @@ def test_seed_marker_waits_until_every_file_went_in(
     real = ingestor.ingest_file
     broken = {"tutoring_guide.md"}
 
-    def flaky(path: Any) -> Any:
+    def flaky(path: Any, **kwargs: Any) -> Any:
         if Path(path).name in broken:
             raise RuntimeError("embedder not ready")
-        return real(path)
+        return real(path, **kwargs)
 
     monkeypatch.setattr(ingestor, "ingest_file", flaky)
     marker, folder = tmp_path / ".seeded", _seed_dir(tmp_path)
