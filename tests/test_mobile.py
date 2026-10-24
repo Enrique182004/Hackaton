@@ -500,8 +500,45 @@ def test_mobile_doc_matches_the_code() -> None:
         "Continuity Camera",
         "DroidCam",
         "HTTPS",
+        "SAR_LAN_HOSTNAMES",
+        "SAR_HOST",
+        "Cache-Control: no-store",
+        "Service-Worker-Allowed",
+        "rotate(revoke_tokens=True)",
+        "POST /api/lan/revoke",
+        "Disconnect all phones",
+        "X-SAR-LAN: 1",
+        "getRegistrations",
+        "VPN",
+        "tunnel",
     ):
         assert needle in doc, needle
-    for name in ("local_ip_addresses", "is_local_request", "is_allowed_host", "cookie_kwargs", "redeem"):
+    for name in (
+        "local_ip_addresses",
+        "is_local_request",
+        "is_allowed_host",
+        "cookie_kwargs",
+        "redeem",
+        "revoke_all",
+        "server_locked_for",
+        "locked_for",
+        "is_lan_mode",
+        "parse_hostnames",
+        "looks_like_navigation",
+        "SocketIOGate",
+        "PhoneSessions",
+        "LAN_MODE_HEADER",
+    ):
         assert hasattr(lan, name) or hasattr(lan.JoinPin, name), name
         assert name in doc, name
+
+
+def test_mobile_doc_states_the_real_guessing_limits() -> None:
+    doc = MOBILE_DOC.read_text(encoding="utf-8")
+    assert f"{lan.MAX_FAILURES} wrong PINs within a minute lock that device for 1 minute" in doc
+    assert lan.LOCKOUT_S == 60 and lan.FAILURE_WINDOW_S == 60
+    assert lan.MAX_LOCKOUT_S == 3600 and "up to **1 hour**" in doc
+    assert f"at most **{lan.GLOBAL_MAX_FAILURES} wrong PINs an hour**" in doc and lan.GLOBAL_WINDOW_S == 3600
+    assert lan.TOKEN_TTL_S == 12 * 3600 and "12 hours" in doc
+    assert "takes weeks" not in doc, "the old claim hid the real odds"
+    assert "X-SAR-From-Cache" not in doc, "the worker no longer stores /api/*"

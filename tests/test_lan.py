@@ -4,8 +4,12 @@ import ipaddress
 import json
 import socket
 import threading
+from collections.abc import Callable
 
 import pytest
+from flask import Flask
+from flask.testing import FlaskClient
+from werkzeug.test import TestResponse
 
 from biobench_sar import lan
 from biobench_sar.lan import (
@@ -321,6 +325,7 @@ def test_parse_hostnames(raw: str | None, expected: tuple[str, ...]) -> None:
 # ---- the PIN ----------------------------------------------------------------------
 PHONE = "192.168.1.30"
 OTHER = "192.168.1.31"
+MISSES = lan.MAX_FAILURES
 
 
 def test_pin_is_six_ascii_digits() -> None:
@@ -369,10 +374,10 @@ def test_verify_uses_a_constant_time_compare(monkeypatch: pytest.MonkeyPatch) ->
     assert calls and calls[0][1] == gate.pin.encode()
 
 
-def test_ten_wrong_tries_in_a_minute_lock_that_device_for_sixty_seconds() -> None:
+def test_too_many_wrong_tries_in_a_minute_lock_that_device_for_sixty_seconds() -> None:
     clock = FakeClock()
     gate = JoinPin(clock=clock)
-    for _ in range(9):
+    for _ in range(MISSES - 1):
         assert not gate.verify(wrong(gate.pin), PHONE)
         clock.advance(1)
     assert gate.locked_for(PHONE) == 0.0
@@ -386,23 +391,24 @@ def test_ten_wrong_tries_in_a_minute_lock_that_device_for_sixty_seconds() -> Non
     assert gate.verify(gate.pin, PHONE)
 
 
-def test_a_right_pin_before_the_tenth_miss_joins_and_forgives_the_device() -> None:
+def test_a_right_pin_before_the_last_allowed_miss_joins_and_forgives_the_device() -> None:
     clock = FakeClock()
     gate = JoinPin(clock=clock)
-    for _ in range(9):
+    for _ in range(MISSES - 1):
         gate.verify(wrong(gate.pin), PHONE)
     assert gate.verify(gate.pin, PHONE)
-    for _ in range(9):
+    for _ in range(MISSES - 1):
         gate.verify(wrong(gate.pin), PHONE)
     assert gate.locked_for(PHONE) == 0.0, "the earlier misses no longer count"
 
 
 def test_one_device_locking_itself_out_leaves_the_others_free() -> None:
     gate = JoinPin(clock=FakeClock())
-    for _ in range(10):
+    for _ in range(MISSES):
         gate.verify(wrong(gate.pin), PHONE)
     assert gate.locked_for(PHONE) > 0
     assert gate.locked_for(OTHER) == 0.0
+    assert gate.server_locked_for() == 0.0
     assert gate.verify(gate.pin, OTHER)
     assert not gate.verify(gate.pin, PHONE)
 
@@ -412,7 +418,7 @@ def test_each_further_lockout_doubles_up_to_an_hour() -> None:
     gate = JoinPin(global_max_failures=1_000_000, clock=clock)
     seen = []
     for _ in range(9):
-        for _ in range(10):
+        for _ in range(MISSES):
             gate.verify(wrong(gate.pin), PHONE)
         seen.append(gate.locked_for(PHONE))
         clock.advance(seen[-1])
@@ -423,11 +429,11 @@ def test_a_device_quiet_for_a_day_starts_over() -> None:
     clock = FakeClock()
     gate = JoinPin(clock=clock)
     for _ in range(3):
-        for _ in range(10):
+        for _ in range(MISSES):
             gate.verify(wrong(gate.pin), PHONE)
         clock.advance(gate.locked_for(PHONE))
     clock.advance(lan.FORGET_S)
-    for _ in range(10):
+    for _ in range(MISSES):
         gate.verify(wrong(gate.pin), PHONE)
     assert gate.locked_for(PHONE) == pytest.approx(60.0)
 
@@ -435,7 +441,7 @@ def test_a_device_quiet_for_a_day_starts_over() -> None:
 def test_tries_during_a_lockout_do_not_extend_it() -> None:
     clock = FakeClock()
     gate = JoinPin(clock=clock)
-    for _ in range(10):
+    for _ in range(MISSES):
         gate.verify(wrong(gate.pin), PHONE)
     for _ in range(50):
         clock.advance(1)
@@ -449,7 +455,7 @@ def test_misses_spread_over_more_than_a_minute_never_lock() -> None:
     gate = JoinPin(clock=clock)
     for _ in range(40):
         assert not gate.verify(wrong(gate.pin), PHONE)
-        clock.advance(7)  # about 8.6 misses per minute
+        clock.advance(16)  # never MISSES within one minute
     assert gate.locked_for(PHONE) == 0.0
     assert gate.verify(gate.pin, PHONE)
 
@@ -463,6 +469,7 @@ def test_the_server_wide_cap_stops_many_devices_guessing_together() -> None:
     newcomer = "10.9.9.9"
     remaining = lan.GLOBAL_WINDOW_S - 10 * lan.GLOBAL_MAX_FAILURES
     assert gate.locked_for(newcomer) == pytest.approx(remaining)
+    assert gate.server_locked_for() == pytest.approx(remaining)
     assert not gate.verify(gate.pin, newcomer), "nobody may guess, not even with the right PIN"
     clock.advance(remaining)
     assert gate.locked_for(newcomer) == 0.0, "the oldest miss left the window: one more guess is allowed"
@@ -481,8 +488,8 @@ def test_the_server_wide_cap_leaves_joined_devices_alone() -> None:
 
 def test_rotate_resets_the_server_budget_but_not_a_device_lockout() -> None:
     clock = FakeClock()
-    gate = JoinPin(global_max_failures=12, clock=clock)
-    for _ in range(10):
+    gate = JoinPin(global_max_failures=MISSES + 2, clock=clock)
+    for _ in range(MISSES):
         gate.verify(wrong(gate.pin), PHONE)
     gate.verify(wrong(gate.pin), OTHER)
     gate.verify(wrong(gate.pin), OTHER)
@@ -496,7 +503,7 @@ def test_rotate_resets_the_server_budget_but_not_a_device_lockout() -> None:
 
 def test_unknown_peers_share_one_bucket() -> None:
     gate = JoinPin(clock=FakeClock())
-    for _ in range(10):
+    for _ in range(MISSES):
         gate.verify(wrong(gate.pin))
     assert gate.locked_for() > 0
     assert gate.locked_for("garbage") > 0
@@ -563,7 +570,7 @@ def test_concurrent_guesses_lock_once_and_stop_counting() -> None:
     for t in threads:
         t.join()
     assert gate.locked_for(PHONE) == pytest.approx(60.0)
-    assert len(gate._global_failures) == 10, "refused guesses are not counted"
+    assert len(gate._global_failures) == MISSES, "refused guesses are not counted"
     assert not gate.verify(pin, PHONE)
 
 
@@ -707,8 +714,8 @@ def test_phone_sessions() -> None:
     assert sessions.take_all() == []
 
 
-def _inner_app(environ: dict[str, object], start_response: object) -> list[bytes]:
-    start_response("200 OK", [("Content-Type", "text/plain")])  # type: ignore[operator]
+def _inner_app(environ: dict[str, object], start_response: Callable[..., object]) -> list[bytes]:
+    start_response("200 OK", [("Content-Type", "text/plain")])
     return [b"inner"]
 
 
@@ -772,3 +779,249 @@ def test_socketio_gate_in_front_of_flask_socketio_blocks_the_handshake() -> None
     opened = client.get("/socket.io/?EIO=4&transport=polling", **phone)
     assert opened.status_code == 200
     assert opened.get_data().startswith(b"0{"), "the Engine.IO OPEN packet"
+
+
+def test_one_device_alone_never_reaches_the_server_wide_cap() -> None:
+    # A script on one address guessing as fast as it is allowed: about 145 guesses on day 1, then 120 a day.
+    clock = FakeClock(0.0)
+    gate = JoinPin(clock=clock)
+    bad = wrong(gate.pin)
+    per_day = [0, 0]
+    while clock.now < 2 * 86_400:
+        wait = gate.locked_for(PHONE)
+        if wait > 0:
+            clock.advance(wait)
+            continue
+        assert gate.server_locked_for() == 0.0
+        gate.verify(bad, PHONE)
+        per_day[int(clock.now // 86_400)] += 1
+        clock.advance(0.01)
+    assert per_day == [145, 120]
+
+
+# ---- reference wiring (docs/MOBILE.md, steps 1-6 and 9) ------------------------------------
+LAN_HOST = {"Host": "192.168.1.20:5050"}
+HTML = {"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
+
+
+def reference_app(*, sar_lan: bool, bind_host: str, hostnames: str = "") -> tuple[Flask, JoinPin]:
+    from pathlib import Path
+
+    from flask import Response, abort, jsonify, make_response, redirect, request, send_from_directory
+    from flask_socketio import ConnectionRefusedError, SocketIO
+
+    from biobench_sar.lan import LAN_MODE_HEADER
+
+    lan_on = is_lan_mode(sar_lan=sar_lan, bind_host=bind_host)
+    names = parse_hostnames(hostnames)
+    gate, phones = JoinPin(), PhoneSessions()
+    static = Path(lan.__file__).parent / "static"
+    app = Flask(__name__, static_folder=str(static))
+    socketio = SocketIO(app, async_mode="threading", cors_allowed_origins=None, always_connect=True)
+    if lan_on:
+        app.wsgi_app = SocketIOGate(app.wsgi_app, gate, extra_names=names)  # type: ignore[method-assign]
+
+    @app.before_request
+    def lan_gate() -> object:
+        if not lan_on:
+            return None
+        if not is_allowed_host(request.host, names):
+            return jsonify({"error": "unknown host"}), 400
+        if is_request_allowed(
+            gate,
+            remote_addr=request.remote_addr,
+            host=request.host,
+            path=request.path,
+            token=request.cookies.get(COOKIE_NAME),
+            extra_names=names,
+        ):
+            return None
+        if request.path.startswith("/api/") or request.method != "GET":
+            return jsonify({"error": "join with the PIN first"}), 401
+        return redirect("/join")
+
+    @app.after_request
+    def lan_headers(response: Response) -> Response:
+        if lan_on:
+            response.headers[LAN_MODE_HEADER] = "1"
+            if request.path.startswith("/api/") or request.path == "/join":
+                response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/dashboard")
+    def dashboard() -> str:
+        return "dashboard"
+
+    @app.get("/api/status")
+    def status() -> object:
+        return jsonify({"state": "ready"})
+
+    @app.route("/join", methods=["GET", "POST"])
+    def join() -> object:
+        if is_local_request(request.remote_addr):
+            return redirect("/dashboard")
+        pin = request.form.get("pin") if request.method == "POST" else request.args.get("pin")
+        if request.method == "GET" and not looks_like_navigation(
+            accept=request.headers.get("Accept"),
+            sec_fetch_mode=request.headers.get("Sec-Fetch-Mode"),
+            sec_fetch_site=request.headers.get("Sec-Fetch-Site"),
+        ):
+            pin = None
+        if pin is not None:
+            token = gate.redeem(pin, request.remote_addr)
+            if token:
+                response = redirect("/dashboard", code=303)
+                response.set_cookie(COOKIE_NAME, token, **cookie_kwargs())
+                return response
+        response = make_response(f"form, wait {gate.locked_for(request.remote_addr):.0f}")
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    def lan_body() -> dict[str, object]:
+        urls = [join_url("192.168.1.20", 5050, gate.pin)]
+        return {"enabled": True, "pin": gate.pin, "locked_for": gate.server_locked_for(), "urls": urls}
+
+    @app.get("/api/lan")
+    def api_lan() -> object:
+        if not lan_on:
+            return jsonify({"enabled": False})
+        if not is_local_request(request.remote_addr):
+            abort(403)
+        return jsonify(lan_body())
+
+    @app.post("/api/lan/pin")
+    def new_pin() -> object:
+        if not lan_on or not is_local_request(request.remote_addr):
+            abort(403)
+        gate.rotate(revoke_tokens=True)
+        for sid in phones.take_all():
+            socketio.server.disconnect(sid, namespace="/")
+        return jsonify(lan_body())
+
+    @app.post("/api/lan/revoke")
+    def revoke() -> object:
+        if not lan_on or not is_local_request(request.remote_addr):
+            abort(403)
+        gate.revoke_all()
+        for sid in phones.take_all():
+            socketio.server.disconnect(sid, namespace="/")
+        return jsonify({"ok": True})
+
+    @app.get("/sw.js")
+    def service_worker() -> object:
+        if not lan_on:
+            abort(404)
+        response = send_from_directory(str(static), "sw.js", mimetype="text/javascript", max_age=0)
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["Service-Worker-Allowed"] = "/"
+        return response
+
+    @socketio.on("connect")
+    def on_connect(_auth: object = None) -> None:
+        if lan_on and not is_request_allowed(
+            gate,
+            remote_addr=request.remote_addr,
+            host=request.host,
+            path="/socket.io/",
+            token=request.cookies.get(COOKIE_NAME),
+            extra_names=names,
+        ):
+            raise ConnectionRefusedError("join with the PIN first")
+        if lan_on and not is_local_request(request.remote_addr):
+            phones.add(request.sid)  # type: ignore[attr-defined]
+
+    return app, gate
+
+
+def phone_get(client: FlaskClient, path: str, *, addr: str = PHONE, **headers: str) -> TestResponse:
+    return client.get(path, environ_base={"REMOTE_ADDR": addr}, headers={**LAN_HOST, **headers})
+
+
+def test_reference_wiring_gates_a_non_loopback_bind_without_sar_lan() -> None:
+    app, _gate = reference_app(sar_lan=False, bind_host="0.0.0.0")
+    client = app.test_client()
+    assert phone_get(client, "/api/status").status_code == 401
+    page = phone_get(client, "/dashboard")
+    assert page.status_code == 302
+    assert page.headers["Location"].endswith("/join")
+    local = client.get("/api/status", headers={"Host": "127.0.0.1:5050"})
+    assert local.status_code == 200
+
+
+def test_reference_wiring_with_lan_mode_off_changes_nothing() -> None:
+    app, _gate = reference_app(sar_lan=False, bind_host="127.0.0.1")
+    client = app.test_client()
+    response = client.get("/api/status")
+    assert response.status_code == 200
+    assert lan.LAN_MODE_HEADER not in response.headers
+    assert client.get("/sw.js").status_code == 404, "nothing can register a worker outside LAN mode"
+    assert client.get("/api/lan").get_json() == {"enabled": False}
+
+
+def test_reference_wiring_marks_lan_mode_and_never_lets_api_be_cached() -> None:
+    app, _gate = reference_app(sar_lan=True, bind_host="0.0.0.0")
+    client = app.test_client()
+    local = {"Host": "127.0.0.1:5050"}
+    for path in ("/api/status", "/api/lan"):
+        response = client.get(path, headers=local)
+        assert response.status_code == 200, path
+        assert response.headers["Cache-Control"] == "no-store", path
+        assert response.headers[lan.LAN_MODE_HEADER] == "1", path
+    assert phone_get(client, "/api/status").headers["Cache-Control"] == "no-store", "the 401 too"
+    worker = client.get("/sw.js", headers=local)
+    assert worker.status_code == 200
+    assert worker.headers["Service-Worker-Allowed"] == "/"
+    assert worker.headers["Cache-Control"] == "no-cache"
+    assert worker.headers[lan.LAN_MODE_HEADER] == "1"
+
+
+def test_reference_wiring_qr_join_and_passive_requests() -> None:
+    app, gate = reference_app(sar_lan=True, bind_host="0.0.0.0")
+    client = app.test_client()
+    for _ in range(3 * MISSES):
+        img = phone_get(client, f"/join?pin={wrong(gate.pin)}", Accept="image/avif,image/webp,*/*;q=0.8")
+        assert img.status_code == 200
+    assert gate.locked_for(PHONE) == 0.0, "an <img> tag never counts a guess"
+
+    joined = phone_get(client, f"/join?pin={gate.pin}", **HTML)
+    assert joined.status_code == 303
+    assert joined.headers["Location"].endswith("/dashboard")
+    assert COOKIE_NAME in joined.headers["Set-Cookie"]
+    assert joined.headers["Cache-Control"] == "no-store"
+    assert phone_get(client, "/dashboard").status_code == 200
+    assert phone_get(client, "/api/lan").status_code == 403, "a joined phone never sees the PIN"
+
+
+def test_reference_wiring_locks_one_phone_and_not_the_next() -> None:
+    app, gate = reference_app(sar_lan=True, bind_host="0.0.0.0")
+    client = app.test_client()
+    for _ in range(MISSES):
+        phone_get(client, f"/join?pin={wrong(gate.pin)}", **HTML)
+    assert phone_get(client, f"/join?pin={gate.pin}", **HTML).status_code == 200, "locked out"
+    assert phone_get(client, f"/join?pin={gate.pin}", addr=OTHER, **HTML).status_code == 303
+
+
+def test_reference_wiring_hosts() -> None:
+    app, _gate = reference_app(sar_lan=True, bind_host="0.0.0.0", hostnames="my-laptop.local")
+    client = app.test_client()
+    assert phone_get(client, "/dashboard", Host="evil.example:5050").status_code == 400
+    assert client.get("/api/status", headers={"Host": "evil.example"}).status_code == 400, "even from loopback"
+    assert phone_get(client, "/dashboard", Host="my-laptop.local:5050").status_code == 302, "host ok, needs the PIN"
+
+
+@pytest.mark.parametrize("action", ["/api/lan/pin", "/api/lan/revoke"])
+def test_reference_wiring_new_pin_and_disconnect_sign_phones_out(action: str) -> None:
+    app, gate = reference_app(sar_lan=True, bind_host="0.0.0.0")
+    client = app.test_client()
+    old_pin = gate.pin
+    assert phone_get(client, f"/join?pin={old_pin}", **HTML).status_code == 303
+    assert phone_get(client, "/api/status").status_code == 200
+    polling = phone_get(client, "/socket.io/?EIO=4&transport=polling")
+    assert polling.get_data().startswith(b"0{")
+
+    refused = client.post(action, environ_base={"REMOTE_ADDR": PHONE}, headers=LAN_HOST)
+    assert refused.status_code == 403
+    assert client.post(action, headers={"Host": "127.0.0.1:5050"}).status_code == 200
+    assert phone_get(client, "/api/status").status_code == 401
+    assert phone_get(client, "/socket.io/?EIO=4&transport=polling").status_code == 401
+    assert (gate.pin != old_pin) is (action == "/api/lan/pin")
