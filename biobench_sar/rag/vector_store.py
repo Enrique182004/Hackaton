@@ -23,6 +23,8 @@ class VectorStore:
         import chromadb
 
         self._lock = threading.RLock()
+        # Separate lock: loading the embedding model takes seconds and must not block count()/status polls.
+        self._model_lock = threading.Lock()
         self._embed_model = embed_model
         self._embedder = embedder
         self._st_model: Any = None
@@ -30,6 +32,7 @@ class VectorStore:
         Path(persist_dir).mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(path=str(persist_dir))
         self._col = self._open()
+        self._count = int(self._col.count())
 
     def _open(self) -> Any:
         return self._client.get_or_create_collection(
@@ -39,7 +42,7 @@ class VectorStore:
     def _embed(self, texts: list[str]) -> list[list[float]]:
         if self._embedder is not None:
             return [list(map(float, v)) for v in self._embedder(texts)]
-        with self._lock:
+        with self._model_lock:
             if self._st_model is None:
                 from sentence_transformers import SentenceTransformer
 
@@ -63,11 +66,11 @@ class VectorStore:
                 embeddings=embeddings,
                 metadatas=[{**c.metadata, "source": c.source} for c in chunks],
             )
+            self._count = int(self._col.count())
         return len(chunks)
 
     def query(self, text: str, k: int = 4) -> list[RetrievedChunk]:
-        with self._lock:
-            n = self._col.count()
+        n = self._count
         if n == 0 or not text.strip() or k <= 0:
             return []
         emb = self._embed([text])
@@ -84,10 +87,11 @@ class VectorStore:
         return out
 
     def count(self) -> int:
-        with self._lock:
-            return int(self._col.count())
+        """Cached, lock-free: safe to call from a status poll while an upload is embedding."""
+        return self._count
 
     def clear(self) -> None:
         with self._lock:
             self._client.delete_collection(self._collection_name)
             self._col = self._open()
+            self._count = 0

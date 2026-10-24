@@ -195,3 +195,34 @@ def test_real_embedder(tmp_path: Path) -> None:
     s = VectorStore(tmp_path / "c")
     s.add_chunks([Chunk("Amoebae eat bacteria", "a", {}), Chunk("Stock market rises", "b", {})])
     assert s.query("protozoa feeding on microbes", k=1)[0].source == "a"
+
+
+def test_count_does_not_wait_for_model_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    import time
+    import types
+
+    loading = threading.Event()
+
+    class SlowModel:
+        def __init__(self, name: str) -> None:
+            loading.set()
+            time.sleep(1.0)
+
+        def encode(self, texts: list[str], normalize_embeddings: bool = True) -> object:
+            import numpy as np
+
+            return np.array(fake_embed(texts))
+
+    monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(SentenceTransformer=SlowModel))
+    s = VectorStore(tmp_path / "c")
+    worker = threading.Thread(target=s.add_chunks, args=([Chunk("alpha beta", "a.txt", {})],))
+    worker.start()
+    assert loading.wait(2)
+    started = time.perf_counter()
+    assert s.count() == 0
+    assert time.perf_counter() - started < 0.1
+    worker.join()
+    assert s.count() == 1
+    s.clear()
+    assert s.count() == 0
