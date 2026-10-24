@@ -1,4 +1,5 @@
 import { $, el, request, setNote } from "./api.js";
+import { setBadge, suggestStep } from "./tabs.js";
 
 const UPLOAD_TIMEOUT_MS = 300000;
 const KINDS = {
@@ -54,6 +55,16 @@ export function renderFiles(body) {
   documents = body.documents || [];
   $("files").replaceChildren(...documents.map(fileRow));
   $("files-summary").textContent = summary();
+  const total = documents.length;
+  const active = documents.filter(isActive).length;
+  if (total === 0) {
+    setBadge("files", "add your notes", "warn");
+    suggestStep("files");
+  } else if (active === 0) {
+    setBadge("files", "none ticked", "warn");
+  } else {
+    setBadge("files", active === total ? `${total} in use` : `${active} of ${total} in use`, "ok");
+  }
 }
 
 export async function refreshFiles() {
