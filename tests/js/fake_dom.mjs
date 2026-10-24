@@ -34,6 +34,8 @@ export class FakeElement {
     this.hidden = false;
     this.disabled = false;
     this.checked = false;
+    this.htmlFor = "";
+    this.placeholder = "";
     this.files = [];
     this.offsetWidth = 100;
     this.offsetHeight = 40;
@@ -68,7 +70,7 @@ export class FakeElement {
   focus() {}
   blur() {}
 
-  // Tag selectors only; the child is created on first use, as the template markup would provide it.
+  // Tag selectors only. querySelector creates the child on first use, as the template markup would provide it.
   querySelector(tag) {
     const want = tag.toUpperCase();
     let found = this.children.find((c) => c instanceof FakeElement && c.tagName === want);
@@ -76,7 +78,19 @@ export class FakeElement {
     return found;
   }
 
+  querySelectorAll(tag) {
+    const want = tag.toUpperCase();
+    const out = [];
+    for (const c of this.children) {
+      if (!(c instanceof FakeElement)) continue;
+      if (c.tagName === want) out.push(c);
+      out.push(...c.querySelectorAll(tag));
+    }
+    return out;
+  }
+
   addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+  requestSubmit() { return this.fire("submit"); }
   // Resolves once every (possibly async) listener has finished.
   fire(type, extra = {}) {
     const event = { type, target: this, preventDefault() {}, stopPropagation() {}, ...extra };
@@ -132,20 +146,21 @@ const DEFAULT_ROUTES = {
   "GET /api/history": { status: 200, body: { interactions: [] } },
   "GET /api/config": { status: 200, body: {} },
   "GET /api/ink": { status: 200, body: { regions: [], size: [1920, 1080] } },
+  "GET /api/tutor": { status: 200, body: { mode: "help", learn_topic: null, quiz: null } },
   "POST /api/query": { status: 202, body: { accepted: true } },
   "POST /api/listen": { status: 202, body: { accepted: true } },
 };
 
-// A route is a {status, body} reply or a function returning one (or a promise of one).
+// A route is a {status, body} reply or a function of the fetch init returning one (or a promise of one).
 export function installFetch(routes = {}) {
-  const table = { ...DEFAULT_ROUTES, ...routes };
+  const table = { ...structuredClone(DEFAULT_ROUTES), ...routes };
   const calls = [];
   globalThis.fetch = async (url, init = {}) => {
     const path = String(url).split("?")[0];
     const method = init.method || "GET";
-    calls.push({ method, path });
+    calls.push({ method, path, body: init.body });
     const route = table[`${method} ${path}`] ?? { status: 404, body: { error: "not found" } };
-    const reply = await (typeof route === "function" ? route() : route);
+    const reply = await (typeof route === "function" ? route(init) : route);
     return { ok: reply.status >= 200 && reply.status < 300, status: reply.status, json: async () => reply.body };
   };
   return { calls, setStatus: (patch) => Object.assign(table["GET /api/status"].body, patch) };

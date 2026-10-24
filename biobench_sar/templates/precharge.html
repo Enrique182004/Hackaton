@@ -19,13 +19,13 @@
         <span class="status-dot" aria-hidden="true"></span>
         <span id="status-text">Connecting…</span>
       </p>
-      <a class="btn btn-quiet btn-small" href="/" target="sar-projector" rel="noopener">Open board view ↗</a>
+      <a class="btn btn-quiet btn-small" href="/" target="sar-projector" rel="noopener">Open projector page ↗</a>
     </header>
 
     <nav class="steps" role="tablist" aria-label="Steps">
       <button class="step-tab" role="tab" id="tab-files" aria-controls="panel-files" aria-selected="false" data-step="files">
         <span class="num" aria-hidden="true">1</span>
-        <span class="step-text"><b>Study files</b><small id="badge-files">–</small></span>
+        <span class="step-text"><b id="files-tab-name">Worksheets &amp; notes</b><small id="badge-files">–</small></span>
       </button>
       <button class="step-tab" role="tab" id="tab-board" aria-controls="panel-board" aria-selected="false" data-step="board">
         <span class="num" aria-hidden="true">2</span>
@@ -43,11 +43,12 @@
 
     <main>
       <section class="panel" role="tabpanel" id="panel-files" aria-labelledby="tab-files" hidden>
-        <p class="hint">The assistant answers using only the files you tick. Add notes, protocols or papers.</p>
+        {# Math wording (the default subject); biology wording is swapped in by profile.js. #}
+        <p class="hint" id="files-hint">Add your worksheets and notes. Before answering, the assistant looks in the files you tick, and quiz problems come from them too. Untick a file to leave it out.</p>
         <label class="drop" id="drop">
           <input type="file" id="file-input" multiple accept=".pdf,.txt,.md,.csv,.docx,.pptx,.png,.jpg,.jpeg">
           <span class="drop-title">Drag files here, or <u>choose files</u></span>
-          <span class="drop-sub">PDF · Word · PowerPoint · CSV · text · photos of notes</span>
+          <span class="drop-sub" id="drop-sub">PDF · Word · CSV quiz banks · text · photos of worksheets</span>
         </label>
         <p class="note" id="upload-msg" role="status"></p>
         <div class="files-head">
@@ -65,7 +66,7 @@
               <svg id="ink-overlay" preserveAspectRatio="none" aria-hidden="true"></svg>
               <div class="viewport-empty">
                 <strong>No camera picture yet</strong>
-                <span>See “Camera” in the list.</span>
+                <span>Follow the camera tip in the checklist next to this picture.</span>
               </div>
             </div>
             <figcaption>Orange boxes are drawings the assistant can point at.</figcaption>
@@ -74,7 +75,7 @@
             <ul class="checks" id="checks" aria-label="System checks"></ul>
             <div class="calibrate">
               <button type="button" class="btn" id="calibrate-btn">Line up camera and projector</button>
-              <p class="hint small">Shows a checkerboard on the board for a moment. Do it once after moving the camera or projector.</p>
+              <p class="hint small">Before you press this, open the projector page on the projector and press <kbd>F</kbd> for full screen. A checkerboard flashes on the board for a few seconds, so keep the camera still. Do this again whenever the camera or projector moves.</p>
               <p class="note" id="calib-msg" role="status"></p>
             </div>
           </div>
@@ -82,23 +83,39 @@
       </section>
 
       <section class="panel" role="tabpanel" id="panel-ask" aria-labelledby="tab-ask">
+        {# Hidden until /api/tutor answers, and for subjects without tutor modes. #}
+        <div class="modes" id="modes" role="group" aria-label="How should the assistant help?" hidden>
+          <button type="button" class="mode" id="mode-help" aria-pressed="true">
+            <b>Help me step by step</b><small>I'll explain only the next step, never the answer.</small>
+          </button>
+          <button type="button" class="mode" id="mode-practice" aria-pressed="false">
+            <b>Give me a similar problem</b><small>I'll make up a new one just like yours.</small>
+          </button>
+          <button type="button" class="mode" id="mode-quiz" aria-pressed="false">
+            <b>Quiz me</b><small>I'll read out problems and check your answers.</small>
+          </button>
+        </div>
+        <div class="quiz-bar" id="quiz-bar" hidden>
+          <p class="quiz-progress" id="quiz-progress"></p>
+          <p class="quiz-problem" id="quiz-problem" hidden></p>
+          <button type="button" class="btn btn-small" id="quiz-start-btn">Start quiz</button>
+          <button type="button" class="btn btn-quiet btn-small" id="quiz-stop-btn" hidden>Stop quiz</button>
+        </div>
+        <p class="learn-line" id="learn-line" hidden></p>
+        <p class="note" id="mode-msg" role="status"></p>
         <form class="ask" id="ask-form">
           <label class="sr-only" for="ask-input">Your question</label>
-          <input id="ask-input" type="text" autocomplete="off" placeholder="Ask about your drawing or your notes…">
+          <input id="ask-input" type="text" autocomplete="off" placeholder="Ask about the math on your board, or what you want to learn…">
           <button class="btn" type="submit" id="ask-btn">Ask</button>
           <button class="btn btn-talk" type="button" id="listen-btn" data-live="0">
             <span class="mic" aria-hidden="true"></span> Talk
           </button>
         </form>
         <p class="note" id="ask-msg" role="status"></p>
-        <p class="examples" id="examples">
-          <span class="scribble">try:</span>
-          <button type="button" class="example">Is my flowchart missing a sterile step?</button>
-          <button type="button" class="example">Why does Leptosol runoff make the water cloudy?</button>
-          <button type="button" class="example">Where should I take my water samples?</button>
-        </p>
+        {# Filled by ask.js with the examples for the current subject. #}
+        <p class="examples" id="examples"></p>
         <ol class="entries" id="timeline" aria-live="polite"></ol>
-        <p class="empty" id="timeline-empty">Answers will be written here. Tip: press <kbd>Space</kbd> on the board view to talk.</p>
+        <p class="empty" id="timeline-empty">Answers will appear here and on the projector. On the projector page, click once so it can play sound, then press <kbd>F</kbd> for full screen, <kbd>Space</kbd> to talk, or <kbd>T</kbd> to type a question.</p>
       </section>
 
       <section class="panel" role="tabpanel" id="panel-more" aria-labelledby="tab-more" hidden>
@@ -114,7 +131,7 @@
             <h3>Search your files</h3>
             <form class="search" id="search-form">
               <label class="sr-only" for="search-input">Search your files</label>
-              <input id="search-input" type="search" placeholder="e.g. autoclave">
+              <input id="search-input" type="search" placeholder="e.g. fractions">
               <button class="btn btn-quiet btn-small" type="submit">Search</button>
             </form>
             <ol class="hits" id="hits"></ol>
@@ -130,7 +147,7 @@
     </main>
 
     <footer class="colophon">
-      <span id="conn-text">Not connected</span> · running for <span id="uptime">–</span>
+      <span id="conn-text">Connecting…</span> · running for <span id="uptime">–</span>
     </footer>
   </div>
 
