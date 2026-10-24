@@ -1396,9 +1396,15 @@ def test_empty_or_failed_reply_keeps_the_card(h: Harness) -> None:
 
 
 def test_quiz_turns_leave_the_card_to_the_quiz(h: Harness) -> None:
-    _reply(h, board_problem="7 + 7")
+    _reply(h, new_problem="4x + 7 = 19")
+    h.assistant.handle_query("give me a similar problem")
+    assert h.assistant.tutor.problem is not None
+    _reply(h, board_problem="7 + 7", new_problem="9 + 9")
+    h.vision.frame = np.zeros((4, 4, 3), np.uint8)
     h.assistant.handle_query("quiz me")
     assert h.assistant.tutor.problem is None and _tutor_events(h)[-1]["problem"] is None
+    h.assistant.tutor.stop_quiz()
+    assert h.assistant.tutor.to_dict()["problem"] is None, "the practice problem must not come back after the quiz"
 
 
 def test_plain_actions_change_nothing(h: Harness) -> None:

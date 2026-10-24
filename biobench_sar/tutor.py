@@ -527,15 +527,15 @@ class TutorSession:
             return dict(self._problem) if self._problem else None
 
     def show_problem(self, text: str | None, source: str) -> None:
-        """Show `text` on the card; empty text keeps what it shows (a model that left the key out). Ignored while a
-        quiz runs: a turn that started before the quiz must not leave its problem behind for after it."""
+        """Show `text` on the card; empty text keeps what it shows (a model that left the key out). Ignored in quiz
+        mode, before the quiz starts too: a turn that started earlier must not leave its problem behind."""
         if source not in PROBLEM_SOURCES:
             raise ValueError(f"source must be one of {', '.join(PROBLEM_SOURCES)}")
         clean = _card_text(text)
         if clean is None:
             return
         with self._lock:
-            if self._quiz != "active":
+            if self._quiz != "active" and self._mode != "quiz":
                 self._problem = {"text": clean, "source": source}
 
     def clear_problem(self) -> None:

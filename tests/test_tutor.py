@@ -594,3 +594,13 @@ def test_clear_problem() -> None:
     t.show_problem("x + 3 = 8", "dictated")
     t.clear_problem()
     assert t.problem is None
+
+
+def test_quiz_mode_holds_the_card_before_the_quiz_starts() -> None:
+    # The dashboard switches to quiz mode; the quiz itself starts on the next question. A practice turn that was
+    # already running must not put its problem on the card in between.
+    t = TutorSession()
+    t.set_mode("practice")
+    t.set_mode("quiz")
+    t.show_problem("4x + 7 = 19", "dictated")
+    assert t.problem is None and t.to_dict()["problem"] is None
