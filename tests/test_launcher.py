@@ -550,6 +550,24 @@ def test_spec_turns_on_utf8_mode_with_the_option_the_bootloader_knows() -> None:
     assert '("X utf8", None, "OPTION")' in spec and '("X utf8_mode' not in spec
 
 
+def test_spec_bundles_sympy_for_quiz_grading() -> None:
+    spec = (LAUNCHER_PATH.parent / "sar.spec").read_text(encoding="utf-8")
+    hidden = spec[spec.index("hiddenimports = [") : spec.index("if IS_WIN:")]
+    for module in ('"sympy"', '"sympy.parsing.sympy_parser"', '"mpmath"'):
+        assert module in hidden
+    assert '_existing("biobench_sar.grading")' in spec
+    assert 'collect_submodules("biobench_sar"' in spec
+
+
+def test_requirements_pin_sympy_and_explain_the_missing_speechrecognition() -> None:
+    lines = (LAUNCHER_PATH.parent.parent / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    packages = [re.split(r"[<>=]", line)[0].strip().lower() for line in lines if line and not line.startswith("#")]
+    assert "sympy" in packages
+    assert "speechrecognition" not in packages
+    notes = " ".join(line for line in lines if line.startswith("#"))
+    assert "SpeechRecognition" in notes and "PyAudio" in notes and "Whisper" in notes
+
+
 def test_macos_minimum_matches_the_build_runner_and_the_docs() -> None:
     # pip picks wheels built for the runner's macOS, so the app needs at least that version.
     root = LAUNCHER_PATH.parent.parent
