@@ -16,3 +16,4 @@ chroma_db/
 data/
 .claude/
 sar.env
+.playwright-mcp/
