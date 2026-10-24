@@ -247,7 +247,7 @@ class VLMClient:
 | help | Explains ONLY the next operation, never the final answer (guarded in code) | `pointing` at the relevant part of the equation's ink region, highlighted |
 | practice | Reads the board's equation and dictates a new one of the same difficulty (constants/variables swapped). If the reply echoes the board or misreads it, code dictates `quiz_bank.similar_problem(board)` | `idle` |
 | quiz `dictate` | Reads the problem out | `idle` |
-| quiz `check` | Correct (code says so): praise, and the next problem is read out. Wrong: one hint, never the answer. Unreadable (`grade()` is `None`): "I couldn't read your answer clearly. Ask me to check it again." / "No pude leer bien tu respuesta. Pídeme que la revise otra vez.", not graded | `celebrating` if correct, `error` if wrong, `idle` if not graded |
+| quiz `check` | Correct (code says so): praise, and the next problem is read out. Wrong: one hint, never the answer. Unreadable (`grade()` is `None`): "I couldn't read your answer clearly. Ask me to check it again." (or the Spanish version), not graded | `celebrating` if correct, `error` if wrong, `idle` if not graded |
 | quiz `hint` | The student asked for help on the current problem ("I'm stuck", "hint", "help"): one hint for the next step, never the answer. Nothing is recorded and the quiz stays on the problem | `pointing` at the ink to work on |
 | learn `offer` | One or two plain sentences introducing the idea of the topic, then asks "Do you have an exercise in mind, or should I make one up for you?" | `idle` |
 | learn `example` | Dictates one easy starter problem on the topic and invites the student to write it and try the first step | `idle` |
