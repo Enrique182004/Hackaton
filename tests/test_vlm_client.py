@@ -4,6 +4,8 @@ import base64
 import json
 from unittest.mock import MagicMock, patch
 
+import cv2
+import numpy as np
 import requests
 
 from biobench_sar.llm.vlm_client import SYSTEM_PROMPT, VLMClient, build_prompt
@@ -47,9 +49,10 @@ def test_ollama_payload_and_parse() -> None:
     action, post = _run(_client("ollama"), _ollama_resp(json.dumps(GOOD)))
     assert post.call_args.args[0] == "http://x:11434/api/chat"
     p = post.call_args.kwargs["json"]
-    assert p["stream"] is False and p["format"] == "json" and p["options"] == {"temperature": 0.2}
+    assert p["stream"] is False and p["format"] == "json" and p["options"] == {"temperature": 0.2, "num_predict": 200}
     assert p["messages"][0] == {"role": "system", "content": SYSTEM_PROMPT}
     assert p["messages"][1]["images"] == [B64]
+    assert p["keep_alive"] == "30m"
     assert "check my flowchart" in p["messages"][1]["content"]
     assert action.animation_state == "error" and (action.target_x, action.target_y) == (100, 200)
 
@@ -129,3 +132,53 @@ def test_build_prompt_contents() -> None:
     assert "center=(600, 450)" in prompt and "2. " in prompt
     assert "protocol.pdf" in prompt and "Autoclave media" in prompt
     assert "x" * 900 not in prompt
+
+
+def _big_jpeg(w: int = 1920, h: int = 1080) -> bytes:
+    ok, buf = cv2.imencode(".jpg", np.full((h, w, 3), 200, np.uint8))
+    assert ok
+    return buf.tobytes()
+
+
+def _sent_image_shape(post: MagicMock) -> tuple[int, ...]:
+    b64 = post.call_args.kwargs["json"]["messages"][1]["images"][0]
+    return cv2.imdecode(np.frombuffer(base64.b64decode(b64), np.uint8), cv2.IMREAD_COLOR).shape
+
+
+def test_large_image_is_downscaled() -> None:
+    _, post = _run(_client("ollama"), _ollama_resp(json.dumps(GOOD)), image=_big_jpeg())
+    h, w = _sent_image_shape(post)[:2]
+    assert (w, h) == (1024, 576)
+
+
+def test_small_image_untouched() -> None:
+    small = _big_jpeg(640, 480)
+    _, post = _run(_client("ollama"), _ollama_resp(json.dumps(GOOD)), image=small)
+    assert post.call_args.kwargs["json"]["messages"][1]["images"] == [base64.b64encode(small).decode()]
+
+
+def test_max_image_side_configurable() -> None:
+    c = VLMClient("ollama", "m", "http://x:11434", max_image_side=512)
+    _, post = _run(c, _ollama_resp(json.dumps(GOOD)), image=_big_jpeg())
+    assert _sent_image_shape(post)[1] == 512
+
+
+def test_warmup_ollama_sends_keep_alive() -> None:
+    c = _client("ollama")
+    with patch.object(c.session, "post", return_value=_resp({})) as post:
+        c.warmup()
+    assert post.call_args.kwargs["json"]["keep_alive"] == "30m"
+
+
+def test_warmup_never_raises() -> None:
+    c = _client("ollama")
+    with patch.object(c.session, "post", side_effect=requests.ConnectionError("down")):
+        c.warmup()
+
+
+def test_warmup_noop_for_other_backends() -> None:
+    for backend in ("mock", "openai"):
+        c = _client(backend)
+        with patch.object(c.session, "post") as post:
+            c.warmup()
+        post.assert_not_called()

@@ -4,6 +4,8 @@ import base64
 import json
 import logging
 
+import cv2
+import numpy as np
 import requests
 
 from biobench_sar.schemas import (
@@ -17,6 +19,8 @@ from biobench_sar.schemas import (
 logger = logging.getLogger(__name__)
 
 MAX_CHUNK_CHARS = 800
+KEEP_ALIVE = "30m"
+NUM_PREDICT = 200
 
 SYSTEM_PROMPT = """You are an expert environmental-biology research assistant, shown as an animated avatar \
 projected on a whiteboard. You support a thesis on identifying Acanthamoeba in Laguna de Bustillos and on the \
@@ -73,13 +77,49 @@ class VLMClient:
         base_url: str,
         api_key: str | None = None,
         timeout: float = 90,
+        max_image_side: int = 1024,
     ) -> None:
         self.backend = backend.lower()
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self.max_image_side = max_image_side
         self.session = requests.Session()
+
+    def warmup(self) -> None:
+        """Load the model into memory ahead of the first question. Never raises."""
+        if self.backend != "ollama":
+            return
+        try:
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": "ok"}],
+                "stream": False,
+                "keep_alive": KEEP_ALIVE,
+                "options": {"num_predict": 1},
+            }
+            self.session.post(f"{self.base_url}/api/chat", json=payload, timeout=self.timeout).raise_for_status()
+        except Exception as exc:
+            logger.warning("VLM warmup failed: %s", exc)
+
+    def _prepare_image(self, image_jpeg: bytes | None) -> bytes | None:
+        if not image_jpeg:
+            return image_jpeg
+        try:
+            img = cv2.imdecode(np.frombuffer(image_jpeg, np.uint8), cv2.IMREAD_COLOR)
+            if img is None:
+                return image_jpeg
+            h, w = img.shape[:2]
+            scale = self.max_image_side / max(h, w)
+            if scale >= 1:
+                return image_jpeg
+            img = cv2.resize(img, (max(1, round(w * scale)), max(1, round(h * scale))), interpolation=cv2.INTER_AREA)
+            ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            return buf.tobytes() if ok else image_jpeg
+        except Exception as exc:
+            logger.warning("Image downscale failed, sending original: %s", exc)
+            return image_jpeg
 
     def evaluate(
         self,
@@ -93,6 +133,7 @@ class VLMClient:
             if self.backend == "mock":
                 return self._mock(query, context, ink_regions, projector_size)
             prompt = build_prompt(query, context, ink_regions, projector_size)
+            image_jpeg = self._prepare_image(image_jpeg)
             if self.backend == "ollama":
                 text = self._ollama(prompt, image_jpeg)
             elif self.backend == "openai":
@@ -122,7 +163,8 @@ class VLMClient:
             "messages": [{"role": "system", "content": SYSTEM_PROMPT}, user],
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0.2},
+            "keep_alive": KEEP_ALIVE,
+            "options": {"temperature": 0.2, "num_predict": NUM_PREDICT},
         }
         resp = self.session.post(f"{self.base_url}/api/chat", json=payload, timeout=self.timeout)
         resp.raise_for_status()
