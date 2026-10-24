@@ -1,0 +1,221 @@
+name: desktop builds
+
+# Windows installer (.exe) and macOS app (.zip) built with PyInstaller, smoke-tested with --self-test.
+# Tags "v*" also publish both to a GitHub release. Local equivalents: scripts/build_windows.ps1 and
+# scripts/build_macos.sh; details in docs/DESKTOP_BUILDS.md.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      bundle_whisper:
+        description: Bundle the Whisper "base" model (~140 MB) instead of downloading it on first use
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - "packaging/**"
+      - "biobench_sar/paths.py"
+      - "scripts/build_*"
+      - ".github/workflows/build.yml"
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows x64
+            artifact: windows-installer
+          - os: macos-14
+            label: macOS arm64
+            artifact: macos-app
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: PortAudio for pyaudio (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install portaudio
+          echo "CFLAGS=-I$(brew --prefix portaudio)/include" >> "$GITHUB_ENV"
+          echo "LDFLAGS=-L$(brew --prefix portaudio)/lib" >> "$GITHUB_ENV"
+
+      - name: Python packages
+        # CPU-only torch: classroom laptops have no CUDA, and it keeps the bundle far smaller.
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt pyinstaller
+
+      - name: Version
+        id: version
+        run: |
+          version=$(python -c "import biobench_sar; print(biobench_sar.__version__)")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match biobench_sar.__version__ ($version)"
+            exit 1
+          fi
+
+      - name: Cache bundled models
+        uses: actions/cache@v4
+        with:
+          path: packaging/models
+          key: models-${{ runner.os }}-${{ hashFiles('packaging/fetch_models.py') }}-whisper-${{ inputs.bundle_whisper == true }}
+
+      - name: Fetch models
+        run: python packaging/fetch_models.py ${{ inputs.bundle_whisper == true && '--whisper' || '' }}
+
+      - name: PyInstaller
+        run: pyinstaller packaging/sar.spec --noconfirm
+
+      - name: Smoke test the built app
+        timeout-minutes: 5
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            app="dist/SAR Whiteboard Assistant/SAR Whiteboard Assistant.exe"
+            data="dist/SAR Whiteboard Assistant/_internal"
+          else
+            app="dist/SAR Whiteboard Assistant.app/Contents/MacOS/SAR Whiteboard Assistant"
+            data="dist/SAR Whiteboard Assistant.app/Contents/Frameworks"  # sys._MEIPASS
+          fi
+          # CI has internet, so a build without the bundled model would still pass by downloading it.
+          model="$data/models/models--sentence-transformers--all-MiniLM-L6-v2"
+          [[ -d "$model" ]] || { echo "::error::embedding model not bundled: no $model"; exit 1; }
+          "$app" --self-test --no-browser
+          du -sh dist/*
+
+      - name: Installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh  # Git Bash would rewrite /DAppVersion=... into a file path
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { $iscc = (Get-Command iscc.exe -ErrorAction Stop).Source }
+          & $iscc "/DAppVersion=$env:VERSION" packaging\windows\installer.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Install, self-test and uninstall (Windows)
+        # What a teacher downloads is the installer, so test the installed copy, not only dist/.
+        if: runner.os == 'Windows'
+        timeout-minutes: 15
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $name = "SAR Whiteboard Assistant"
+          $log = Join-Path $env:RUNNER_TEMP "sar-setup.log"
+          $setup = Start-Process "dist\SAR-Whiteboard-Assistant-Setup-$env:VERSION.exe" -Wait -PassThru `
+            -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$log`""
+          if ($setup.ExitCode) { Get-Content $log -Tail 40; throw "setup exited with $($setup.ExitCode)" }
+
+          # Per-user install: the uninstall entry lives under HKCU, not HKLM.
+          $entry = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" |
+            Get-ItemProperty | Where-Object DisplayName -eq $name
+          if (-not $entry) { throw "no per-user uninstall entry for $name" }
+          $dir = $entry.InstallLocation.TrimEnd("\")
+          Write-Host "Installed to $dir ($([math]::Round((Get-ChildItem $dir -Recurse -File | Measure-Object Length -Sum).Sum / 1GB, 2)) GB)"
+          foreach ($path in @("$dir\$name.exe", "$dir\sar.env.example",
+                              "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\$name.lnk")) {
+            if (-not (Test-Path $path)) { throw "missing after install: $path" }
+          }
+
+          & "$dir\$name.exe" --self-test --no-browser
+          if ($LASTEXITCODE) { throw "installed app failed its self-test (exit code $LASTEXITCODE)" }
+
+          $uninstaller = $entry.UninstallString.Trim('"')
+          $removal = Start-Process $uninstaller -Wait -PassThru -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"
+          if ($removal.ExitCode) { throw "uninstaller exited with $($removal.ExitCode)" }
+          # The uninstaller hands over to a copy of itself in %TEMP%, so give that copy time to finish.
+          $deadline = (Get-Date).AddMinutes(3)
+          while ((Test-Path "$dir\$name.exe") -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+          if (Test-Path "$dir\$name.exe") { throw "uninstall left $dir\$name.exe behind" }
+          Write-Host "Install, self-test and uninstall OK"
+
+      - name: Zip the app (macOS)
+        if: runner.os == 'macOS'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ditto -c -k --keepParent "dist/SAR Whiteboard Assistant.app" \
+            "dist/SAR-Whiteboard-Assistant-$VERSION-macOS-arm64.zip"
+
+      - name: Check the zipped app (macOS)
+        # What a teacher downloads is the zip: unpack it and check the plist, the signature and the app.
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          check="$RUNNER_TEMP/zip-check"
+          rm -rf "$check" && mkdir -p "$check"
+          ditto -x -k "dist/SAR-Whiteboard-Assistant-$VERSION-macOS-arm64.zip" "$check"
+          app="$check/SAR Whiteboard Assistant.app"
+          plist="$app/Contents/Info.plist"
+          # Without the two usage strings macOS denies the camera and microphone without asking.
+          for key in NSCameraUsageDescription NSMicrophoneUsageDescription; do
+            echo "$key: $(/usr/libexec/PlistBuddy -c "Print :$key" "$plist")"
+          done
+          bundle_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist")
+          version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist")
+          [[ "$bundle_id" == org.codecore.sarwhiteboard ]] || { echo "::error::bundle id is $bundle_id"; exit 1; }
+          [[ "$version" == "$VERSION" ]] || { echo "::error::app version is $version, expected $VERSION"; exit 1; }
+          # A broken seal makes macOS call the downloaded app "damaged" instead of offering Open.
+          codesign --verify --deep --strict --verbose=1 "$app"
+          "$app/Contents/MacOS/SAR Whiteboard Assistant" --self-test --no-browser
+          rm -rf "$check"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/SAR-Whiteboard-Assistant-*.exe
+            dist/SAR-Whiteboard-Assistant-*.zip
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0  # installer and zip are compressed already
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
