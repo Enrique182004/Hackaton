@@ -7,6 +7,7 @@ from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 DATA_DIR = Path(os.environ.get("SAR_DATA_DIR", PACKAGE_DIR.parent / "data"))
+PROFILES = ("math", "biology")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -38,6 +39,11 @@ def _env_block_size(name: str, default: int) -> int:
     return normalize_block_size(_env_int(name, default), default)
 
 
+def _env_profile() -> str:
+    value = os.environ.get("SAR_PROFILE", PROFILES[0]).strip().lower()
+    return value if value in PROFILES else PROFILES[0]
+
+
 def normalize_block_size(value: int, default: int = 31) -> int:
     """Adaptive-threshold block size must be odd and >= 3."""
     if value < 1:
@@ -48,6 +54,8 @@ def normalize_block_size(value: int, default: int = 31) -> int:
 
 @dataclass(frozen=True)
 class Settings:
+    # Subject the assistant tutors: picks the prompts, the seed documents and whether tutor modes apply.
+    profile: str = field(default_factory=_env_profile)
     camera_index: int = field(default_factory=lambda: _env_int("SAR_CAMERA_INDEX", 0))
     camera_width: int = field(default_factory=lambda: _env_int("SAR_CAMERA_WIDTH", 1280))
     camera_height: int = field(default_factory=lambda: _env_int("SAR_CAMERA_HEIGHT", 720))
@@ -64,6 +72,9 @@ class Settings:
     # Which uploaded files answers may use: {"all": true} or {"sources": [...]}.
     selection_file: Path = field(
         default_factory=lambda: Path(os.environ.get("SAR_SELECTION_FILE", DATA_DIR / "selection.json"))
+    )
+    quiz_bank_file: Path = field(
+        default_factory=lambda: Path(os.environ.get("SAR_QUIZ_BANK_FILE", DATA_DIR / "quiz_bank.json"))
     )
     embed_model: str = field(default_factory=lambda: os.environ.get("SAR_EMBED_MODEL", "all-MiniLM-L6-v2"))
     rag_top_k: int = field(default_factory=lambda: _env_int("SAR_RAG_TOP_K", 4))
@@ -105,3 +116,13 @@ class Settings:
     @property
     def projector_size(self) -> tuple[int, int]:
         return (self.projector_width, self.projector_height)
+
+    @property
+    def knowledge_dir(self) -> Path:
+        """Bundled seed documents for the current profile."""
+        return PACKAGE_DIR / "knowledge" / self.profile
+
+    @property
+    def seed_marker_file(self) -> Path:
+        # Next to the store it describes: deleting the store to reset it also brings the seed docs back.
+        return self.chroma_dir / ".seeded"

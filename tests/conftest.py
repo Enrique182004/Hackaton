@@ -89,6 +89,8 @@ class FakeVLM:
         self.error: Exception | None = None
         self.gate: Any = None  # threading.Event to hold the pipeline open
         self.calls: list[str] = []
+        self.kwargs: list[dict[str, Any]] = []  # mode / task / recent_turns of each call
+        self.action = AvatarAction("Look here", "pointing", 100, 200)
 
     def evaluate(
         self,
@@ -97,13 +99,15 @@ class FakeVLM:
         context: list[Any],
         ink_regions: list[Any],
         projector_size: tuple[int, int],
+        **kwargs: Any,
     ) -> AvatarAction:
         self.calls.append(query)
+        self.kwargs.append(kwargs)
         if self.gate is not None:
             self.gate.wait(5)
         if self.error is not None:
             raise self.error
-        return AvatarAction("Look here", "pointing", 100, 200)
+        return self.action
 
 
 class FakeAudio:
@@ -137,6 +141,15 @@ def isolated_selection_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     return path
 
 
+@pytest.fixture(autouse=True)
+def isolated_quiz_bank(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Same for the quiz bank; and the default (math) profile, whatever the developer's shell exports."""
+    path = tmp_path / "quiz_bank.json"
+    monkeypatch.setenv("SAR_QUIZ_BANK_FILE", str(path))
+    monkeypatch.delenv("SAR_PROFILE", raising=False)
+    return path
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return dataclasses.replace(
@@ -146,6 +159,7 @@ def settings(tmp_path: Path) -> Settings:
         chroma_dir=tmp_path / "chroma",
         calibration_file=tmp_path / "calibration.json",
         selection_file=tmp_path / "selection.json",
+        quiz_bank_file=tmp_path / "quiz_bank.json",
         projector_width=640,
         projector_height=360,
     )

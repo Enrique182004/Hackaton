@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from biobench_sar.config import Settings
+from biobench_sar.rag.quiz_bank import QuizBank, QuizProblem
 from biobench_sar.schemas import AvatarAction, error_action
+from biobench_sar.tutor import TutorSession, detect_learn_request, detect_mode, detect_offer_reply, is_quiz_stop
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +29,7 @@ HISTORY_SIZE = 50
 
 Emit = Callable[[str, dict[str, Any]], None]
 StartTask = Callable[..., Any]
+Task = dict[str, Any]
 
 
 def estimate_speech_seconds(text: str) -> float:
@@ -47,6 +50,8 @@ class Interaction:
     had_frame: bool
     latency_s: float
     error: bool
+    mode: str = "help"
+    task_kind: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -144,6 +149,10 @@ class Assistant:
         self._history: deque[Interaction] = deque(maxlen=HISTORY_SIZE)
         self._next_id = 1
         self.selection = DocumentSelection(settings.selection_file)
+        self.quiz_bank = QuizBank(settings.quiz_bank_file)
+        self.tutor = TutorSession()
+        self._tutor_lock = threading.Lock()
+        self._tutor_pushed = self.tutor.to_dict()
 
     @property
     def active_sources(self) -> set[str] | None:
@@ -179,6 +188,28 @@ class Assistant:
             return
         self.emit_status(value)
 
+    @property
+    def tutoring(self) -> bool:
+        """Tutor modes, quizzes and lessons are math-only; other subjects just keep the conversation memory."""
+        return self.settings.profile == "math"
+
+    def push_tutor(self) -> None:
+        """Send the tutor state to every client when it changed since the last push."""
+        with self._tutor_lock:
+            state = self.tutor.to_dict()
+            if state == self._tutor_pushed:
+                return
+            self._tutor_pushed = state
+        self._emit("tutor", state)
+
+    def quiz_problems(self) -> list[QuizProblem]:
+        """Worksheet problems from the ticked files only."""
+        return self.quiz_bank.problems(self.selection.query_sources())
+
+    def start_quiz(self) -> None:
+        self.tutor.start_quiz(self.quiz_problems())
+        self.push_tutor()
+
     def should_listen(self) -> bool:
         # The browser keeps playing the answer after the pipeline finishes, so busy alone isn't enough.
         return not self.busy and time.monotonic() >= self._speaking_until
@@ -206,34 +237,116 @@ class Assistant:
         sources: list[str] = []
         ink: list[Any] = []
         frame = None
+        task: Task | None = None
+        mode = "help"
         try:
             self._emit("transcript", {"text": text})
             self.emit_status("thinking")
+            task = self._plan(text) if self.tutoring else None
+            mode = self.tutor.mode if self.tutoring else "help"
+            self.push_tutor()
             frame = svc.vision.latest_warped()
             ink = find_ink_regions(frame, **self.settings.ink_kwargs) if frame is not None else []
             context = self._retrieve(text)
             sources = list(dict.fromkeys(chunk.source for chunk in context))
             image = encode_jpeg(frame) if frame is not None else None
-            action = svc.vlm.evaluate(text, image, context, ink, self.settings.projector_size)
-            if action.animation_state in DRAWING_STATES and not ink:
+            action = svc.vlm.evaluate(
+                text,
+                image,
+                context,
+                ink,
+                self.settings.projector_size,
+                mode=mode,
+                task=task,
+                recent_turns=self.tutor.turns(),
+            )
+            if action.animation_state in DRAWING_STATES and not ink and not _is_learn(task):
                 # Nothing drawn to point at or approve; small VLMs still pick these for plain questions.
                 action = replace(action, animation_state="idle")
+            if task is not None and task["kind"] == "quiz":
+                action = self._advance_quiz(task, action)
+            self.tutor.add_turn(text, action.spoken_text)
+            self.push_tutor()
             self._emit("avatar_update", action.to_dict())
             self.emit_status("speaking")
             audio_name = svc.tts.speak(action.spoken_text)
             self._emit("speak", {"url": f"/tts/{audio_name}" if audio_name else None, "text": action.spoken_text})
             self._speaking_until = time.monotonic() + estimate_speech_seconds(action.spoken_text)
             self._record(
-                text, action, sources, ink, frame is not None, started, error=action.animation_state == "error"
+                text,
+                action,
+                sources,
+                ink,
+                frame is not None,
+                started,
+                error=action.animation_state == "error",
+                mode=mode,
+                task=task,
             )
         except Exception:
             log.exception("query pipeline failed")
             action = error_action("Sorry, something went wrong. Please try again.", self.settings.projector_size)
             self._emit("avatar_update", action.to_dict())
-            self._record(text, action, sources, ink, frame is not None, started, error=True)
+            self._record(text, action, sources, ink, frame is not None, started, error=True, mode=mode, task=task)
         finally:
             self.emit_status("idle")
             self._busy.release()
+
+    def _plan(self, text: str) -> Task | None:
+        """What this question asks the model to do: a lesson step, a practice problem, a quiz step or plain help."""
+        tutor = self.tutor
+        reply = detect_offer_reply(text) if tutor.offer_pending else None
+        if reply is not None:
+            tutor.resolve_offer()
+            return {"kind": "learn", "topic": tutor.learn_topic, "stage": "example" if reply == "generate" else "own"}
+        topic = detect_learn_request(text)
+        if topic is not None:
+            tutor.start_learning(topic)
+            return {"kind": "learn", "topic": topic, "stage": "offer"}
+        asked = detect_mode(text)
+        if asked == "help" and tutor.quiz_active and not is_quiz_stop(text):
+            asked = None  # "I'm stuck" mid-quiz wants a hint on this problem, not to quit the quiz
+        if asked is not None:
+            tutor.set_mode(asked)
+        if tutor.mode == "practice":
+            return {"kind": "practice"}
+        if tutor.mode != "quiz":
+            return None
+        if asked == "quiz" or not tutor.quiz_active:
+            if not tutor.quiz_active:
+                tutor.start_quiz(self.quiz_problems())
+            stage = "dictate"
+        else:
+            stage = "check" if tutor.dictated else "dictate"
+        current, upcoming = tutor.current(), tutor.next_problem()
+        return {
+            "kind": "quiz",
+            "stage": stage,
+            "number": tutor.quiz_number,
+            "total": tutor.quiz_total,
+            "problem": current.problem if current else None,
+            "answer": current.answer if current else None,
+            "next_problem": upcoming.problem if stage == "check" and upcoming else None,
+        }
+
+    def _advance_quiz(self, task: Task, action: AvatarAction) -> AvatarAction:
+        tutor = self.tutor
+        if not tutor.quiz_active or tutor.quiz_number != task["number"]:
+            return action  # the quiz was stopped or restarted while the model was thinking
+        if task["stage"] == "dictate":
+            if action.animation_state != "error":
+                tutor.mark_dictated()
+            return action
+        if action.animation_state == "error":
+            tutor.record(False)
+        elif action.animation_state == "celebrating":
+            tutor.record(True)
+            if not tutor.quiz_active:
+                summary = f"That was the last problem! You solved {tutor.score} of {tutor.quiz_total} on the first try."
+                return replace(action, spoken_text=f"{action.spoken_text} {summary}")
+            if task["next_problem"]:
+                tutor.mark_dictated()  # the model already read the next problem out
+        return action
 
     def _retrieve(self, text: str) -> list[Any]:
         sources = self.selection.query_sources()
@@ -255,6 +368,8 @@ class Assistant:
         started: float,
         *,
         error: bool,
+        mode: str = "help",
+        task: Task | None = None,
     ) -> None:
         item = Interaction(
             id=self._next_id,
@@ -269,7 +384,13 @@ class Assistant:
             had_frame=had_frame,
             latency_s=round(time.monotonic() - started, 2),
             error=error,
+            mode=mode,
+            task_kind=None if task is None else str(task["kind"]),
         )
         self._next_id += 1
         self._history.append(item)
         self._emit("interaction", item.to_dict())
+
+
+def _is_learn(task: Task | None) -> bool:
+    return task is not None and task["kind"] == "learn"

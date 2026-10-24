@@ -519,8 +519,9 @@ def test_socket_connect_receives_current_status(built: Any, fakes: Any) -> None:
     app, socketio = built
     sio = socketio.test_client(app)
     got = sio.get_received()
-    assert [m["name"] for m in got] == ["status"]
+    assert [m["name"] for m in got] == ["status", "tutor"]
     assert got[0]["args"][0] == {"state": "idle"}
+    assert got[1]["args"][0] == {"mode": "help", "learn_topic": None, "quiz": None}, "a reloaded projector catches up"
 
 
 def _poll(base: str, sid: str | None = None, body: bytes | None = None) -> str:
@@ -544,15 +545,16 @@ def test_socket_connect_packet_precedes_status_push(built: Any) -> None:
         packets: list[str] = []
         deadline = time.time() + 5
         while time.time() < deadline and not (
-            any(p.startswith("40") for p in packets) and any(p.startswith('42["status"') for p in packets)
+            any(p.startswith("40") for p in packets) and any(p.startswith('42["tutor"') for p in packets)
         ):
             packets += _poll(base, sid).split("\x1e")
     finally:
         server.shutdown()
         server.server_close()
     messages = [p for p in packets if p[:2] in ("40", "42")]
-    assert [p[:2] for p in messages] == ["40", "42"], packets
+    assert [p[:2] for p in messages] == ["40", "42", "42"], packets
     assert json.loads(messages[1][2:]) == ["status", {"state": "idle"}]
+    assert json.loads(messages[2][2:])[0] == "tutor"
 
 
 def test_socket_connect_mid_query_gets_current_state(built: Any, fakes: Any) -> None:

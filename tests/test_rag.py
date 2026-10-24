@@ -20,7 +20,7 @@ from biobench_sar.rag.ingestor import (
 from biobench_sar.rag.vector_store import VectorStore
 
 DIM = 256
-KNOWLEDGE = Path(__file__).resolve().parent.parent / "biobench_sar" / "knowledge"
+KNOWLEDGE = Path(__file__).resolve().parent.parent / "biobench_sar" / "knowledge" / "biology"
 
 
 def fake_embed(texts: list[str]) -> list[list[float]]:

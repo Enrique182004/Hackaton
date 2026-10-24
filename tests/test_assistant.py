@@ -59,12 +59,14 @@ class VLM:
         self.on_call: Callable[[], None] | None = None
         self.seen: list[tuple[str, bytes | None, list[Any]]] = []
         self.contexts: list[list[Any]] = []
+        self.kwargs: list[dict[str, Any]] = []
 
     def evaluate(
-        self, query: str, image: bytes | None, context: list[Any], ink: list[Any], size: tuple[int, int]
+        self, query: str, image: bytes | None, context: list[Any], ink: list[Any], size: tuple[int, int], **kwargs: Any
     ) -> AvatarAction:
         self.seen.append((query, image, ink))
         self.contexts.append(list(context))
+        self.kwargs.append(kwargs)
         if self.on_call:
             self.on_call()
         if self.error:
