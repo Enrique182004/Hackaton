@@ -13,11 +13,16 @@ from biobench_sar.llm.tts_engine import TTSEngine
 
 class FakeComm:
     fail = False
+    calls = 0
+    partial = False
 
     def __init__(self, text: str, voice: str) -> None:
         self.text, self.voice = text, voice
 
     async def save(self, path: str) -> None:
+        FakeComm.calls += 1
+        if FakeComm.partial:
+            Path(path).write_bytes(b"")
         if FakeComm.fail:
             raise RuntimeError("offline")
         Path(path).write_bytes(b"mp3")
@@ -26,6 +31,8 @@ class FakeComm:
 @pytest.fixture(autouse=True)
 def fake_edge(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeComm.fail = False
+    FakeComm.calls = 0
+    FakeComm.partial = False
     mod = types.ModuleType("edge_tts")
     mod.Communicate = FakeComm  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "edge_tts", mod)
@@ -117,3 +124,47 @@ def test_cleanup_keeps_newest(tmp_path: Path) -> None:
     assert len(files) == tts_engine.MAX_FILES
     assert name in files
     assert "old00.mp3" not in files and "old59.mp3" in files
+
+
+def _no_say(monkeypatch: pytest.MonkeyPatch) -> list[FakeProc]:
+    procs: list[FakeProc] = []
+    monkeypatch.setattr(tts_engine.subprocess, "Popen", lambda a, *k, **kw: procs.append(FakeProc(a)) or procs[-1])
+    return procs
+
+
+def test_edge_failure_is_remembered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeComm.fail = True
+    procs = _no_say(monkeypatch)
+    eng = TTSEngine("edge", out_dir=tmp_path)
+    eng.speak("one")
+    eng.speak("two")
+    assert FakeComm.calls == 1
+    assert [p.args for p in procs] == [["say", "one"], ["say", "two"]]
+
+
+def test_edge_retried_after_cooldown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeComm.fail = True
+    _no_say(monkeypatch)
+    now = {"t": 1000.0}
+    monkeypatch.setattr(tts_engine.time, "monotonic", lambda: now["t"])
+    eng = TTSEngine("edge", out_dir=tmp_path)
+    eng.speak("one")
+    now["t"] += tts_engine.EDGE_RETRY_AFTER_S - 1
+    eng.speak("two")
+    assert FakeComm.calls == 1
+    now["t"] += 2
+    FakeComm.fail = False
+    name = eng.speak("three")
+    assert FakeComm.calls == 2 and name and name.endswith(".mp3")
+    FakeComm.fail = True  # a success clears the cooldown state
+    eng.speak("four")
+    assert FakeComm.calls == 3
+
+
+def test_edge_failure_removes_partial_mp3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeComm.fail = True
+    FakeComm.partial = True
+    _no_say(monkeypatch)
+    TTSEngine("edge", out_dir=tmp_path).speak("x")
+    assert FakeComm.calls == 1
+    assert list(tmp_path.glob("*.mp3")) == []
