@@ -527,3 +527,24 @@ def test_log_redirect_keeps_the_previous_run(folders: dict[str, Path], monkeypat
     assert path == logs / "sar.log"
     assert path.read_text() == "new run\n"
     assert (logs / "sar.previous.log").read_text() == "old run\n"
+
+
+class _Stream:
+    def __init__(self, tty: bool) -> None:
+        self.tty = tty
+        self.reconfigured: dict[str, str] = {}
+
+    def isatty(self) -> bool:
+        return self.tty
+
+    def reconfigure(self, **kwargs: str) -> None:
+        self.reconfigured = kwargs
+
+
+def test_piped_output_is_switched_to_utf8_but_consoles_are_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    pipe, console = _Stream(tty=False), _Stream(tty=True)
+    monkeypatch.setattr(sys, "stdout", pipe)
+    monkeypatch.setattr(sys, "stderr", console)
+    launcher._utf8_output()
+    assert pipe.reconfigured == {"encoding": "utf-8", "errors": "replace"}
+    assert console.reconfigured == {}

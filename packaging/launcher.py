@@ -660,8 +660,19 @@ def _pause_if_console_closes(code: int) -> None:
             input("\nPress Enter to close this window...")
 
 
+def _utf8_output() -> None:
+    """Pipes and log files get UTF-8 whatever the locale (Windows would use its ANSI code page)."""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None or not hasattr(stream, "reconfigure"):
+            continue
+        with contextlib.suppress(Exception):
+            if not stream.isatty():
+                stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def _run() -> None:
     multiprocessing.freeze_support()
+    _utf8_output()
     code = main()
     _pause_if_console_closes(code)
     for stream in (sys.stdout, sys.stderr):

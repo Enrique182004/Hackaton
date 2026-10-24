@@ -167,8 +167,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    # Unbuffered output (logs show up live) and UTF-8 mode (sar.env, uploads and a redirected console
-    # stay UTF-8 on Windows, whose default is the ANSI code page).
+    # Unbuffered output, so logs show up live. UTF-8 mode is requested too, but CI builds have reported it
+    # off (the self-test header says which), so the launcher also switches piped output to UTF-8 itself.
     [("u", None, "OPTION"), ("X utf8_mode=1", None, "OPTION")],
     exclude_binaries=True,
     name=APP_NAME,
