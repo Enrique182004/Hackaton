@@ -33,7 +33,8 @@ LANGUAGES = ("en", "es")
 # The assistant talks like a kid: Ana is Edge's child voice. Edge has no Mexican child voice, so Dalia is pitched up
 # and sped up a little. Prosody belongs to the voice: any other voice a teacher picks plays as it is.
 EDGE_VOICES = {"en": "en-US-AnaNeural", "es": "es-MX-DaliaNeural"}
-EDGE_PROSODY = {"es-MX-DaliaNeural": ("+5%", "+30Hz")}  # voice -> (rate, pitch)
+# +15 Hz: at +30 Hz the pitch shift sounded robotic in long sentences.
+EDGE_PROSODY = {"es-MX-DaliaNeural": ("+5%", "+15Hz")}  # voice -> (rate, pitch)
 # Students are in El Paso / Chihuahua: Mexican Spanish first, any other Spanish only as a last resort.
 SAY_ES_LOCALES = (("es_MX",), ("es_419", "es_US"), ("es_",))
 SAY_ES_PREFERRED = "Paulina"

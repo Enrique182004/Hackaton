@@ -95,11 +95,13 @@ class Services:
     vision: Any  # VisionLoop
     store: Any  # VectorStore
     vlm: Any  # VLMClient
-    audio: Any  # AudioTrigger (on_query/on_state are wired by create_app)
+    audio: Any  # AudioTrigger (on_query/on_state/on_unheard are wired by create_app)
     tts: Any  # TTSEngine
 
 
-def build_services(settings: Settings, on_query: Any, on_state: Any, should_listen: Any = None) -> Services:
+def build_services(
+    settings: Settings, on_query: Any, on_state: Any, should_listen: Any = None, on_unheard: Any = None
+) -> Services:
     """Construct real services. Imports are lazy so importing app.py stays light."""
     from biobench_sar.core.audio_trigger import AudioTrigger
     from biobench_sar.core.homography import Calibration
@@ -136,6 +138,7 @@ def build_services(settings: Settings, on_query: Any, on_state: Any, should_list
         should_listen=should_listen,
         silence_rms=settings.silence_rms,
         language=settings.language,
+        on_unheard=on_unheard,
     )
     tts = TTSEngine(settings.tts_backend, settings.tts_voice, settings.tts_dir)
     return Services(vision=vision, store=store, vlm=vlm, audio=audio, tts=tts)
@@ -168,7 +171,9 @@ def create_app(
         app.wsgi_app = SocketIOGate(app.wsgi_app, gate, extra_names=lan_names)  # type: ignore[method-assign]
 
     assistant = Assistant(settings, socketio.emit, socketio.start_background_task)
-    svc = services or build_services(settings, assistant.handle_query, assistant.on_state, assistant.should_listen)
+    svc = services or build_services(
+        settings, assistant.handle_query, assistant.on_state, assistant.should_listen, assistant.on_unheard
+    )
     assistant.services = svc
     assistant.push_speech_rate()  # the voice starts at the room's saved speed
     if services is None:
@@ -488,6 +493,7 @@ def create_app(
                 "profile": settings.profile,
                 "mode": assistant.tutor.mode,
                 "audio_available": bool(getattr(svc.audio, "available", False)),
+                "mic_silent": getattr(svc.audio, "mic_silent", None) is True,
                 "tts_backend": settings.tts_backend,
                 "listen_mode": settings.listen_mode,
                 "state": assistant.state,
@@ -1136,6 +1142,14 @@ def _warm_up(svc: Services) -> None:
     import numpy as np
 
     started = time.monotonic()
+    # First, and short: the Board checklist can say "the microphone sends only silence" before anyone presses Talk.
+    # The wake listener's chunks tell that already.
+    check_signal = getattr(svc.audio, "check_signal", None)
+    probe = callable(check_signal) and getattr(svc.audio, "mode", "push") != "wake"
+    if probe and getattr(svc.audio, "available", False) and check_signal():
+        from biobench_sar.core.audio_trigger import mic_silence_hint
+
+        log.warning("the microphone sends only silence: %s", mic_silence_hint())
     warmup = getattr(svc.vlm, "warmup", None)
     if callable(warmup):
         warmup()

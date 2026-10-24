@@ -212,11 +212,12 @@ def test_edge_voice_follows_the_language(tmp_path: Path, no_lang_module: None) -
 
 def test_default_voices_sound_like_a_kid(tmp_path: Path) -> None:
     # Ana is a child voice; Edge has no Mexican child voice, so Dalia is pitched up and a little faster.
+    # +15 Hz, not +30: the bigger shift made her sound robotic in long tutoring sentences.
     eng = TTSEngine("edge", out_dir=tmp_path)
     eng.speak("hello", "en")
     eng.speak("hola", "es")
     assert FakeComm.voices == ["en-US-AnaNeural", "es-MX-DaliaNeural"]
-    assert FakeComm.prosody == [("+0%", "+0Hz"), ("+5%", "+30Hz")]
+    assert FakeComm.prosody == [("+0%", "+0Hz"), ("+5%", "+15Hz")]
 
 
 def test_other_voices_keep_their_own_sound(tmp_path: Path) -> None:

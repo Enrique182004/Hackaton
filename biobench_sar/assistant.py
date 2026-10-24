@@ -45,12 +45,17 @@ TEXTS = {
         "error": "Sorry, something went wrong. Please try again.",
         "last": "That was the last problem! ",
         "summary": "{ending}You solved {score} of {total} on the first try.",
+        # Push-to-talk that brought no words (AudioTrigger.on_unheard); "error" is the line above.
+        "silent": "I can't hear the microphone. Check that it's on and that this app may use it: the Board tab shows how.",
+        "unclear": "I didn't catch that. Please say it again, a little closer to the microphone.",
     },
     "es": {
         "no_answer": "Todavía no veo una respuesta en el pizarrón. Escríbela y luego pídeme que la revise.",
         "error": "Perdón, algo salió mal. Inténtalo de nuevo.",
         "last": "¡Ese fue el último problema! ",
         "summary": "{ending}Resolviste {score} de {total} al primer intento.",
+        "silent": "No puedo oír el micrófono. Revisa que esté encendido y que esta app pueda usarlo: la pestaña Pizarrón te dice cómo.",
+        "unclear": "No te entendí. Dilo otra vez, un poco más cerca del micrófono.",
     },
 }
 # The model or the VLM client often announces the end itself; then the summary only adds the score.
@@ -456,6 +461,53 @@ class Assistant:
         # The browser keeps playing the answer after the pipeline finishes, so busy alone isn't enough.
         return not self.busy and time.monotonic() >= self._speaking_until
 
+    def on_unheard(self, reason: str, heard_language: str) -> bool:
+        """Push-to-talk brought no words (AudioTrigger.on_unheard): say so out loud, or the student is left waiting.
+
+        False while a question is running, or its answer is still being played: that answer comes first.
+        """
+        playing = self.settings.tts_backend != "none" and time.monotonic() < self._speaking_until
+        if playing or not self._busy.acquire(blocking=False):
+            return False
+        with self._language_lock:
+            setting = self._language
+        language = setting if setting in LANGUAGES else _language(heard_language)
+        key = reason if reason in ("silent", "unclear") else "error"
+        try:
+            self._start_task(self._say_unheard, TEXTS[language][key], language)
+        except Exception:
+            self._busy.release()
+            raise
+        return True
+
+    def _say_unheard(self, line: str, language: str) -> None:
+        # The student may press Talk again while this line is synthesized: that push's own states win.
+        try:
+            # No target: the avatar stays where it is. Not a reply, so the reply language stays as it was.
+            self._say({"animation_state": "idle"}, line, line, language, status=not self._push_active())
+        except Exception:
+            log.exception("could not say that nothing was heard")
+        finally:
+            if not self._push_active():
+                self.emit_status("idle")
+            self._busy.release()
+
+    def _push_active(self) -> bool:
+        return bool(getattr(getattr(self.services, "audio", None), "push_active", False))
+
+    def _say(self, avatar: dict[str, Any], spoken: str, display: str, language: str, *, status: bool = True) -> None:
+        """Show a line, then speak it; the wake listener stays off until it has been said."""
+        said = {"display_text": display, "spoken_text": spoken, "language": language}
+        self._emit("avatar_update", {**avatar, **said})
+        if status:
+            self.emit_status("speaking")
+        audio_name = self.services.tts.speak(spoken, lang=language)
+        url = f"/tts/{audio_name}" if audio_name else None
+        self._emit("speak", {"url": url, "text": spoken, **said})
+        # A slower voice talks for longer: the wake-word loop stays deaf until it is done.
+        rate = self.accessibility.current.rate_factor
+        self._speaking_until = time.monotonic() + estimate_speech_seconds(spoken, rate)
+
     def handle_query(self, text: str) -> bool:
         """Start a query in the background. False if it's empty or another query is still running."""
         text = (text or "").strip()
@@ -574,15 +626,7 @@ class Assistant:
             if not failed:
                 self.tutor.add_turn(text, action.spoken_text)
             self.push_tutor()
-            said = {"display_text": display, "spoken_text": action.spoken_text, "language": language}
-            self._emit("avatar_update", {**action.to_dict(), **said})
-            self.emit_status("speaking")
-            audio_name = svc.tts.speak(action.spoken_text, lang=language)
-            url = f"/tts/{audio_name}" if audio_name else None
-            self._emit("speak", {"url": url, "text": action.spoken_text, **said})
-            # A slower voice talks for longer: the wake-word loop stays deaf until it is done.
-            rate = self.accessibility.current.rate_factor
-            self._speaking_until = time.monotonic() + estimate_speech_seconds(action.spoken_text, rate)
+            self._say(action.to_dict(), action.spoken_text, display, language)
             self._replied_in(language)
             self._record(
                 text,

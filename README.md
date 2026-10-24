@@ -212,9 +212,13 @@ like worksheet problems.
   language each question is asked in. English or Español fixes it, and Whisper then listens only for that
   language. Over HTTP: `GET /api/language` and `PUT /api/language {"language": "auto"|"en"|"es"}`.
 - **Voice in.** Whisper decides between English and Spanish for each question. The wake word also answers to
-  "asistente".
+  "asistente". When push-to-talk brings no words, the assistant says so instead of going quiet: "I can't hear the
+  microphone…" when it recorded only digital silence (the microphone is muted, or the app that started the
+  assistant may not use it), "I didn't catch that…" when it heard sound but no words. A microphone that sends only
+  silence also shows on the dashboard's Board checklist (checked at startup and on every recording) and fails
+  `scripts/hardware_check.py`; the server log says what to change.
 - **Voice out.** The assistant talks like a kid. The online Edge voices are `en-US-AnaNeural` (a child voice) and
-  `es-MX-DaliaNeural` (Mexican Spanish), pitched up (+30 Hz) and a little faster (+5 %) because Edge has no Mexican
+  `es-MX-DaliaNeural` (Mexican Spanish), pitched up (+15 Hz) and a little faster (+5 %) because Edge has no Mexican
   child voice; any other voice set with `SAR_TTS_VOICE` plays as it is. Offline voices are adult voices. Offline (`SAR_TTS_BACKEND=say` or `pyttsx3`, or when Edge can't reach the internet), the assistant picks an
   installed Spanish voice, Mexican first. If Spanish comes out with an English voice, install one: on macOS,
   System Settings → Accessibility → Spoken Content → System voice → Manage Voices (e.g. *Paulina*); on Windows,

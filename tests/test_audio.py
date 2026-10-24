@@ -495,6 +495,111 @@ def test_push_to_talk_skips_digital_silence() -> None:
     assert queries == [] and seen == []
 
 
+def _push_unheard(**kwargs: object) -> tuple[list[tuple[str, str]], list[str], list[str]]:
+    """One push-to-talk; (on_unheard calls, states, queries) once it has finished."""
+    unheard: list[tuple[str, str]] = []
+    states: list[str] = []
+    queries: list[str] = []
+    done = threading.Event()
+
+    def on_unheard(reason: str, language: str) -> None:
+        unheard.append((reason, language))
+        done.set()
+
+    kwargs.setdefault("transcriber", lambda a: "")
+    t = AudioTrigger(
+        lambda q: (queries.append(q), done.set()),
+        on_state=states.append,
+        on_unheard=on_unheard,
+        **kwargs,  # type: ignore[arg-type]
+    )
+    t.trigger()
+    _wait(done)
+    return unheard, states, queries
+
+
+def test_push_of_digital_silence_says_nothing_was_heard(caplog: pytest.LogCaptureFixture) -> None:
+    unheard, states, queries = _push_unheard(recorder=lambda s: np.full(1600, 1e-5, dtype=np.float32))
+    assert unheard == [("silent", "en")] and queries == []
+    assert states == ["listening", "transcribing", "idle"], "the page is back to idle before Pip answers"
+    assert "digital silence" in caplog.text and "microphone" in caplog.text
+
+
+def test_push_without_words_asks_to_say_it_again() -> None:
+    unheard, _, queries = _push_unheard(recorder=lambda s: AUDIO, transcriber=lambda a: "  ")
+    assert unheard == [("unclear", "en")] and queries == []
+
+
+def test_push_that_cannot_open_the_microphone_says_nothing_was_heard() -> None:
+    def no_mic(seconds: float) -> np.ndarray:
+        raise OSError("Invalid input device")
+
+    unheard, states, _ = _push_unheard(recorder=no_mic)
+    assert unheard == [("silent", "en")] and states[-1] == "idle"
+
+
+def test_push_whose_transcription_fails_reports_an_error() -> None:
+    def boom(audio: np.ndarray) -> str:
+        raise RuntimeError("whisper died")
+
+    unheard, _, _ = _push_unheard(recorder=lambda s: AUDIO, transcriber=boom)
+    assert unheard == [("error", "en")]
+
+
+def test_unheard_push_keeps_the_last_language() -> None:
+    unheard: list[tuple[str, str]] = []
+    done = threading.Event()
+    t = AudioTrigger(
+        lambda q: None,
+        recorder=lambda s: AUDIO,
+        transcriber=lambda a: "",
+        on_unheard=lambda reason, language: (unheard.append((reason, language)), done.set()),
+        language="es",
+    )
+    t.trigger()
+    _wait(done)
+    assert unheard == [("unclear", "es")]
+
+
+def test_heard_push_reports_nothing_unheard() -> None:
+    unheard, _, queries = _push_unheard(recorder=lambda s: AUDIO, transcriber=lambda a: "what is this")
+    assert queries == ["what is this"] and unheard == []
+
+
+def test_a_failing_unheard_callback_is_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:
+    states: list[str] = []
+    called = threading.Event()
+
+    def on_unheard(reason: str, language: str) -> None:
+        called.set()
+        raise RuntimeError("tts down")
+
+    t = AudioTrigger(lambda q: None, on_state=states.append, on_unheard=on_unheard, recorder=lambda s: SILENCE)
+    t.trigger()
+    _wait(called)
+    assert _until(lambda: "on_unheard callback failed" in caplog.text)
+    assert t.trigger() is True, "the next push still works"
+
+
+def test_wake_followup_without_words_stays_quiet() -> None:
+    # A misheard wake word must not make Pip speak up on its own.
+    unheard: list[tuple[str, str]] = []
+    states: list[str] = []
+    texts = iter(["assistant", ""])
+    t = AudioTrigger(
+        lambda q: None,
+        mode="wake",
+        on_state=states.append,
+        on_unheard=lambda reason, language: unheard.append((reason, language)),
+        recorder=lambda s: AUDIO,
+        transcriber=lambda a: next(texts, ""),
+    )
+    t.start()
+    assert _until(lambda: states[-1:] == ["idle"])
+    t.stop()
+    assert unheard == []
+
+
 def test_wake_followup_hears_quiet_speech() -> None:
     queries: list[str] = []
     texts = iter(["assistant", "explain the diagram"])
@@ -900,3 +1005,187 @@ def test_wake_query_reports_its_language(monkeypatch: pytest.MonkeyPatch) -> Non
     _wait(done)
     t.stop()
     assert seen == [("qué es la mitosis", "es")]
+
+
+# ---- is the microphone giving any sound? -------------------------------------------
+
+
+def test_whether_the_mic_is_silent_is_unknown_before_any_recording() -> None:
+    assert AudioTrigger(lambda q: None, recorder=lambda s: AUDIO).mic_silent is None
+
+
+def test_every_recording_says_whether_the_mic_is_silent() -> None:
+    clips = iter([SILENCE, AUDIO])
+    t = AudioTrigger(lambda q: None, recorder=lambda s: next(clips))
+    assert t.check_signal(0.1) is True and t.mic_silent is True
+    assert t.check_signal(0.1) is False and t.mic_silent is False
+
+
+def test_a_silent_push_marks_the_mic_silent() -> None:
+    done = threading.Event()
+    t = AudioTrigger(lambda q: None, recorder=lambda s: SILENCE, on_unheard=lambda r, lang: done.set())
+    t.trigger()
+    _wait(done)
+    assert t.mic_silent is True
+
+
+def test_a_mic_that_cannot_open_counts_as_silent(caplog: pytest.LogCaptureFixture) -> None:
+    def no_mic(seconds: float) -> np.ndarray:
+        raise OSError("Invalid input device")
+
+    t = AudioTrigger(lambda q: None, recorder=no_mic)
+    assert t.check_signal(0.1) is True and t.mic_silent is True
+    assert "Invalid input device" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        ("darwin", "Terminal, or Claude"),
+        ("darwin", "System Settings > Privacy & Security > Microphone"),
+        ("win32", "Let desktop apps access your microphone"),
+        ("linux", "muted"),
+    ],
+)
+def test_mic_silence_hint_names_this_systems_setting(platform: str, expected: str) -> None:
+    assert expected in audio_trigger.mic_silence_hint(platform)
+
+
+def test_an_unclear_push_reports_the_last_language_not_whispers_guess() -> None:
+    # Whisper rates English likelier for a clip with no words; the class still speaks Spanish.
+    model = _FakeWhisper(text="  ", language=None, probs={"en": 0.6, "es": 0.4})
+    unheard: list[tuple[str, str]] = []
+    done = threading.Event()
+    t = _with_model(model)
+    t.last_language = "es"
+    t.on_unheard = lambda reason, language: (unheard.append((reason, language)), done.set())
+    t.trigger()
+    _wait(done)
+    assert unheard == [("unclear", "es")] and t.last_language == "es"
+
+
+def test_push_active_covers_the_whole_push() -> None:
+    gate = threading.Event()
+    seen: list[bool] = []
+    done = threading.Event()
+
+    def rec(seconds: float) -> np.ndarray:
+        gate.wait(3)
+        return AUDIO
+
+    t = AudioTrigger(lambda q: done.set(), recorder=rec, transcriber=lambda a: (seen.append(t.push_active), "hi")[1])
+    assert t.push_active is False
+    t.trigger()
+    assert t.push_active is True, "requested"
+    gate.set()
+    _wait(done)
+    assert seen == [True], "still active while Whisper runs"
+    assert t.push_active is False
+
+
+def test_wake_mode_push_without_words_is_reported_too() -> None:
+    unheard: list[tuple[str, str]] = []
+    states: list[str] = []
+    done = threading.Event()
+    t = AudioTrigger(
+        lambda q: None,
+        mode="wake",
+        wake_chunk_seconds=0.05,
+        on_state=states.append,
+        on_unheard=lambda reason, language: (unheard.append((reason, language)), done.set()),
+        recorder=lambda s: (time.sleep(0.01), AUDIO)[1],
+        transcriber=lambda a: "",
+    )
+    t.start()
+    assert t.trigger() is True
+    _wait(done)
+    t.stop()
+    assert unheard == [("unclear", "en")] and states[-1] == "idle"
+
+
+# ---- PortAudio is not thread-safe ----------------------------------------------------
+
+
+class _OverlapPyAudio:
+    """A pyaudio stand-in that records whether two PortAudio set-ups or tear-downs ever overlapped."""
+
+    inside = 0
+    overlapped = False
+    created = 0
+    paInt16 = 8
+
+    def __init__(self) -> None:
+        self._enter()
+        type(self).created += 1
+        time.sleep(0.02)
+        self._leave()
+
+    @classmethod
+    def _enter(cls) -> None:
+        cls.inside += 1
+        cls.overlapped = cls.overlapped or cls.inside > 1
+
+    @classmethod
+    def _leave(cls) -> None:
+        cls.inside -= 1
+
+    def get_device_count(self) -> int:
+        return 1
+
+    def get_device_info_by_index(self, i: int) -> dict[str, int]:
+        return {"maxInputChannels": 1}
+
+    def open(self, **kwargs: object) -> _OverlapPyAudio:
+        self._enter()
+        time.sleep(0.02)
+        self._leave()
+        return self
+
+    def read(self, count: int, exception_on_overflow: bool = True) -> bytes:
+        return b"\x10\x00" * count
+
+    def stop_stream(self) -> None: ...
+
+    def close(self) -> None:
+        self._enter()
+        time.sleep(0.02)
+        self._leave()
+
+    def terminate(self) -> None:
+        self._enter()
+        time.sleep(0.02)
+        self._leave()
+
+
+@pytest.fixture
+def overlap_pyaudio(monkeypatch: pytest.MonkeyPatch) -> type[_OverlapPyAudio]:
+    monkeypatch.setattr(_OverlapPyAudio, "inside", 0)
+    monkeypatch.setattr(_OverlapPyAudio, "overlapped", False)
+    monkeypatch.setattr(_OverlapPyAudio, "created", 0)
+    mod = types.ModuleType("pyaudio")
+    mod.PyAudio = _OverlapPyAudio  # type: ignore[attr-defined]
+    mod.paInt16 = 8  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "pyaudio", mod)
+    return _OverlapPyAudio
+
+
+def _together(*calls: object) -> None:
+    threads = [threading.Thread(target=call) for call in calls]  # type: ignore[arg-type]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(5)
+
+
+def test_the_microphone_is_probed_once_even_when_asked_at_once(overlap_pyaudio: type[_OverlapPyAudio]) -> None:
+    # The startup mic check and the wake listener ask at the same moment.
+    t = AudioTrigger(lambda q: None, mode="wake")
+    _together(lambda: t.available, lambda: t.available, lambda: t.available)
+    assert t.available is True and overlap_pyaudio.created == 1 and not overlap_pyaudio.overlapped
+
+
+def test_recordings_never_set_up_portaudio_at_the_same_time(overlap_pyaudio: type[_OverlapPyAudio]) -> None:
+    a, b = AudioTrigger(lambda q: None), AudioTrigger(lambda q: None)
+    _together(lambda: a.check_signal(0.05), lambda: b.check_signal(0.05), lambda: a.available)
+    assert overlap_pyaudio.created == 3 and not overlap_pyaudio.overlapped
+    assert a.mic_silent is False and b.mic_silent is False
