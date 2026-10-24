@@ -12,6 +12,7 @@ import contextlib
 import dataclasses
 import html
 import json
+import logging
 import multiprocessing
 import os
 import re
@@ -253,7 +254,9 @@ def lan_address() -> str | None:
 
 def port_free(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET6 if ":" in host else socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # On Windows SO_REUSEADDR lets a bind succeed next to a live listener, which would hide a busy port.
+        if sys.platform != "win32":
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             sock.bind((host, port))
         except OSError:
@@ -500,6 +503,7 @@ def _self_test(services: Any, bundle: bool, get: HttpGet, out: Out) -> int:
 
         from biobench_sar import app as app_module
 
+        logging.getLogger("werkzeug").setLevel(logging.WARNING)  # each check prints its own status line
         settings = self_test_settings(data_dir, free_port())
         flask_app, _socketio = app_module.create_app(settings, services)
         server = make_server(settings.host, settings.port, flask_app, threaded=True)

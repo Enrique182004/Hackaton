@@ -341,6 +341,10 @@ def test_self_test_gives_up_after_its_timeout(fakes: app_module.Services) -> Non
         assert launcher.run_self_test(timeout_s=0.5, services=fakes, bundle=False, get=hang, out=lines.append) == 1
     finally:
         release.set()
+        # Let the abandoned run finish, so it stops its server and deletes its temp folder.
+        for thread in threading.enumerate():
+            if thread.name == "self-test":
+                thread.join(10)
     assert any("no result after" in line for line in lines)
 
 
