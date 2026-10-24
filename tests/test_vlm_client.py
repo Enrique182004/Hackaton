@@ -957,6 +957,18 @@ def test_quiz_check_of_a_substitution_check_under_a_worded_problem_is_never_wron
         assert both.verdict == "correct", (problem, language)  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize("mark", [" ✓", " ✔", " √", " true", " ok", " correct", " sí", " ✅", " →", " :)"])
+def test_quiz_check_of_a_check_line_with_a_tick_after_it_is_never_wrong(mark: str) -> None:
+    for check in ("3(5) + 5 = 20", "15 + 5 = 20", "20 = 20"):
+        for language in ("en", "es"):
+            action = vc.check_quiz_answer(HINT, QUIZ_CHECK, check + mark, language=language)
+            assert action.verdict is None and action.spoken_text == vc.TEXTS[language]["reread"], (check, mark)  # type: ignore[attr-defined]
+            both = vc.check_quiz_answer(PRAISE, QUIZ_CHECK, f"x = 5 ; {check}{mark}", language=language)
+            assert both.verdict == "correct"  # type: ignore[attr-defined]
+    fraction = vc.check_quiz_answer(PRAISE, _arithmetic_check("1/2 + 1/3"), "1/2 + 1/3 = 5/6" + mark)
+    assert fraction.verdict == "correct", "the arithmetic problem worked out, ticked"  # type: ignore[attr-defined]
+
+
 def test_a_check_under_a_worded_problem_asks_again_for_the_answer_line() -> None:
     # Live, problem "3x + 5 = 20. Find x.": the first read was the check line in 2/2 runs, graded as a miss.
     task = {**QUIZ_CHECK, "problem": "3x + 5 = 20. Find x."}

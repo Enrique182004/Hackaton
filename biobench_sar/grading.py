@@ -77,6 +77,8 @@ _CHARS = str.maketrans(
         "，": ",",
     }
 )
+# One arrow for all: "->" is no minus sign and "=>" no "=" ("3(5) + 5 = 20 ->", "2x + 3 = 11 => x = 4").
+_ARROWS = str.maketrans({"⇒": "→", "⟹": "→", "⟶": "→", "➔": "→", "⇨": "→"})
 _BOLD = re.compile(r"(?<=[\w)])\*\*(?=[\w(])")
 
 _EN_SMALL = dict(
@@ -228,6 +230,7 @@ def _plain(text: Any) -> str:
     raw = "".join(c for c in unicodedata.normalize("NFD", raw) if not unicodedata.combining(c))
     raw = _BOLD.sub("^", raw).replace("**", "").replace("`", "").replace("$", "")
     raw = _DECIMAL_COMMA.sub(r"\1.\2", raw)
+    raw = raw.translate(_ARROWS).replace("-->", "→").replace("->", "→").replace("=>", "→")
     return raw.replace("+/-", "±").replace("+-", "±")
 
 
@@ -626,6 +629,13 @@ def _value_run(text: str) -> tuple[str, str]:
     return found.group(), text[found.end() :]
 
 
+def _result_run(side: str) -> tuple[str, str]:
+    """(the value a line comes to, at the start of its last side; what follows it). A mark after it is no math:
+    "20 ✓", "20 ok", "20 :)", "20 →", and "20 √", a tick read as a root sign."""
+    run, after = _value_run(side.strip())
+    return re.sub(r"√\s*$", "", run), after
+
+
 def _without_asides(text: str) -> str:
     while (found := _ASIDE.search(text)) is not None:
         depth, end = 0, len(text)  # an unclosed bracket runs to the end
@@ -709,7 +719,7 @@ def _worked_value(clause: str) -> list[Value] | None:
     *steps, last = _LEADING_WORDS.sub("", clause).split("=")
     if not steps or any(_expression(s.strip()) is None for s in steps):
         return None
-    run, after = _value_run(last.strip())
+    run, after = _result_run(last)
     if _VARIABLE_NEXT.match(after):
         return None  # the letter on the right: "6 = 2x" is a step, "3 = x" an answer (_right_assignment)
     if not run.strip() or _unworked(run):
@@ -759,8 +769,12 @@ def _is_check(clause: str, problem: _Kind, expected: Answers | None = None) -> b
     ("1/2 + 1/3 = 2/5") is an answer."""
     if problem is None:
         return False
-    sides = [_expression(side.strip()) for side in _LEADING_WORDS.sub("", clause).split("=")]
-    if len(sides) < 2 or any(side is None for side in sides):
+    *steps, last = _LEADING_WORDS.sub("", clause).split("=")
+    run, after = _result_run(last)  # what the line comes to, the same value _worked_value reads: "20" of "20 ✓"
+    if not steps or not run.strip() or _VARIABLE_NEXT.match(after):
+        return False  # "3 = x", "6 = 2x": the letter on the right
+    sides = [_expression(side.strip()) for side in (*steps, run)]
+    if any(side is None for side in sides):
         return False  # a letter in it (a step) or not worked out ("12 ÷ 4 = ?")
     letters, value = problem
     if letters:

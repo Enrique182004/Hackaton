@@ -599,6 +599,20 @@ def test_arithmetic_under_a_word_problem_counts_only_when_it_comes_to_the_answer
     assert _plain(parse_answers("5/6", pizza, parse_answers("5/6"))) == {("", Fraction(5, 6))}
 
 
+MARKS = [" ✓", " ✔", " ✅", " √", " true", " yes", " ok", " correct", " sí", " →", " ->", " :)", " <-"]
+
+
+@pytest.mark.parametrize("mark", MARKS)
+def test_a_check_line_with_a_tick_or_a_word_after_it_is_still_a_check(mark: str) -> None:
+    for check in ("3(5) + 5 = 20", "3(5)+5=20", "15 + 5 = 20", "20 = 20"):
+        line = check + mark
+        assert parse_answers(line, "3x + 5 = 20") == frozenset(), line
+        assert grading.only_checks(line, "3x + 5 = 20"), line
+        assert parse_answers(f"x = 5 ; {line}", "3x + 5 = 20") == parse_answers("x = 5")
+    assert _plain(parse_answers("1/2 + 1/3 = 5/6" + mark, "1/2 + 1/3")) == {("", Fraction(5, 6))}, "an answer"
+    assert _plain(parse_answers("1/2 + 1/3 = 2/5" + mark, "1/2 + 1/3")) == {("", Fraction(2, 5))}
+
+
 def test_same_problem() -> None:
     assert grading.same_problem("1/2+1/3", "1/2 + 1/3")
     assert grading.same_problem("6/8", "Simplify 6/8") and grading.same_problem("12 ÷ 4", "12 ÷ 4 = ?")
