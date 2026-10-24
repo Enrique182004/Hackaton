@@ -284,6 +284,20 @@ def test_quiz_without_problems_invents_progressive_ones() -> None:
     assert levels == sorted(levels) and levels[0] == 1 and levels[-1] > 3, "easy first, harder later"
 
 
+def test_invented_quiz_never_repeats_a_problem() -> None:
+    # Problems one and two come from the same generator (176 possible): seed 106 drew "x - 9 = 2" twice.
+    for seed in (106, *range(300)):
+        t = TutorSession(rng=random.Random(seed))
+        t.start_quiz([])
+        problems: list[str] = []
+        while t.quiz_active:
+            current = t.current()
+            assert current is not None
+            problems.append(current.problem)
+            t.record(True)
+        assert len(set(problems)) == len(problems), f"seed {seed} repeated a problem: {problems}"
+
+
 def test_invented_quiz_length() -> None:
     t = TutorSession()
     t.start_quiz([], length=3)
