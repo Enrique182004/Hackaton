@@ -2,6 +2,11 @@
 
 Usage: python scripts/bench_vlm.py [-n 3] [--model qwen2.5vl:3b] [--url http://localhost:11434]
        python scripts/bench_vlm.py --scenarios [--runs 5] [--profile biology|math] [--only H,P] [--raw]
+
+Math scenarios: H/HA help, P/PF practice (equation / fraction board), QD dictate, QH stuck mid-quiz (hint),
+QC/QW/QN check (right / wrong / only the problem written), QDI/QCI/QWI quiz without worksheet problems,
+LO/LE/HF lesson offer, starter and follow-up. Quiz cases get the real seeded chunks, answers included.
+Biology: A missing step, B complete, AB complete after an earlier "not yet".
 """
 
 from __future__ import annotations
@@ -21,10 +26,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from biobench_sar.llm.vlm_client import VLMClient
+from biobench_sar.llm.vlm_client import VLMClient, reads_problem
 from biobench_sar.schemas import AvatarAction, InkRegion, RetrievedChunk
 
 SIZE = (1920, 1080)
+MATH_SEED_DIR = Path(__file__).resolve().parent.parent / "biobench_sar" / "knowledge" / "math"
 QUERIES = ["Is my flowchart correct?", "Check my procedure, please.", "Does this look right to you?"]
 SCENARIO_QUERY = "Check my flowchart. Is the procedure correct and complete?"
 STEPS = ["Lake water sample", "Filter 0.45um", "NNA + E. coli", "Incubate 30C", "Microscopy"]
@@ -91,6 +97,32 @@ EXAMPLE_TURN = {
 }
 FRACTION_SUM = "1/2 + 1/4"
 _FRACTION_LEAK_RE = re.compile(r"\b(?:three\s+(?:fourths|quarters)|3\s*/\s*4)\b", re.IGNORECASE)
+_FRACTION_WORD = (
+    r"(?:halves|half|thirds?|fourths?|quarters?|fifths?|sixths?|sevenths?|eighths?|ninths?|tenths?|"
+    r"\d\s*/\s*\d)"
+)
+# "One half plus one fourth equals three fourths": the starter problem solved, not just dictated.
+_SOLVED_FRACTION_RE = re.compile(
+    rf"\b(?:equals|is|makes|gives)\s+(?:\w+\s+){{0,2}}?{_FRACTION_WORD}(?:\s|[.!,]|$)", re.IGNORECASE
+)
+FRACTION_BOARD = "3/4 - 1/2"
+SPOKEN_FRACTION_BOARD = ("three fourths minus one half", "three quarters minus one half")
+QUIZ_PROBLEM = "2x + 3 = 11"
+INVENTED_PROBLEM = "4x - 3 = 13"  # an invented quiz problem: the task has no answer, code solves it (x = 4)
+
+
+def seed_context(*needles: str) -> list[RetrievedChunk]:
+    """The real seeded math chunks that mention a problem: with their "Answer:" lines and "answer is" columns."""
+    from biobench_sar.rag.ingestor import SUPPORTED_EXTENSIONS, ingest_file
+
+    chunks: list[RetrievedChunk] = []
+    for path in sorted(MATH_SEED_DIR.glob("*")):
+        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            continue
+        for c in ingest_file(path):
+            if any(n in c.text for n in needles):
+                chunks.append(RetrievedChunk(c.text, c.source, 0.7, {}))
+    return chunks
 
 
 def leaks_answer(spoken: str) -> bool:
@@ -120,7 +152,12 @@ def asks_offer(spoken: str) -> bool:
 
 
 def dictates_fraction(spoken: str) -> bool:
-    return bool(_FRACTION_RE.search(spoken))
+    return bool(_FRACTION_RE.search(spoken)) and not _SOLVED_FRACTION_RE.search(spoken)
+
+
+def echoes(spoken: str, query: str) -> bool:
+    norm = [" ".join(re.sub(r"[^a-z0-9 ]", " ", s.lower()).split()) for s in (spoken, query)]
+    return norm[0] == norm[1]
 
 
 class Scenario(NamedTuple):
@@ -130,9 +167,13 @@ class Scenario(NamedTuple):
     expected: str
     mode: str = "help"
     task: dict[str, Any] | None = None
-    context: list[RetrievedChunk] = CONTEXT
+    # A list, or a function that loads it when the scenario runs (the seeded math chunks).
+    context: list[RetrievedChunk] | Callable[[], list[RetrievedChunk]] = CONTEXT
     check: Callable[[str], str | None] = lambda _spoken: None  # returns a failure reason or None
     turns: list[dict[str, str]] | None = None
+
+    def chunks(self) -> list[RetrievedChunk]:
+        return self.context() if callable(self.context) else list(self.context)
 
 
 def make_flowchart(steps: list[str]) -> tuple[bytes, list[InkRegion]]:
@@ -197,12 +238,91 @@ def _offer(spoken: str) -> str | None:
 
 
 def _fraction(spoken: str) -> str | None:
+    if _SOLVED_FRACTION_RE.search(spoken):
+        return "solved the starter problem"
     return None if dictates_fraction(spoken) else "no fraction problem dictated"
 
 
+def _new_fraction_problem(spoken: str) -> str | None:
+    text = " ".join(spoken.lower().split())
+    if any(board in text for board in SPOKEN_FRACTION_BOARD) or re.search(r"3\s*/\s*4\s*-\s*1\s*/\s*2", text):
+        return "dictated the board's problem back"
+    return None if dictates_fraction(spoken) else "no fraction problem dictated"
+
+
+def _reads(problem: str) -> Callable[[str], str | None]:
+    def check(spoken: str) -> str | None:
+        return None if reads_problem(spoken, problem) else f"did not read {problem}"
+
+    return check
+
+
+def _reads_some_equation(spoken: str) -> str | None:
+    return None if re.search(r"\bequals\b", spoken, re.IGNORECASE) else "no problem dictated"
+
+
+def _no_invented_leak(spoken: str) -> str | None:
+    found = re.search(r"\bx\s+(?:=|equals|is|should\s+be)\s+(?:4|four)\b", spoken, re.IGNORECASE)
+    return "gave the final answer" if found else None
+
+
+def _invented_next(spoken: str) -> str | None:
+    return None if reads_problem(spoken, "5x + 2 = 27") else "next problem not read"
+
+
+MISSING_STEP_TURN = {"q": SCENARIO_QUERY, "a": "Not yet. There is no autoclave or flame-sterilize step before plating."}
 BIO_SCENARIOS = {
     "A": Scenario("missing sterile step", SCENARIO_QUERY, lambda: make_flowchart(STEPS), "error"),
     "B": Scenario("complete procedure", SCENARIO_QUERY, lambda: make_flowchart(STERILE_STEPS), "celebrating"),
+    "AB": Scenario(
+        "complete procedure after an earlier 'not yet'",
+        SCENARIO_QUERY,
+        lambda: make_flowchart(STERILE_STEPS),
+        "celebrating",
+        turns=[MISSING_STEP_TURN],
+    ),
+    "BA": Scenario(
+        "missing sterile step after an earlier 'complete'",
+        SCENARIO_QUERY,
+        lambda: make_flowchart(STEPS),
+        "error",
+        turns=[{"q": SCENARIO_QUERY, "a": "Every sterile step is present and in order. Great work!"}],
+    ),
+}
+
+
+def quiz_context() -> list[RetrievedChunk]:
+    """What RAG hands a quiz turn on the seeded files: the CSV rows and the worksheet, answers included."""
+    return seed_context(EQUATION, QUIZ_PROBLEM)
+
+
+QUIZ_DICTATE = {
+    "kind": "quiz",
+    "stage": "dictate",
+    "number": 2,
+    "total": 10,
+    "problem": QUIZ_PROBLEM,
+    "answer": "x = 4",
+    "next_problem": None,
+}
+QUIZ_HINT = {**QUIZ_TASK, "stage": "hint", "next_problem": None}
+INVENTED_DICTATE = {
+    "kind": "quiz",
+    "stage": "dictate",
+    "number": 1,
+    "total": 10,
+    "problem": None,
+    "answer": None,
+    "next_problem": None,
+}
+INVENTED_CHECK = {
+    "kind": "quiz",
+    "stage": "check",
+    "number": 4,
+    "total": 10,
+    "problem": INVENTED_PROBLEM,
+    "answer": None,
+    "next_problem": "5x + 2 = 27",
 }
 MATH_SCENARIOS = {
     "H": Scenario(
@@ -231,6 +351,37 @@ MATH_SCENARIOS = {
         context=MATH_CONTEXT,
         check=_new_equation,
     ),
+    "PF": Scenario(
+        f"similar problem to {FRACTION_BOARD}",
+        "Another one like this.",
+        lambda: make_board([FRACTION_BOARD]),
+        "idle",
+        mode="practice",
+        task={"kind": "practice"},
+        context=MATH_CONTEXT,
+        check=_new_fraction_problem,
+    ),
+    "QD": Scenario(
+        f"quiz dictate worksheet problem {QUIZ_PROBLEM}",
+        "Quiz me.",
+        lambda: make_board([]),
+        "idle",
+        mode="quiz",
+        task=QUIZ_DICTATE,
+        context=quiz_context,
+        check=_reads(QUIZ_PROBLEM),
+    ),
+    "QH": Scenario(
+        f"stuck mid-quiz on {EQUATION}: a hint",
+        "I'm stuck.",
+        lambda: make_board([EQUATION, "3x = 15"]),
+        "pointing",
+        mode="quiz",
+        task=QUIZ_HINT,
+        context=quiz_context,
+        check=_no_leak,
+        turns=[{"q": "Quiz me.", "a": "Problem one of five. Three x plus five equals twenty. Write your answer."}],
+    ),
     "QC": Scenario(
         "quiz check, correct answer x = 5",
         "Is my answer right?",
@@ -238,7 +389,7 @@ MATH_SCENARIOS = {
         "celebrating",
         mode="quiz",
         task=QUIZ_TASK,
-        context=[],
+        context=quiz_context,
         check=_next_problem,
     ),
     "QW": Scenario(
@@ -248,8 +399,48 @@ MATH_SCENARIOS = {
         "error",
         mode="quiz",
         task=QUIZ_TASK,
-        context=[],
+        context=quiz_context,
         check=_no_leak,
+    ),
+    "QN": Scenario(
+        "quiz check, only the problem written",
+        "Is my answer right?",
+        lambda: make_board([EQUATION]),
+        "idle",
+        mode="quiz",
+        task=QUIZ_TASK,
+        context=quiz_context,
+        check=_no_leak,
+    ),
+    "QDI": Scenario(
+        "invented quiz: dictate problem 1, empty board",
+        "Start a quiz.",
+        lambda: make_board([]),
+        "idle",
+        mode="quiz",
+        task=INVENTED_DICTATE,
+        context=[],
+        check=_reads_some_equation,
+    ),
+    "QCI": Scenario(
+        f"invented quiz: check {INVENTED_PROBLEM}, correct x = 4",
+        "Check my answer.",
+        lambda: make_board([INVENTED_PROBLEM, "x = 4"]),
+        "celebrating",
+        mode="quiz",
+        task=INVENTED_CHECK,
+        context=[],
+        check=_invented_next,
+    ),
+    "QWI": Scenario(
+        f"invented quiz: check {INVENTED_PROBLEM}, wrong x = 3",
+        "Check my answer.",
+        lambda: make_board([INVENTED_PROBLEM, "x = 3"]),
+        "error",
+        mode="quiz",
+        task=INVENTED_CHECK,
+        context=[],
+        check=_no_invented_leak,
     ),
     "LO": Scenario(
         "learn offer, empty board",
@@ -285,6 +476,8 @@ SCENARIOS = {"biology": BIO_SCENARIOS, "math": MATH_SCENARIOS}
 
 def judge(scenario: Scenario, action: AvatarAction) -> list[str]:
     problems = [] if action.animation_state == scenario.expected else [f"state {action.animation_state}"]
+    if echoes(action.spoken_text, scenario.query):
+        problems.append("repeated the student")
     reason = scenario.check(action.spoken_text)
     return problems + ([reason] if reason else [])
 
@@ -296,14 +489,19 @@ def run_scenarios(
         if only and key not in only:
             continue
         jpeg, regions = scenario.board()
+        context = scenario.chunks()
         counts: Counter[str] = Counter()
         passed, notation, times = 0, 0, []
         for i in range(runs):
             t = time.perf_counter()
-            args = (scenario.query, jpeg, scenario.context, regions, SIZE)
+            args = (scenario.query, jpeg, context, regions, SIZE)
             kwargs = {"mode": scenario.mode, "task": scenario.task, "recent_turns": scenario.turns}
             # raw skips evaluate's math post-processing (quiz grading, offer question, mathspeak): the model alone.
-            a, read = client._evaluate(*args, **kwargs) if raw else (client.evaluate(*args, **kwargs), None)
+            if raw:
+                reply = client._evaluate(*args, **kwargs)
+                a, read = reply.action, reply.board_answer or reply.board_problem
+            else:
+                a, read = client.evaluate(*args, **kwargs), None
             times.append(time.perf_counter() - t)
             counts[a.animation_state] += 1
             fails = judge(scenario, a)

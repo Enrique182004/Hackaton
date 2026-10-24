@@ -897,13 +897,13 @@ def test_cross_origin_tutor_changes_blocked(built: Any) -> None:
     assert client.get(TUTOR).get_json()["mode"] == "help"
 
 
-def test_quiz_start_without_problems_lets_the_model_invent_them(built: Any) -> None:
+def test_quiz_start_without_problems_invents_them(built: Any) -> None:
+    from biobench_sar.rag.quiz_bank import solve_problem
+
     body = built[0].test_client().post(f"{TUTOR}/quiz/start").get_json()
-    assert body == {
-        "mode": "quiz",
-        "learn_topic": None,
-        "quiz": {"active": True, "number": 1, "total": 10, "score": 0, "problem": None},
-    }
+    problem = body["quiz"].pop("problem")
+    assert body == {"mode": "quiz", "learn_topic": None, "quiz": {"active": True, "number": 1, "total": 10, "score": 0}}
+    assert solve_problem(problem), "the projector card shows an invented problem the code can grade"
 
 
 def test_quiz_start_uses_ticked_uploads_and_stop_ends_it(built: Any, ingest_texts: list[str]) -> None:
@@ -986,6 +986,83 @@ def test_startup_drops_quiz_problems_of_missing_files(
     stale.replace_source("gone.md", [QuizProblem("2 + 2", "4", "", 1, "gone.md")])
     flask_app, _ = app_module.create_app(settings, fakes, template_folder=str(templates_dir))
     assert flask_app.config["SAR_ASSISTANT"].quiz_bank.sources() == ["a.pdf"]
+
+
+def _seed_dir(tmp_path: Path) -> Path:
+    folder = tmp_path / "seed" / "math"
+    folder.mkdir(parents=True)
+    (folder / "quiz_bank.csv").write_text("problem,answer\n3x + 5 = 20,x = 5\n")
+    (folder / "tutoring_guide.md").write_text("# Guide\nNever give the answer.\n")
+    return folder
+
+
+def test_seed_never_merges_into_a_file_the_student_uploaded(tmp_path: Path, fakes: Any) -> None:
+    from biobench_sar.rag.quiz_bank import QuizBank, QuizProblem
+
+    mine = QuizProblem("2 + 2", "4", "", 1, "quiz_bank.csv")
+    bank = QuizBank(tmp_path / "bank.json")
+    bank.replace_source("quiz_bank.csv", [mine])
+    fakes.store.sources = [{"source": "quiz_bank.csv", "type": "csv", "chunks": 1}]
+    marker = tmp_path / ".seeded"
+    added = app_module.seed_knowledge(fakes.store, _seed_dir(tmp_path), marker=marker, quiz_bank=bank)
+    assert added > 0 and {c.source for c in fakes.store.chunks} == {"tutoring_guide.md"}
+    assert bank.problems() == [mine], "the student's own quiz_bank.csv keeps its problems"
+    assert marker.read_text().split() == ["math"]
+
+
+def test_seed_marker_waits_until_every_file_went_in(
+    tmp_path: Path, fakes: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from biobench_sar.rag import ingestor
+
+    real = ingestor.ingest_file
+    broken = {"tutoring_guide.md"}
+
+    def flaky(path: Any) -> Any:
+        if Path(path).name in broken:
+            raise RuntimeError("embedder not ready")
+        return real(path)
+
+    monkeypatch.setattr(ingestor, "ingest_file", flaky)
+    marker, folder = tmp_path / ".seeded", _seed_dir(tmp_path)
+
+    def stored() -> list[str]:
+        return sorted({c.source for c in fakes.store.chunks})
+
+    app_module.seed_knowledge(fakes.store, folder, marker=marker)
+    assert stored() == ["quiz_bank.csv"] and not marker.exists(), "a failed file is tried again next start"
+    broken.clear()
+    app_module.seed_knowledge(fakes.store, folder, marker=marker)
+    assert stored() == ["quiz_bank.csv", "tutoring_guide.md"] and marker.read_text().split() == ["math"]
+    assert len(fakes.store.chunks) == 2, "the file that went in the first time is not added twice"
+
+
+def test_invented_quiz_runs_end_to_end_on_the_mock_model(
+    settings: Settings, fakes: Any, templates_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real VLMClient (mock backend) + assistant with no quiz problems: dictate, check, the next one is checked."""
+    from biobench_sar.llm.vlm_client import VLMClient
+
+    fakes.vlm = VLMClient("mock", "m", "u", profile="math")
+    fakes.vision.frame = np.full((40, 40, 3), 255, np.uint8)
+    vision = types.ModuleType("biobench_sar.core.vision_loop")
+    vision.encode_jpeg = lambda frame, quality=80: b"jpeg"  # type: ignore[attr-defined]
+    ink = [{"x": 1, "y": 1, "w": 5, "h": 5, "cx": 3, "cy": 3}]
+    vision.find_ink_regions = lambda frame, **kw: ink  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "biobench_sar.core.vision_loop", vision)
+    flask_app, socketio = app_module.create_app(settings, fakes, template_folder=str(templates_dir))
+    fakes.audio.on_query = flask_app.config["SAR_HANDLE_QUERY"]
+    tutor = flask_app.config["SAR_ASSISTANT"].tutor
+    first = _ask(flask_app, socketio, "start a quiz")
+    problem = tutor.current().problem
+    assert first["animation_state"] == "idle" and tutor.dictated and tutor.invented
+    checked = _ask(flask_app, socketio, "check my answer")
+    assert checked["animation_state"] == "celebrating" and tutor.quiz_number == 2 and tutor.score == 1
+    assert tutor.dictated and tutor.current().problem != problem, "problem two was read out with the praise"
+    _ask(flask_app, socketio, "check my answer")
+    assert tutor.quiz_number == 3 and tutor.score == 2, "the answer to problem two was checked, not re-dictated"
+    hint = _ask(flask_app, socketio, "I'm stuck")
+    assert hint["animation_state"] == "pointing" and tutor.quiz_number == 3
 
 
 def test_notify_documents_is_exposed_for_startup_seeding(built: Any) -> None:

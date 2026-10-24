@@ -113,6 +113,34 @@ def test_build_services_passes_profile_to_vlm(monkeypatch: pytest.MonkeyPatch, t
     assert svc.vlm.kwargs["profile"] == profile  # type: ignore[attr-defined]
 
 
+def test_build_services_builds_the_real_vlm_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The fakes take **kwargs; this catches a VLMClient signature that the assistant's call does not fit."""
+    from biobench_sar import app as app_module
+    from biobench_sar.core import vision_loop
+    from biobench_sar.llm import tts_engine, vlm_client
+    from biobench_sar.rag import vector_store
+
+    for module, name in ((vision_loop, "VisionLoop"), (vector_store, "VectorStore"), (tts_engine, "TTSEngine")):
+        monkeypatch.setattr(module, name, Dummy)
+    settings = Settings(vlm_backend="mock", calibration_file=tmp_path / "calibration.json")
+    svc = app_module.build_services(settings, on_query=lambda q: None, on_state=lambda s: None)
+    assert isinstance(svc.vlm, vlm_client.VLMClient) and svc.vlm.profile == "math"
+    task = {"kind": "quiz", "stage": "dictate", "number": 1, "total": 3, "problem": "x + 2 = 5", "answer": "x = 3"}
+    action = svc.vlm.evaluate(
+        "quiz me", None, [], [], settings.projector_size, mode="quiz", task=task, recent_turns=[{"q": "hi", "a": "ok"}]
+    )
+    assert action.animation_state == "idle" and "x plus two equals five" in action.spoken_text
+
+
+def test_quiz_length_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert Settings().quiz_length == 10
+    monkeypatch.setenv("SAR_QUIZ_LENGTH", "5")
+    assert Settings().quiz_length == 5
+    for bad in ("0", "-3", "ten"):
+        monkeypatch.setenv("SAR_QUIZ_LENGTH", bad)
+        assert Settings().quiz_length == 10
+
+
 def test_profile_defaults_to_math(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SAR_PROFILE", raising=False)
     assert Settings().profile == "math"

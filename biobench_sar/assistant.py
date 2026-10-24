@@ -18,17 +18,37 @@ from pathlib import Path
 from typing import Any
 
 from biobench_sar.config import Settings
-from biobench_sar.rag.quiz_bank import QuizBank, QuizProblem
+from biobench_sar.rag.quiz_bank import QuizBank, QuizProblem, pick_progressive
 from biobench_sar.schemas import AvatarAction, error_action
-from biobench_sar.tutor import TutorSession, detect_learn_request, detect_mode, detect_offer_reply, is_quiz_stop
+from biobench_sar.tutor import (
+    TutorSession,
+    detect_learn_request,
+    detect_mode,
+    detect_offer_reply,
+    is_quiz_stop,
+    is_repeat_request,
+)
 
 log = logging.getLogger(__name__)
 
 WORDS_PER_SECOND = 2.5
 DRAWING_STATES = frozenset({"pointing", "celebrating"})
 HISTORY_SIZE = 50
+NO_ANSWER_TEXT = "I can't see an answer on the board yet. Write it, then ask me to check it."
 # The model or the VLM client often announces the end itself; then the summary only adds the score.
 _QUIZ_END_SAID = re.compile(r"\b(?:last problem|finished|all done|end of the quiz)\b", re.I)
+_UNSET: Any = object()
+
+
+def _speakable(text: str) -> str:
+    """Text the assistant adds itself goes through mathspeak too ("3 of 10" -> "three of ten")."""
+    try:
+        from biobench_sar.llm.mathspeak import to_speech
+
+        return str(to_speech(text)).strip() or text
+    except Exception:
+        return text
+
 
 Emit = Callable[[str, dict[str, Any]], None]
 StartTask = Callable[..., Any]
@@ -206,11 +226,14 @@ class Assistant:
         self._emit("tutor", state)
 
     def quiz_problems(self) -> list[QuizProblem]:
-        """Worksheet problems from the ticked files only."""
-        return self.quiz_bank.problems(self.selection.query_sources())
+        """Worksheet problems from the ticked files only, at most Settings.quiz_length spread over every level."""
+        return pick_progressive(self.quiz_bank.problems(self.selection.query_sources()), self.settings.quiz_length)
+
+    def _start_tutor_quiz(self) -> None:
+        self.tutor.start_quiz(self.quiz_problems(), length=self.settings.quiz_length)
 
     def start_quiz(self) -> None:
-        self.tutor.start_quiz(self.quiz_problems())
+        self._start_tutor_quiz()
         self.push_tutor()
 
     def should_listen(self) -> bool:
@@ -245,11 +268,12 @@ class Assistant:
         try:
             self._emit("transcript", {"text": text})
             self.emit_status("thinking")
-            task = self._plan(text) if self.tutoring else None
-            mode = self.tutor.mode if self.tutoring else "help"
-            self.push_tutor()
             frame = svc.vision.latest_warped()
             ink = find_ink_regions(frame, **self.settings.ink_kwargs) if frame is not None else []
+            # Planned after looking at the board: "how do I add fractions?" next to ink is about that ink.
+            task = self._plan(text, has_ink=bool(ink)) if self.tutoring else None
+            mode = self.tutor.mode if self.tutoring else "help"
+            self.push_tutor()
             context = self._retrieve(text)
             sources = list(dict.fromkeys(chunk.source for chunk in context))
             image = encode_jpeg(frame) if frame is not None else None
@@ -263,12 +287,19 @@ class Assistant:
                 task=task,
                 recent_turns=self.tutor.turns(),
             )
-            if action.animation_state in DRAWING_STATES and not ink and not _is_learn(task):
+            # A failed call (timeout, model down) says nothing about the student: no grading, nothing remembered.
+            failed = bool(getattr(action, "failed", False))
+            checking = task is not None and task["kind"] == "quiz" and task["stage"] == "check"
+            if checking and not ink and not failed:
+                # Nothing on the board to grade. Saying "correct, next problem" here would leave the quiz behind.
+                action = replace(action, spoken_text=NO_ANSWER_TEXT, animation_state="idle")
+            elif action.animation_state in DRAWING_STATES and not ink and not _is_learn(task):
                 # Nothing drawn to point at or approve; small VLMs still pick these for plain questions.
                 action = replace(action, animation_state="idle")
-            if task is not None and task["kind"] == "quiz":
-                action = self._advance_quiz(task, action)
-            self.tutor.add_turn(text, action.spoken_text)
+            if task is not None and task["kind"] == "quiz" and not failed:
+                action = self._advance_quiz(task, action, graded=bool(ink))
+            if not failed:
+                self.tutor.add_turn(text, action.spoken_text)
             self.push_tutor()
             self._emit("avatar_update", action.to_dict())
             self.emit_status("speaking")
@@ -295,19 +326,24 @@ class Assistant:
             self.emit_status("idle")
             self._busy.release()
 
-    def _plan(self, text: str) -> Task | None:
+    def _plan(self, text: str, *, has_ink: bool = False) -> Task | None:
         """What this question asks the model to do: a lesson step, a practice problem, a quiz step or plain help."""
         tutor = self.tutor
-        reply = detect_offer_reply(text) if tutor.offer_pending else None
-        if reply is not None:
-            tutor.resolve_offer()
-            return {"kind": "learn", "topic": tutor.learn_topic, "stage": "example" if reply == "generate" else "own"}
-        topic = detect_learn_request(text)
+        if tutor.offer_pending:
+            reply = detect_offer_reply(text)
+            if reply is not None:
+                tutor.resolve_offer()
+                stage = "example" if reply == "generate" else "own"
+                return {"kind": "learn", "topic": tutor.learn_topic, "stage": stage}
+            # Only the very next turn answers the offer: a "no" or "I'll write it" much later means something else.
+            tutor.expire_offer()
+        topic = detect_learn_request(text, board_in_use=has_ink or tutor.quiz_active)
         if topic is not None:
             tutor.start_learning(topic)
             return {"kind": "learn", "topic": topic, "stage": "offer"}
         asked = detect_mode(text)
-        if asked == "help" and tutor.quiz_active and not is_quiz_stop(text):
+        stuck = asked == "help" and tutor.quiz_active and not is_quiz_stop(text)
+        if stuck:
             asked = None  # "I'm stuck" mid-quiz wants a hint on this problem, not to quit the quiz
         if asked is not None:
             tutor.set_mode(asked)
@@ -317,10 +353,12 @@ class Assistant:
             return None
         if asked == "quiz" or not tutor.quiz_active:
             if not tutor.quiz_active:
-                tutor.start_quiz(self.quiz_problems())
+                self._start_tutor_quiz()
+            stage = "dictate"
+        elif not tutor.dictated or is_repeat_request(text):
             stage = "dictate"
         else:
-            stage = "check" if tutor.dictated else "dictate"
+            stage = "hint" if stuck else "check"
         current, upcoming = tutor.current(), tutor.next_problem()
         return {
             "kind": "quiz",
@@ -332,7 +370,9 @@ class Assistant:
             "next_problem": upcoming.problem if stage == "check" and upcoming else None,
         }
 
-    def _advance_quiz(self, task: Task, action: AvatarAction) -> AvatarAction:
+    def _advance_quiz(self, task: Task, action: AvatarAction, *, graded: bool = True) -> AvatarAction:
+        """Quiz bookkeeping for a finished turn. The VLM client says what it graded and read out (TutorAction
+        verdict / dictated); for a plain AvatarAction the state stands in: celebrating = correct, error = wrong."""
         tutor = self.tutor
         if not tutor.quiz_active or tutor.quiz_number != task["number"]:
             return action  # the quiz was stopped or restarted while the model was thinking
@@ -340,16 +380,24 @@ class Assistant:
             if action.animation_state != "error":
                 tutor.mark_dictated()
             return action
-        if action.animation_state == "error":
+        if task["stage"] != "check" or not graded:
+            return action  # a hint, or nothing on the board to grade: the attempt does not count
+        verdict = getattr(action, "verdict", _UNSET)
+        if verdict is _UNSET:
+            verdict = {"celebrating": "correct", "error": "wrong"}.get(action.animation_state)
+        if verdict == "wrong":
             tutor.record(False)
-        elif action.animation_state == "celebrating":
+        elif verdict == "correct":
             tutor.record(True)
             if not tutor.quiz_active:
                 ending = "" if _QUIZ_END_SAID.search(action.spoken_text) else "That was the last problem! "
-                summary = f"{ending}You solved {tutor.score} of {tutor.quiz_total} on the first try."
+                summary = _speakable(f"{ending}You solved {tutor.score} of {tutor.quiz_total} on the first try.")
                 return replace(action, spoken_text=f"{action.spoken_text} {summary}")
-            if task["next_problem"]:
-                tutor.mark_dictated()  # the model already read the next problem out
+            read = getattr(action, "dictated", _UNSET)
+            if read is _UNSET:
+                read = task["next_problem"]
+            if read:
+                tutor.mark_dictated()  # the next problem was read out with the praise: the next turn checks it
         return action
 
     def _retrieve(self, text: str) -> list[Any]:
