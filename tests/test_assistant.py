@@ -753,6 +753,13 @@ def test_quiz_dictates_then_checks_problems_from_ticked_files(h: Harness) -> Non
     assert _ask(h, "thanks")["task"] is None, "back to help after the quiz"
 
 
+def test_quiz_summary_does_not_repeat_an_announced_end(h: Harness) -> None:
+    _bank(h, "a.md", ("1 + 1", "2", 1))
+    _ask(h, "quiz me")
+    _ask(h, "done", state="celebrating", spoken="Correct! You finished the quiz!", ink=True)
+    assert h.payloads("speak")[-1]["text"] == "Correct! You finished the quiz! You solved 1 of 1 on the first try."
+
+
 def test_quiz_without_worksheet_problems_lets_the_model_invent_them(h: Harness) -> None:
     task = _ask(h, "start a quiz")["task"]
     assert task["problem"] is None and task["answer"] is None and task["total"] == DEFAULT_QUIZ_LENGTH

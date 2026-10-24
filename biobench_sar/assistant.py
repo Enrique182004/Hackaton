@@ -6,6 +6,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
@@ -26,6 +27,8 @@ log = logging.getLogger(__name__)
 WORDS_PER_SECOND = 2.5
 DRAWING_STATES = frozenset({"pointing", "celebrating"})
 HISTORY_SIZE = 50
+# The model or the VLM client often announces the end itself; then the summary only adds the score.
+_QUIZ_END_SAID = re.compile(r"\b(?:last problem|finished|all done|end of the quiz)\b", re.I)
 
 Emit = Callable[[str, dict[str, Any]], None]
 StartTask = Callable[..., Any]
@@ -342,7 +345,8 @@ class Assistant:
         elif action.animation_state == "celebrating":
             tutor.record(True)
             if not tutor.quiz_active:
-                summary = f"That was the last problem! You solved {tutor.score} of {tutor.quiz_total} on the first try."
+                ending = "" if _QUIZ_END_SAID.search(action.spoken_text) else "That was the last problem! "
+                summary = f"{ending}You solved {tutor.score} of {tutor.quiz_total} on the first try."
                 return replace(action, spoken_text=f"{action.spoken_text} {summary}")
             if task["next_problem"]:
                 tutor.mark_dictated()  # the model already read the next problem out

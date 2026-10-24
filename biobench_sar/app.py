@@ -162,7 +162,6 @@ def create_app(
         total = 0
         stored: list[str] = []
         emptied: list[str] = []
-        quiz_changed = False
         for storage in request.files.getlist("files[]") + request.files.getlist("files"):
             name = secure_filename(storage.filename or "")
             if not name:
@@ -188,7 +187,6 @@ def create_app(
                 results.append({"name": name, "chunks": count, "replaced": removed})
                 # Parsed from the saved copy, which the finally below deletes.
                 assistant.quiz_bank.replace_source(name, parse_quiz_file(path, name) if count else [])
-                quiz_changed = True
             except Exception as exc:  # UnsupportedFileType, parse errors, embed errors
                 log.warning("upload %s failed: %s", name, exc)
                 results.append({"name": name, "chunks": 0, "error": str(exc) or type(exc).__name__})
@@ -198,8 +196,6 @@ def create_app(
         for name in emptied:
             assistant.selection.discard(name)  # nothing left in the store under that name
         notify_documents_changed()
-        if quiz_changed:
-            assistant.push_tutor()
         return jsonify({"files": results, "total_chunks": total})
 
     @app.get("/api/status")
@@ -563,7 +559,6 @@ def seed_app_knowledge(app: Flask, settings: Settings, directory: Path | None = 
     def done(names: list[str]) -> None:
         assistant.selection.activate(names)
         notify()
-        assistant.push_tutor()
 
     return seed_knowledge(
         app.config["SAR_SERVICES"].store,
