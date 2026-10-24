@@ -1178,6 +1178,7 @@ class _Out:
     def __init__(self) -> None:
         self.parts: list[str] = []
         self.last_generated = False
+        self.question: tuple[str, int] | None = None  # (aux, len(parts)) after a relation read as a question
 
     def _last_char(self) -> str:
         for part in reversed(self.parts):
@@ -1205,6 +1206,10 @@ class _Out:
 
     def clause_aux(self) -> str:
         """The auxiliary that opens a question right before the cursor: "Is ", "So, is ", "Does "."""
+        if self.question is not None:
+            aux, end = self.question
+            if re.fullmatch(r"\s+(?:or|and)\s+", "".join(self.parts[end:])):
+                return aux  # "Is x = 3 or x = 4?": the second relation is part of the same question
         window = 12
         m = _AUX_RE.search("".join(self.parts[-window:]))
         if m is None or (m.group(1) is None and len(self.parts) > window):
@@ -1277,7 +1282,9 @@ def _convert(text: str) -> str:
                 if parser.i - i > _MAX_REGION_TOKENS:
                     out.generated(_flat(toks[i : parser.i]))
                 else:
-                    out.generated(_render_root(node, out.last_word(), _next_word(toks, parser.i), out.clause_aux()))
+                    aux = out.clause_aux()
+                    out.generated(_render_root(node, out.last_word(), _next_word(toks, parser.i), aux))
+                    out.question = (aux, len(out.parts)) if aux and _is_relation(node) else None
                 i = parser.i
                 continue
         _emit_token(out, toks[i])

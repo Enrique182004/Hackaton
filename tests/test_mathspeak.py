@@ -210,6 +210,8 @@ REVIEW_CASES: list[tuple[str, str]] = [
     ("Is x = 3?", "Is x equal to three?"),
     ("So, is x ≥ 4?", "So, is x greater than or equal to four?"),
     ("Does 3 + 4 = 7?", "Does three plus four equal seven?"),
+    ("Is x = 3 or x = 4?", "Is x equal to three or x equal to four?"),
+    ("Is x = 3? Or x = 4.", "Is x equal to three? Or x equals four."),
     ("The answer is x > 3.", "The answer is x is greater than three."),
     ("Is it true that 7 > 3?", "Is it true that seven is greater than three?"),
     ("What is 8-3?", "What is eight minus three?"),
