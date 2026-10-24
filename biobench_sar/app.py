@@ -493,6 +493,7 @@ def create_app(
                 "language": assistant.language_setting,
                 "current_language": assistant.current_language,
                 "glare": glare_status(),
+                "host_os": host_os(),
             }
         )
 
@@ -780,6 +781,13 @@ def create_app(
     app.config["SAR_JOIN_PIN"] = gate if lan_on else None
     app.config["SAR_PHONES"] = phones
     return app, socketio
+
+
+def host_os() -> str:
+    """Which camera-permission steps the dashboard shows: "mac", "windows" or "other"."""
+    if sys.platform == "darwin":
+        return "mac"
+    return "windows" if sys.platform.startswith("win") else "other"
 
 
 def parse_ui_rects(data: Any) -> list[list[float]] | None:

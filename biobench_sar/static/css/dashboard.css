@@ -335,6 +335,7 @@ input::placeholder { color: var(--ink-faint); }
   .panel > .board-grid { flex: 1 1 auto; min-height: 0; grid-template-rows: minmax(0, 1fr); }
   .board-side { display: flex; flex-direction: column; min-height: 0; align-self: stretch; }
   .board-side .checks { flex: 0 1 auto; min-height: 72px; overflow-y: auto; }
+  .board-side .checks[data-more="1"] { mask-image: linear-gradient(to bottom, #000 calc(100% - 36px), transparent); }
   .board-side .calibrate { flex: none; }
 
   /* More tools: two columns, or three with the phone card; each scrolls on its own. */
