@@ -73,7 +73,9 @@ def materialize(dest: Path) -> int:
 def _sentence_transformer(model: str, cache_folder: Path, local_files_only: bool) -> Any:
     from sentence_transformers import SentenceTransformer
 
-    return SentenceTransformer(model, cache_folder=str(cache_folder), local_files_only=local_files_only)
+    # CPU: hosted macOS runners report an MPS GPU that fails every allocation, and the device doesn't
+    # matter for downloading and checking files.
+    return SentenceTransformer(model, device="cpu", cache_folder=str(cache_folder), local_files_only=local_files_only)
 
 
 def _verify(model: str, dest: Path, load: Loader) -> None:

@@ -388,6 +388,14 @@ def test_bundle_check_reports_every_missing_module(monkeypatch: pytest.MonkeyPat
         imports.run()
 
 
+def test_torch_on_cpu_hides_mps_only_inside_the_block() -> None:
+    torch = pytest.importorskip("torch")
+    before = torch.backends.mps.is_available()
+    with launcher.torch_on_cpu():
+        assert torch.backends.mps.is_available() is False
+    assert torch.backends.mps.is_available() == before
+
+
 @pytest.mark.skipif(os.environ.get("SAR_SLOW") != "1", reason="set SAR_SLOW=1 (loads chromadb, torch, whisper)")
 def test_full_self_test_with_real_services(folders: dict[str, Path]) -> None:
     launcher.prepare_environment(frozen=False)

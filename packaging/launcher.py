@@ -27,7 +27,7 @@ import traceback
 import urllib.error
 import urllib.request
 import webbrowser
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -415,6 +415,23 @@ def http_checks(base_url: str, get: HttpGet = http_get, timeout: float = 15.0, b
     ]
 
 
+@contextlib.contextmanager
+def torch_on_cpu() -> Iterator[None]:
+    """Hide Apple's MPS GPU while a model loads: hosted CI Macs report one that can't allocate memory.
+
+    The self-test checks what the build bundles, not the GPU; the app itself still uses MPS on real Macs.
+    """
+    import torch
+
+    mps = torch.backends.mps
+    original = mps.is_available
+    mps.is_available = lambda: False
+    try:
+        yield
+    finally:
+        mps.is_available = original
+
+
 def bundle_checks(services: Any) -> list[Check]:
     """What a frozen build can lose: lazily imported modules, package data and the bundled embedding model."""
 
@@ -435,8 +452,9 @@ def bundle_checks(services: Any) -> list[Check]:
         from biobench_sar.rag.ingestor import Chunk
 
         store = services.store
-        store.add_chunks([Chunk("Acanthamoeba is a free-living amoeba found in lakes.", "self-test.md", {})])
-        hits = store.query("free-living amoeba", k=1)
+        with torch_on_cpu():
+            store.add_chunks([Chunk("Acanthamoeba is a free-living amoeba found in lakes.", "self-test.md", {})])
+            hits = store.query("free-living amoeba", k=1)
         if not hits or hits[0].source != "self-test.md":
             raise CheckFailed(f"vector store query returned {hits!r}")
         return f"chromadb + sentence-transformers, score {hits[0].score:.2f}"
