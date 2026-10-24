@@ -175,6 +175,7 @@ _MIN_BOX_AREA = 600
 _BOX_PAD = 3
 _ERASE_PAD = 6
 _RING = 15
+_MARK_CHUNK = 1024
 
 
 def _box_rects(mask: np.ndarray, min_area: int) -> list[tuple[int, int, int, int]]:
@@ -202,13 +203,46 @@ def _box_rects(mask: np.ndarray, min_area: int) -> list[tuple[int, int, int, int
     return [r for r in rects if not any(contains(r, o) for o in rects)]
 
 
+def _absorb_marks(
+    symbols: list[tuple[int, int, int, int]], marks: list[tuple[int, int, int, int]], reach: int
+) -> tuple[list[tuple[int, int, int, int]], list[tuple[int, int, int, int]]]:
+    """Grow each symbol (x0, y0, x1, y1) box over the marks within `reach` px; return (symbols, unclaimed marks).
+
+    A mark joins only its nearest symbol, so "3.5" keeps its dot and "-4" its minus sign.
+    """
+    if not symbols or not marks or reach <= 0:
+        return symbols, marks
+    big, small = np.array(symbols), np.array(marks)
+    nearest = np.empty(len(small), np.intp)
+    near = np.empty(len(small), bool)
+    # Chunked so a noisy frame with thousands of specks never builds one huge marks x symbols matrix.
+    for i in range(0, len(small), _MARK_CHUNK):
+        part = small[i : i + _MARK_CHUNK]
+        dx = np.maximum(np.maximum(big[None, :, 0] - part[:, None, 2], part[:, None, 0] - big[None, :, 2]), 0)
+        dy = np.maximum(np.maximum(big[None, :, 1] - part[:, None, 3], part[:, None, 1] - big[None, :, 3]), 0)
+        gap2 = dx * dx + dy * dy
+        best = gap2.argmin(axis=1)
+        nearest[i : i + len(part)] = best
+        near[i : i + len(part)] = gap2[np.arange(len(part)), best] <= reach * reach
+    for col, grow in ((0, np.minimum), (1, np.minimum), (2, np.maximum), (3, np.maximum)):
+        grow.at(big[:, col], nearest[near], small[near, col])
+    return [tuple(int(v) for v in b) for b in big], [tuple(int(v) for v in m) for m in small[~near]]
+
+
 def find_ink_regions(
     frame: np.ndarray,
     min_area: int = 150,
     max_regions: int = 10,
     block_size: int = 31,
     c: int = 15,
+    small_merge_px: int = 24,
 ) -> list[InkRegion]:
+    """Bounding boxes of marker ink in `frame`'s own coordinates, largest first.
+
+    Blobs smaller than `small_merge_px`² (or `min_area`) within `small_merge_px` of a larger free-ink
+    blob extend that blob's box instead of standing alone (decimal points, minus signs, superscripts);
+    the rest must still reach `min_area`. Flowchart boxes never absorb marks. 0 disables merging.
+    """
     block_size = max(int(block_size), 3)
     if block_size % 2 == 0:
         block_size += 1
@@ -243,10 +277,21 @@ def find_ink_regions(
         touching = np.unique(labels[ring & (rest > 0)])
         rest[np.isin(labels, touching[touching > 0])] = 0
     contours, _ = cv2.findContours(rest, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    reach = max(int(small_merge_px), 0)
+    # Areas are taken after the dilation above: a decimal point measures ~170-290 px², a minus sign
+    # ~260-390, a superscript ~420. They clear min_area, so alone they become the smallest regions and the
+    # first cut by max_regions; anything under reach² is instead a mark of the symbol beside it.
+    mark_area = max(min_area, reach * reach)
+    symbols: list[tuple[int, int, int, int]] = []  # (x0, y0, x1, y1)
+    marks: list[tuple[int, int, int, int]] = []
     for contour in contours:
+        # A bbox is never smaller than its contour, so the bbox alone decides "contour or bbox >= area".
         x, y, w, h = cv2.boundingRect(contour)
-        if cv2.contourArea(contour) >= min_area or w * h >= min_area:
-            found.append((w * h, x, y, w, h))
+        (symbols if w * h >= mark_area else marks).append((x, y, x + w, y + h))
+    symbols, marks = _absorb_marks(symbols, marks, reach)
+    for x0, y0, x1, y1 in symbols + marks:
+        if (x1 - x0) * (y1 - y0) >= min_area:
+            found.append(((x1 - x0) * (y1 - y0), x0, y0, x1 - x0, y1 - y0))
     found.sort(reverse=True)
     return [
         InkRegion(x=int(x), y=int(y), w=int(w), h=int(h), cx=int(x + w // 2), cy=int(y + h // 2))

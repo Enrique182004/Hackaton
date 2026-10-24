@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from typing import Any
@@ -321,6 +322,7 @@ def _tune_module():
     spec = importlib.util.spec_from_file_location("tune_ink", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module  # dataclasses resolve annotations through sys.modules
     spec.loader.exec_module(module)
     return module
 
@@ -350,3 +352,100 @@ def test_ink_thresholds_are_tunable() -> None:
     # Even block sizes are coerced to the next odd value rather than raising.
     assert len(find_ink_regions(img, block_size=30)) == len(find_ink_regions(img, block_size=31))
     assert len(find_ink_regions(img, max_regions=2)) == 2
+
+
+# --- small maths marks: decimal points, minus signs, superscripts -----------------------------
+
+
+def _number_with_dot(tune) -> tuple[np.ndarray, list]:
+    """Clean '3.5' with a 6 px dot 8 px after the 3 and 14 px before the 5: [box 3, box dot, box 5]."""
+    img = np.full((300, 400, 3), 235, np.uint8)
+    three = tune.glyph(img, "3", 100, 150, 1.8, 5)
+    x = three[0] + three[2] + 8
+    point = tune.dot(img, x + 3, 147, 6.0)
+    five = tune.glyph(img, "5", x + 6 + 14, 150, 1.8, 5)
+    return img, [three, point, five]
+
+
+def test_mark_joins_only_its_nearest_symbol() -> None:
+    tune = _tune_module()
+    img, (three, point, five) = _number_with_dot(tune)
+    regions = find_ink_regions(img, **tune.MATH_PROFILE)
+    assert len(regions) == 2
+    assert tune.region_at(regions, point) is tune.region_at(regions, three)
+    assert tune.region_at(regions, five) is not tune.region_at(regions, three)
+    # Merging off: the dot clears min_area on its own and becomes a third, dot-sized region.
+    alone = find_ink_regions(img, **{**tune.MATH_PROFILE, "small_merge_px": 0})
+    assert len(alone) == 3
+    dot_region = tune.region_at(alone, point)
+    assert dot_region is not None and tune.covered([dot_region], [three, five]) == 0
+
+
+def test_blob_below_min_area_needs_a_neighbour() -> None:
+    tune = _tune_module()
+    img, (three, point, _) = _number_with_dot(tune)
+    tune.dot(img, 330, 60, 6.0)  # the same dot with nothing within reach
+    regions = find_ink_regions(img, min_area=400)
+    assert len(regions) == 2  # '3.' and '5'; the lone dot is below min_area
+    assert tune.region_at(regions, point) is tune.region_at(regions, three)
+    assert not any(r["x"] > 300 for r in regions)
+    # Disabled, the old rule applies: the dot beside the 3 is dropped too.
+    assert tune.region_at(find_ink_regions(img, min_area=400, small_merge_px=0), point) is None
+
+
+def test_decimal_points_and_minus_signs_stay_inside_their_numbers() -> None:
+    tune = _tune_module()
+    for name, seed in (("spec", 0), ("spec", 1), ("stress", 2)):
+        board = tune.math_board(seed, specks=tune.SPECKS, glare=tune.GLARE_GAIN, **tune.CONDITIONS[name])
+        regions = find_ink_regions(board.image, **tune.MATH_PROFILE)
+        for tokens in board.equations:
+            for i, (ch, box) in enumerate(tokens):
+                if ch not in (".", "-"):
+                    continue
+                region = tune.region_at(regions, box)
+                neighbours = [b for c, b in tokens[max(i - 1, 0) : i + 2] if c not in tune.MARKS]
+                assert region is not None, (name, seed, ch, box)
+                assert tune.covered([region], neighbours) >= 1, (name, seed, ch, box, region)
+        assert tune.covered(regions, board.marks) == len(board.marks)
+        assert tune.covered(regions, board.glyphs) == len(board.glyphs)
+        # 5-8 px marks far from any ink still clear min_area on their own.
+        assert tune.covered(regions, board.lone) == len(board.lone)
+
+
+def test_merging_keeps_marks_under_the_default_region_cap() -> None:
+    tune = _tune_module()
+    board = tune.math_board(0, glare=tune.GLARE_GAIN, **tune.CONDITIONS["spec"])
+    assert tune.covered(find_ink_regions(board.image), board.marks) == len(board.marks)
+    # Unmerged, every mark is a tiny region and the largest-first cap of 10 cuts them all.
+    assert tune.covered(find_ink_regions(board.image, small_merge_px=0), board.marks) == 0
+
+
+def test_isolated_speck_is_ignored() -> None:
+    tune = _tune_module()
+    for name, seed in (("spec", 0), ("stress", 1)):
+        img = np.full((tune.H, tune.W, 3), 235, np.uint8)
+        tune.dot(img, 960.4, 700.3, 2.0, 120)
+        board = tune.degrade(img, seed, glare=tune.GLARE_GAIN, **tune.CONDITIONS[name])
+        assert find_ink_regions(board, **tune.MATH_PROFILE) == []
+        assert find_ink_regions(board) == []
+
+
+def test_flowchart_unchanged_at_math_profile() -> None:
+    tune = _tune_module()
+    for seed, stroke in ((0, 5), (1, 7), (2, 9)):
+        board = tune.flowchart_board(seed, stroke=stroke, glare=tune.GLARE_GAIN)
+        regions = find_ink_regions(board, **tune.MATH_PROFILE)
+        assert tune.score(regions) == (5, 0), (seed, stroke, regions)
+        assert len(regions) == 6
+
+
+def test_find_ink_regions_under_30ms_at_1080p() -> None:
+    tune = _tune_module()
+    board = tune.math_board(0, specks=tune.SPECKS, glare=tune.GLARE_GAIN, **tune.CONDITIONS["spec"]).image
+    chart = tune.flowchart_board(0, stroke=7)
+    assert board.shape == chart.shape == (1080, 1920, 3)
+    # Best of 15: the floor is what the code costs; a mean also measures whatever else shares the CPU.
+    math_ms = tune.best_ms(board, runs=15, **tune.MATH_PROFILE)
+    chart_ms = tune.best_ms(chart, runs=15)
+    print(f"find_ink_regions 1080p best-of-15: maths {math_ms:.1f} ms, flowchart {chart_ms:.1f} ms")
+    assert math_ms < 30 and chart_ms < 30
