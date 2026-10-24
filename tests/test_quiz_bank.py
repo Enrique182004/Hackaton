@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -11,12 +12,20 @@ import pytest
 
 from biobench_sar.rag.quiz_bank import (
     DEFAULT_LEVEL,
+    INVENTED_SOURCE,
+    POSITION_LEVELS,
     QuizBank,
     QuizProblem,
+    invent_problem,
     is_worksheet,
     parse_quiz_file,
     parse_worksheet_text,
+    pick_progressive,
+    solve_problem,
+    strip_answers,
 )
+
+SEED = Path(__file__).resolve().parent.parent / "biobench_sar" / "knowledge" / "math"
 
 WORKSHEET = """# Equations worksheet
 Show your work for every problem.
@@ -73,7 +82,43 @@ def test_worksheet_problems_without_answers() -> None:
     problems = parse_worksheet_text("Quiz\n1. 7 - 3 = ?\n2. 4 × 5 = ?", "q.txt")
     assert [(p.problem, p.answer, p.level, p.topic) for p in problems] == [
         ("7 - 3 = ?", None, DEFAULT_LEVEL, ""),
-        ("4 × 5 = ?", None, DEFAULT_LEVEL, ""),
+        ("4 × 5 = ?", None, DEFAULT_LEVEL + 1, ""),
+    ]
+
+
+def test_unlevelled_worksheet_gets_levels_by_position() -> None:
+    text = (SEED / "worksheet_linear_equations.md").read_text()
+    problems = parse_worksheet_text(text, "w.md")
+    levels = [p.level for p in problems]
+    assert levels == [1, 1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5], "one-step first, x on both sides last"
+    assert problems[-1].problem == "2(x + 5) = 3x + 4" and problems[-1].level == POSITION_LEVELS
+
+
+def test_seeded_quiz_is_progressive_and_short(tmp_path: Path) -> None:
+    bank = QuizBank(tmp_path / "bank.json")
+    for name in ("quiz_bank.csv", "worksheet_linear_equations.md", "tutoring_guide.md"):
+        bank.replace_source(name, parse_quiz_file(SEED / name, name))
+    everything = bank.problems()
+    assert len(everything) == 43
+    quiz = pick_progressive(everything, 10)
+    assert len(quiz) == 10 and len({p.problem for p in quiz}) == 10
+    assert [p.level for p in quiz] == sorted(p.level for p in quiz)
+    assert quiz[0].level == 1 and quiz[-1].level == 5, "the subset climbs every level"
+    assert "2(x + 5) = 3x + 4" not in [p.problem for p in quiz[:5]], "the hardest worksheet problem is not early"
+
+
+def test_pick_progressive_edges() -> None:
+    problems = [_p(str(n)) for n in range(5)]
+    assert pick_progressive(problems, 10) == problems and pick_progressive(problems, 0) == problems
+    assert pick_progressive(problems, 1) == problems[:1]
+    assert [p.problem for p in pick_progressive(problems, 3)] == ["0", "2", "4"]
+
+
+def test_answer_line_of_a_skipped_instruction_is_not_attached() -> None:
+    text = "Worksheet\n1. 2x = 8\n2. Show your work\nAnswer: neatly\n3. x + 1 = 3\nAnswer: x = 2\n"
+    assert [(p.problem, p.answer) for p in parse_worksheet_text(text, "w.md")] == [
+        ("2x = 8", None),
+        ("x + 1 = 3", "x = 2"),
     ]
 
 
@@ -99,10 +144,26 @@ def test_spanish_worksheet() -> None:
         ("notes.md", "Intro\n## Practice problems\n1. 1 + 1", True),
         ("tutoring_guide.md", "# Math tutoring guide\n1. Ask what 3x = 12 means.", False),
         ("protocol.md", "Lab protocol\n1. Add 5 mL = one tube", False),
+        # neutral names, laid out like a worksheet
+        ("algebra.md", "Solve each equation.\nProblem 1: 3x + 5 = 20\nAnswer: x = 5\nProblem 2: 2x = 8", True),
+        ("unit3.txt", "1. 3x + 5 = 20\n2. 4x - 2 = 10", True),
+        ("unit3.txt", "Notes\n1. 3x + 5 = 20\nAnswer: x = 5", True),
+        ("tips.md", "1. If the student writes 3x = 12, ask what undoes times 3.\n2. Then ask about 2x = 6 too.", False),
+        ("notes.md", "1. 3x + 5 = 20\n2. Read chapter two\n3. Bring the book\n4. Ask the teacher", False),
     ],
 )
 def test_is_worksheet(source: str, text: str, expected: bool) -> None:
     assert is_worksheet(source, text) is expected
+
+
+def test_neutrally_named_worksheet_file_has_problems(tmp_path: Path) -> None:
+    path = tmp_path / "algebra.md"
+    path.write_text("Solve each equation.\nProblem 1: 3x + 5 = 20\nAnswer: x = 5\nProblem 2: 4x - 2 = 10\n")
+    assert [(p.problem, p.answer) for p in parse_quiz_file(path, "algebra.md")] == [
+        ("3x + 5 = 20", "x = 5"),
+        ("4x - 2 = 10", None),
+    ]
+    assert parse_quiz_file(SEED / "tutoring_guide.md", "tutoring_guide.md") == []
 
 
 def test_parse_markdown_worksheet_file(tmp_path: Path) -> None:
@@ -276,3 +337,101 @@ def test_bank_concurrent_updates(bank_path: Path) -> None:
     [t.start() for t in threads]
     [t.join() for t in threads]
     assert len(QuizBank(bank_path).problems()) == 80
+
+
+# ---- answers kept from the model ---------------------------------------------
+
+
+def _seed_chunks() -> list[str]:
+    from biobench_sar.rag.ingestor import ingest_file
+
+    return [c.text for name in ("quiz_bank.csv", "worksheet_linear_equations.md") for c in ingest_file(SEED / name)]
+
+
+def test_strip_answers_on_the_real_seed_chunks() -> None:
+    chunks = _seed_chunks()
+    assert any("Answer: x = 4" in c for c in chunks) and any("answer is x = 5" in c for c in chunks)
+    for text in map(strip_answers, chunks):
+        assert not re.search(r"\banswer\s*(?:is|:)", text, re.I), text
+        assert "solution is" not in text.lower()
+    worksheet = strip_answers(chunks[-1])
+    assert "5. 2x + 3 = 11\n" in worksheet, "the problems stay"
+    assert not re.search(r"^\s*x = \d+\s*$", worksheet, re.M), "the answers go"
+    csv_row = strip_answers(chunks[1])
+    assert "problem is 3x + 5 = 20, topic is two-step equations, level is 3." in csv_row
+    assert "x = 5" not in csv_row
+
+
+def test_strip_answers_formats() -> None:
+    text = (
+        "# Quiz\n1. x + 9 = 15 (answer: 6)\n2. 2x = 8\n   **Answer:** x = 4\nNever read an answer out loud.\n"
+        "## Answer key\n1. 6\n2. x = 4\n## Level 2\n3. y + 1 = 2\n"
+    )
+    assert (
+        strip_answers(text)
+        == "# Quiz\n1. x + 9 = 15\n2. 2x = 8\nNever read an answer out loud.\n## Level 2\n3. y + 1 = 2"
+    )
+    row = "Row 1: question is 5x = 35, solution is x = 7, difficulty is 2. Row 2: question is y + 2.5 = 8, answer is y = 5.5."
+    assert strip_answers(row) == "Row 1: question is 5x = 35, difficulty is 2. Row 2: question is y + 2.5 = 8."
+    assert strip_answers("If both sides match, the answer is correct.") == "If both sides match, the answer is correct."
+
+
+# ---- solving and inventing ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("problem", "answer"),
+    [
+        ("3x + 5 = 20", "x = 5"),
+        ("2(x + 5) = 3x + 4", "x = 6"),
+        ("x/2 - 4 = 3", "x = 14"),
+        ("10 - 3x = 4", "x = 2"),
+        ("-4x = 24", "x = -6"),
+        ("y + 2.5 = 8", "y = 11/2"),
+        ("Solve for x: 4(x - 1) = 20", "x = 6"),
+        ("Solve 2x = 10", "x = 5"),
+        ("1/4 + 2/4", "3/4"),
+        ("5/6 ÷ 1/3", "5/2"),
+        ("2/3 × 3/5", "2/5"),
+        ("12 ÷ 4 = ?", "3"),
+        ("What is 6 x 7?", "42"),
+        ("x^2 + 5x + 6 = 0", None),
+        ("x + y = 10 and x - y = 4", None),
+        ("x * x = 4", None),
+        ("2x = 2x", None),
+        ("x / (x + 1) = 2", None),
+        ("1/0", None),
+        ("Show your work", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_solve_problem(problem: str | None, answer: str | None) -> None:
+    assert solve_problem(problem) == answer
+
+
+def test_solver_agrees_with_every_seed_answer() -> None:
+    import csv
+
+    from biobench_sar.llm.vlm_client import answer_value
+
+    with (SEED / "quiz_bank.csv").open() as fh:
+        for row in csv.DictReader(fh):
+            solved = solve_problem(row["problem"])
+            assert solved is None or answer_value(solved) == answer_value(row["answer"]), row
+    for p in parse_quiz_file(SEED / "worksheet_linear_equations.md", "w.md"):
+        assert solve_problem(p.problem) == p.answer, p
+
+
+def test_invented_problems_are_progressive_and_solvable() -> None:
+    import random
+
+    for seed in range(100):
+        rng = random.Random(seed)
+        quiz = [invent_problem(n, 10, rng) for n in range(1, 11)]
+        assert [p.level for p in quiz] == [1, 1, 2, 2, 3, 4, 4, 5, 5, 6]
+        for p in quiz:
+            assert p.source == INVENTED_SOURCE and p.answer == solve_problem(p.problem)
+            value = p.answer.split("=")[1].strip()  # type: ignore[union-attr]
+            assert value.isdigit() and int(value) > 0, p  # a whole positive number for a middle-school quiz
+    assert invent_problem(1, 1).level == 1 and invent_problem(5, 1).level == 6

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import random
 import threading
 
 import pytest
 
-from biobench_sar.rag.quiz_bank import QuizProblem
+from biobench_sar.rag.quiz_bank import INVENTED_SOURCE, QuizProblem, solve_problem
 from biobench_sar.tutor import (
     DEFAULT_QUIZ_LENGTH,
     MAX_TURNS,
@@ -14,6 +15,7 @@ from biobench_sar.tutor import (
     detect_mode,
     detect_offer_reply,
     is_quiz_stop,
+    is_repeat_request,
 )
 
 
@@ -45,7 +47,15 @@ def test_modes() -> None:
         ("I'm stuck", "help"),
         ("I’m stuck", "help"),
         ("give me a hint", "help"),
+        ("I want a quiz", "quiz"),
+        ("can I have a quiz on fractions", "quiz"),
+        ("let's practice", "practice"),
+        ("Practice!", "practice"),
+        ("I want to practice", "practice"),
+        ("I'm done with the quiz", "help"),
+        ("Stop quizzing me", "help"),
         ("what is three times four", None),
+        ("I practiced yesterday", None),
         ("this is helpful", None),
         ("", None),
     ],
@@ -61,6 +71,23 @@ def test_detect_mode_prefers_practice_over_a_plain_help_word() -> None:
 @pytest.mark.parametrize(("text", "expected"), [("stop the quiz", True), ("I'm stuck", False), ("help", False)])
 def test_is_quiz_stop(text: str, expected: bool) -> None:
     assert is_quiz_stop(text) is expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("can you repeat the problem?", True),
+        ("say that again", True),
+        ("what was the question?", True),
+        ("Sorry?", True),
+        ("I didn't hear it", True),
+        ("check my answer", False),
+        ("I got x = 5", False),
+        ("I'm stuck", False),
+    ],
+)
+def test_is_repeat_request(text: str, expected: bool) -> None:
+    assert is_repeat_request(text) is expected
 
 
 @pytest.mark.parametrize(
@@ -97,10 +124,50 @@ def test_detect_learn_request(text: str, expected: str) -> None:
         "what is three plus four",
         "is this right?",
         "",
+        # about the board: the student's own equation, answer or step
+        "how do I solve for x in the equation on the board",  # "board" was cut off at eight words
+        "how do I solve the equation",
+        "how do I factor the expression",
+        "how can I check my answer to the equation",
+        "how do I move the 5 to the other side of the equation",
+        "Can you explain the equation?",
+        "Can you teach me the next step?",
+        "teach me how to do the next step",
+        "How do I get rid of the fraction?",
+        "how do I isolate the variable",
+        "how do I simplify the left side of the equation",
+        "explain the next step of the equation",
+        # an explicit problem: step-by-step help with it, not a lesson
+        "how do I solve 3x + 5 = 20",
+        "how should I factor x squared plus 5x plus 6",
+        "how do I add one half and one third",
+        "teach me how to solve three x plus five equals twenty",
+        "how do I do this one?",
+        "why is this wrong",
     ],
 )
 def test_detect_learn_request_ignores_board_questions(text: str) -> None:
     assert detect_learn_request(text) is None
+
+
+@pytest.mark.parametrize("text", ["How do I add fractions?", "explain fractions to me", "how to graph a line"])
+def test_how_to_forms_are_about_the_board_while_it_is_in_use(text: str) -> None:
+    assert detect_learn_request(text) is not None
+    assert detect_learn_request(text, board_in_use=True) is None
+
+
+def test_learn_and_teach_me_still_start_a_lesson_while_the_board_is_in_use() -> None:
+    assert detect_learn_request("teach me fractions", board_in_use=True) == "fractions"
+    assert detect_learn_request("I want to learn about the order of operations", board_in_use=True) == (
+        "the order of operations"
+    )
+
+
+def test_long_topic_without_board_words_is_cut_to_eight_words() -> None:
+    topic = detect_learn_request(
+        "teach me how to add and subtract fractions with unlike denominators and whole numbers"
+    )
+    assert topic == "adding and subtract fractions with unlike denominators and"
 
 
 def test_learn_topic_is_short() -> None:
@@ -126,7 +193,12 @@ def test_learn_topic_is_short() -> None:
         ("yes I do", "own"),
         ("I have an exercise from homework", "own"),
         ("let me write it on the board", "own"),
+        ("I don't", "generate"),
+        ("um I don't", "generate"),
+        ("Give me an easy one", "generate"),
+        ("give me a hard problem", "generate"),
         ("what is a fraction", None),
+        ("I don't get it", None),
         ("hmm", None),
         ("", None),
     ],
@@ -190,14 +262,34 @@ def test_quiz_runs_through_its_problems_and_finishes() -> None:
     assert t.score == 2, "a finished quiz ignores further answers"
 
 
-def test_quiz_without_problems_lets_the_model_invent_them() -> None:
-    t = TutorSession()
+def test_quiz_without_problems_invents_progressive_ones() -> None:
+    t = TutorSession(rng=random.Random(7))
     t.start_quiz([])
-    assert t.quiz_total == DEFAULT_QUIZ_LENGTH and t.current() is None and t.next_problem() is None
-    for _ in range(DEFAULT_QUIZ_LENGTH):
-        assert t.quiz_active
+    assert t.quiz_total == DEFAULT_QUIZ_LENGTH and t.invented
+    seen: list[QuizProblem] = []
+    for n in range(1, DEFAULT_QUIZ_LENGTH + 1):
+        current = t.current()
+        assert current is not None and t.quiz_active
+        assert t.to_dict()["quiz"]["problem"] == current.problem, "the card shows the invented problem"
+        assert current.answer == solve_problem(current.problem) and current.source == INVENTED_SOURCE
+        upcoming = t.next_problem()
+        assert (upcoming is None) == (n == DEFAULT_QUIZ_LENGTH)
+        assert t.current() is current, "the same problem until it is answered"
+        seen.append(current)
         t.record(True)
+        if upcoming is not None:
+            assert t.current() is upcoming, "the problem read out as 'next' is the one checked next"
     assert not t.quiz_active and t.score == DEFAULT_QUIZ_LENGTH
+    levels = [p.level for p in seen]
+    assert levels == sorted(levels) and levels[0] == 1 and levels[-1] > 3, "easy first, harder later"
+
+
+def test_invented_quiz_length() -> None:
+    t = TutorSession()
+    t.start_quiz([], length=3)
+    assert t.quiz_total == 3
+    t.start_quiz(_problems("1 + 1"), length=3)
+    assert t.quiz_total == 1 and not t.invented
 
 
 def test_start_quiz_restarts() -> None:
@@ -245,6 +337,30 @@ def test_learning_offer() -> None:
     assert t.to_dict()["learn_topic"] == "fractions"
     t.resolve_offer()
     assert t.learn_topic == "fractions" and not t.offer_pending
+    t.expire_offer()
+    assert t.learn_topic == "fractions", "an answered offer keeps its lesson"
+
+
+def test_unanswered_offer_expires() -> None:
+    t = TutorSession()
+    t.start_learning("fractions")
+    t.expire_offer()
+    assert not t.offer_pending and t.learn_topic is None
+
+
+@pytest.mark.parametrize(("mode", "topic"), [("help", "fractions"), ("practice", None), ("quiz", None)])
+def test_mode_change_ends_the_offer(mode: str, topic: str | None) -> None:
+    t = TutorSession()
+    t.start_learning("fractions")
+    t.set_mode(mode)
+    assert not t.offer_pending and t.learn_topic == topic
+
+
+def test_quiz_start_ends_the_lesson() -> None:
+    t = TutorSession()
+    t.start_learning("fractions")
+    t.start_quiz([])
+    assert not t.offer_pending and t.learn_topic is None
 
 
 def test_turns_keep_the_last_three_oldest_first() -> None:

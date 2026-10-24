@@ -128,26 +128,26 @@ Board (ink center 650,620): x^2 = 49. Query: "Just tell me x."
 {"spoken_text": "You can do it! Undo x squared by taking the square root of both sides. Write that step.", "animation_state": "pointing", "target_x": 650, "target_y": 620}"""
 
 MATH_PRACTICE = """MODE: similar problem.
-- Read the equation on the board.
-- Make ONE new problem of the same type and difficulty: change the numbers (and maybe the letter). \
-It must be different from the board's problem.
-- Dictate it in words so the student can write it. Do not solve it.
+- Read the problem on the board.
+- Make ONE new problem of the same type and difficulty with NEW numbers (and maybe a new letter). \
+It must be different from the board's problem: never read the board's problem back.
+- Dictate only the new problem in words so the student can write it. Do not solve it or say its answer.
 - animation_state "idle"; target = screen center.
 - If the board is empty, make up a simple one-step equation.
 
 Examples (JSON only, 1920x1080 screen):
 Board: 2x + 3 = 11. Query: "Give me a similar problem."
 {"spoken_text": "Try this one. Four x plus seven equals nineteen. Write it down and solve it.", "animation_state": "idle", "target_x": 960, "target_y": 540}
-Board: 3/4 - 1/2. Query: "Another one like this."
-{"spoken_text": "Here is a new one. Five sixths minus one third. Give it a try.", "animation_state": "idle", "target_x": 960, "target_y": 540}"""
+Board: 2/3 + 1/6. Query: "Another one like this."
+{"spoken_text": "Here is a new one. Three fourths plus one eighth. Give it a try.", "animation_state": "idle", "target_x": 960, "target_y": 540}"""
 
 MATH_QUIZ = """MODE: quiz. The message gives the quiz stage and the problem.
-- Stage dictate: say the problem number and read the given problem in words, then ask the student to write the \
-answer on the board. Do not solve it. board_answer "", "idle", target = screen center.
-- Stage hint: the student is stuck. Explain ONLY the next single step of the given problem and ask them to write \
-it. NEVER say the answer. board_answer "", "pointing", target = the ink region to work on.
-- Stage check: FIRST copy the student's answer exactly as written on the board (usually the last line) into \
-board_answer. Copy only what is written, never solve it yourself: "" if no answer is written.
+- Stage dictate: say the problem number, read the given problem in words and ask for the answer on the board. \
+Do not solve it. board_answer "", "idle", target = screen center.
+- Stage hint: the student is stuck. Explain ONLY the next step of the given problem and ask them to write it. \
+NEVER say the answer. board_answer "", "pointing" at the ink to work on.
+- Stage check: FIRST look at the photo and copy the bottom line of the student's writing into board_answer, \
+exactly as written (the problem itself if no answer is written yet). Never solve the problem yourself.
   - Correct: "celebrating"; praise briefly. If a next problem is given, also read it in words.
   - Wrong: "error"; say "Not quite" and give ONE short hint. NEVER say the correct answer \
 and do not read the next problem.
@@ -190,8 +190,8 @@ MATH_PROMPTS = {
 # Repeated in the message: a 3B model follows the user turn more closely than the system prompt.
 MODE_REMINDERS = {
     "help": "Explain only the next step. Never say the final answer or the value of the variable.",
-    "practice": "Make ONE new problem like the one on the board (same type and difficulty, different numbers) and "
-    "dictate it in words. Do not solve or explain the board's problem.",
+    "practice": "Make ONE new problem like the one on the board (same type and difficulty, NEW numbers) and "
+    "dictate it in words. Never read the board's problem back; do not solve or explain either problem.",
 }
 
 MODE_LABELS = {
@@ -350,8 +350,9 @@ def quiz_task_text(task: Mapping[str, Any] | None) -> str:
     elif number >= total:
         lines.append("This is the last problem: if the answer is correct, congratulate the student on finishing.")
     lines.append(
-        "First copy the student's answer from the board into board_answer. "
-        'If the answer is wrong: "error", one hint, never the answer.'
+        "First copy the bottom line of the student's writing in the photo into board_answer, exactly as written "
+        '(not a problem from this message); do not solve anything yourself. If the answer is wrong: "error", one '
+        "hint, never the answer."
     )
     return "\n".join(lines)
 
@@ -468,7 +469,7 @@ _NUMBER = (
 # "So x equals five.", "The answer is 5", "x should be seven": the value of the letter said as a result. Not a step
 # such as "three x equals fifteen" (the letter has a number in front) and not a question.
 _REVEAL_RE = re.compile(
-    r"^(?:so|then|and|that\s+means|this\s+means|which\s+means|now|great|yes|correct)?[\s,]*"
+    r"(?:^|[,;:]|\b(?:so|then|and|means|now|great|yes|correct|because)\b)\s*"
     r"(?:x|y|n|the\s+(?:answer|solution|value\s+of\s+[a-z])|your\s+answer)\s+"
     r"(?:=|equals|is(?:\s+equal\s+to)?|would\s+be|will\s+be|should\s+be|must\s+be)\s+"
     rf"(?:negative\s+|minus\s+)?{_NUMBER}"
@@ -525,10 +526,12 @@ def _is_echo(spoken: str, query: str | None) -> bool:
 
 
 def _repeated(spoken: str, recent_turns: Sequence[Mapping[str, Any]] | None) -> str | None:
-    """The earlier reply this one copies word for word, if any."""
+    """The earlier reply this one copies word for word (all of it, or nearly), if any."""
+    words = _norm_words(spoken)
     for turn in reversed(list(recent_turns or [])[-MAX_TURNS:]):
         earlier = str(turn.get("a") or "") if isinstance(turn, Mapping) else ""
-        if earlier and _similar(spoken, earlier) >= REPEAT_RATIO:
+        before = _norm_words(earlier)
+        if before and (_similar(spoken, earlier) >= REPEAT_RATIO or (len(before.split()) >= 4 and before in words)):
             return earlier
     return None
 
@@ -580,6 +583,29 @@ def _quiz_dictation(action: AvatarAction, task: Mapping[str, Any], query: str | 
     return _tutor(action, spoken_text=spoken, animation_state="idle", dictated=problem)
 
 
+# "One half plus one fourth equals three fourths.": an arithmetic problem dictated together with its result.
+# Equations are left alone: in "x plus three equals eight" the "equals eight" is part of the problem.
+_SOLVED_RE = re.compile(
+    r"^(?P<problem>.*\b(?:plus|minus|times|over|divided\s+by)\b.*?)\s*,?\s+"
+    r"(?:equals|is\s+equal\s+to|is|makes|gives(?:\s+you)?)\s+[^.!?]+(?P<end>[.!?]*)$",
+    re.I,
+)
+_LETTER_RE = re.compile(r"\b[a-z]\b(?<!\ba)(?<!\bi)", re.I)
+
+
+def unsolved(spoken: str) -> str:
+    """A dictated problem without the result the model added to it (practice problems and lesson starters)."""
+    out: list[str] = []
+    for sentence in _SENTENCE_RE.findall(_spoken(spoken)):
+        stripped = sentence.strip()
+        found = _SOLVED_RE.match(stripped)
+        if found and not _LETTER_RE.search(found.group("problem")):
+            stripped = found.group("problem").rstrip(" ,") + (found.group("end") or ".")
+        if stripped:
+            out.append(stripped)
+    return " ".join(out) or spoken
+
+
 _OFFER_ASKED_RE = re.compile(r"\b(?:make\s+one\s+up|exercise|one\s+for\s+you|problem\s+in\s+mind)\b", re.I)
 
 
@@ -618,6 +644,8 @@ def apply_task_rules(
         return _quiz_dictation(action, t, query)
     if kind == "learn" and learn_stage(t) == "offer":
         action = replace(action, spoken_text=_with_offer_question(action.spoken_text))
+    if kind == "practice" or (kind == "learn" and learn_stage(t) == "example"):
+        action = replace(action, spoken_text=unsolved(action.spoken_text))  # the student solves it, not the voice
     # Dictating or offering is not about one drawing; at temperature 0.6 the model still picks "pointing"/"walking".
     return replace(action, animation_state="idle") if kind in ("practice", "learn") else action
 

@@ -897,13 +897,13 @@ def test_cross_origin_tutor_changes_blocked(built: Any) -> None:
     assert client.get(TUTOR).get_json()["mode"] == "help"
 
 
-def test_quiz_start_without_problems_lets_the_model_invent_them(built: Any) -> None:
+def test_quiz_start_without_problems_invents_them(built: Any) -> None:
+    from biobench_sar.rag.quiz_bank import solve_problem
+
     body = built[0].test_client().post(f"{TUTOR}/quiz/start").get_json()
-    assert body == {
-        "mode": "quiz",
-        "learn_topic": None,
-        "quiz": {"active": True, "number": 1, "total": 10, "score": 0, "problem": None},
-    }
+    problem = body["quiz"].pop("problem")
+    assert body == {"mode": "quiz", "learn_topic": None, "quiz": {"active": True, "number": 1, "total": 10, "score": 0}}
+    assert solve_problem(problem), "the projector card shows an invented problem the code can grade"
 
 
 def test_quiz_start_uses_ticked_uploads_and_stop_ends_it(built: Any, ingest_texts: list[str]) -> None:

@@ -16,7 +16,7 @@ import pytest
 from biobench_sar import assistant as assistant_module
 from biobench_sar.assistant import HISTORY_SIZE, Assistant, DocumentSelection, estimate_speech_seconds
 from biobench_sar.config import Settings
-from biobench_sar.rag.quiz_bank import QuizProblem
+from biobench_sar.rag.quiz_bank import QuizProblem, solve_problem
 from biobench_sar.schemas import AvatarAction, RetrievedChunk
 from biobench_sar.tutor import DEFAULT_QUIZ_LENGTH
 
@@ -697,10 +697,48 @@ def test_offer_reply_only_counts_while_an_offer_is_pending(h: Harness) -> None:
     assert _ask(h, "I have one")["task"] is None
 
 
-def test_unrelated_reply_keeps_the_offer_open(h: Harness) -> None:
+def test_unrelated_reply_expires_the_offer(h: Harness) -> None:
     _ask(h, "teach me fractions")
-    assert _ask(h, "what is this?")["task"] is None
-    assert h.assistant.tutor.offer_pending
+    assert _ask(h, "what is a numerator?")["task"] is None
+    tutor = h.assistant.tutor
+    assert not tutor.offer_pending and tutor.learn_topic is None, "only the very next turn answers the offer"
+    assert _ask(h, "no")["task"] is None, "a 'no' two turns later is not an answer to the old offer"
+    assert _tutor_events(h)[-1]["learn_topic"] is None
+
+
+def test_old_offer_does_not_hijack_a_quiz_check(h: Harness) -> None:
+    _bank(h, "a.md", ("x + 1 = 3", "x = 2", 1), ("x + 2 = 5", "x = 3", 1))
+    _ask(h, "teach me equations")
+    _ask(h, "what's an equation?")
+    _ask(h, "quiz me")
+    task = _ask(h, "I'll write my answer now, check it", state="error", ink=True)["task"]
+    assert task["kind"] == "quiz" and task["stage"] == "check"
+
+
+def test_quiz_start_ends_a_pending_offer(h: Harness) -> None:
+    _ask(h, "teach me fractions")
+    _ask(h, "quiz me")
+    assert not h.assistant.tutor.offer_pending and h.assistant.tutor.learn_topic is None
+    assert _ask(h, "I'll do it", ink=True)["task"]["kind"] == "quiz"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["how do I solve the equation", "how do I add fractions?", "how can I check my answer to the equation"],
+)
+def test_board_questions_mid_quiz_are_not_lessons(h: Harness, text: str) -> None:
+    _ask(h, "quiz me")
+    task = _ask(h, text, ink=True)["task"]
+    assert task["kind"] == "quiz" and not h.assistant.tutor.offer_pending
+
+
+def test_how_to_question_next_to_ink_is_help_not_a_lesson(h: Harness) -> None:
+    assert _ask(h, "How do I add fractions?", ink=True)["task"] is None
+    assert _ask(h, "How do I add fractions?")["task"] == {
+        "kind": "learn",
+        "topic": "adding fractions",
+        "stage": "offer",
+    }
 
 
 def test_practice_mode_sticks_until_help(h: Harness) -> None:
@@ -744,7 +782,9 @@ def test_quiz_dictates_then_checks_problems_from_ticked_files(h: Harness) -> Non
 
     _ask(h, "now?", state="celebrating", spoken="Correct!", ink=True)
     assert not tutor.quiz_active and tutor.mode == "help"
-    assert h.payloads("speak")[-1]["text"] == "Correct! That was the last problem! You solved 1 of 2 on the first try."
+    assert h.payloads("speak")[-1]["text"] == (
+        "Correct! That was the last problem! You solved one of two on the first try."
+    ), "the summary is spoken in words like the rest of the math profile"
     assert _tutor_events(h)[-1] == {
         "mode": "help",
         "learn_topic": None,
@@ -757,22 +797,46 @@ def test_quiz_summary_does_not_repeat_an_announced_end(h: Harness) -> None:
     _bank(h, "a.md", ("1 + 1", "2", 1))
     _ask(h, "quiz me")
     _ask(h, "done", state="celebrating", spoken="Correct! You finished the quiz!", ink=True)
-    assert h.payloads("speak")[-1]["text"] == "Correct! You finished the quiz! You solved 1 of 1 on the first try."
+    assert h.payloads("speak")[-1]["text"] == "Correct! You finished the quiz! You solved one of one on the first try."
 
 
-def test_quiz_without_worksheet_problems_lets_the_model_invent_them(h: Harness) -> None:
+def test_quiz_without_worksheet_problems_tracks_invented_ones(h: Harness) -> None:
     task = _ask(h, "start a quiz")["task"]
-    assert task["problem"] is None and task["answer"] is None and task["total"] == DEFAULT_QUIZ_LENGTH
+    assert task["total"] == DEFAULT_QUIZ_LENGTH and task["stage"] == "dictate"
+    first = task["problem"]
+    assert first and solve_problem(first) == task["answer"], "an invented problem has a text and an answer"
+    assert _tutor_events(h)[-1]["quiz"]["problem"] == first, "the projector card shows it"
     check = _ask(h, "done", state="celebrating", ink=True)["task"]
-    assert check["stage"] == "check" and check["next_problem"] is None
-    assert h.assistant.tutor.quiz_number == 2 and not h.assistant.tutor.dictated, "next turn dictates a new one"
-    assert _ask(h, "ready")["task"]["stage"] == "dictate"
+    assert check["stage"] == "check" and check["problem"] == first and check["answer"] == task["answer"]
+    second = check["next_problem"]
+    assert second and second != first, "the next invented problem is read out with the praise"
+    tutor = h.assistant.tutor
+    assert tutor.quiz_number == 2 and tutor.dictated and tutor.current().problem == second  # type: ignore[union-attr]
+    after = _ask(h, "check my answer", state="error", ink=True)["task"]
+    assert after["stage"] == "check" and after["problem"] == second, "the answer to problem two is checked"
 
 
-def test_quiz_with_every_file_unticked_has_no_worksheet_problems(h: Harness) -> None:
+def test_quiz_with_every_file_unticked_invents_problems(h: Harness) -> None:
     _bank(h, "a.md", ("1 + 1", "2", 1))
     h.assistant.selection.select([])
-    assert _ask(h, "quiz me")["task"]["problem"] is None
+    task = _ask(h, "quiz me")["task"]
+    assert task["problem"] != "1 + 1" and task["total"] == DEFAULT_QUIZ_LENGTH
+
+
+def test_quiz_length_picks_a_progressive_subset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SAR_QUIZ_LENGTH", "3")
+    short = Harness()
+    _bank(short, "a.md", *((f"x + {n} = {n + 1}", "x = 1", 1 + n // 4) for n in range(12)))
+    task = _ask(short, "quiz me")["task"]
+    assert task["total"] == 3 and task["problem"] == "x + 0 = 1"
+    problems = [p.problem for p in short.assistant.quiz_problems()]
+    assert problems == ["x + 0 = 1", "x + 6 = 7", "x + 11 = 12"], "easiest, middle and hardest level"
+    short.assistant.tutor.stop_quiz()
+    short.assistant.selection.select([])
+    invented = _ask(short, "quiz me")["task"]
+    assert invented["total"] == 3 and invented["problem"] != "x + 0 = 1", "an invented quiz is that long too"
+    monkeypatch.delenv("SAR_QUIZ_LENGTH")
+    assert Settings().quiz_length == DEFAULT_QUIZ_LENGTH
 
 
 def test_quiz_mode_starts_a_quiz_on_the_next_question(h: Harness) -> None:
@@ -789,11 +853,74 @@ def test_quiz_check_without_ink_is_not_approved(h: Harness) -> None:
     assert h.assistant.tutor.quiz_number == 1 and h.assistant.tutor.score == 0
 
 
-def test_stuck_mid_quiz_asks_for_a_hint_not_to_quit(h: Harness) -> None:
+@pytest.mark.parametrize("text", ["I'm stuck", "help", "give me a hint", "what's the next step?"])
+def test_stuck_mid_quiz_gets_a_hint_not_a_check(h: Harness, text: str) -> None:
+    _bank(h, "a.md", ("3x + 5 = 20", "x = 5", 1), ("x + 1 = 2", "x = 1", 1))
     _ask(h, "quiz me")
-    task = _ask(h, "I'm stuck", state="error", ink=True)["task"]
-    assert task["kind"] == "quiz" and task["stage"] == "check"
-    assert h.assistant.tutor.quiz_active
+    task = _ask(h, text, state="error", ink=True)["task"]
+    assert task["kind"] == "quiz" and task["stage"] == "hint" and task["problem"] == "3x + 5 = 20"
+    tutor = h.assistant.tutor
+    assert tutor.quiz_active and tutor.dictated
+    assert (tutor.quiz_number, tutor.score) == (1, 0)
+    _ask(h, "check my answer", state="celebrating", ink=True)
+    assert tutor.score == 1, "a hint is not a wrong attempt: the first try still counts"
+
+
+def test_repeat_request_mid_quiz_reads_the_problem_again(h: Harness) -> None:
+    _bank(h, "a.md", ("3x + 5 = 20", "x = 5", 1))
+    _ask(h, "quiz me")
+    task = _ask(h, "can you repeat the problem?", state="error", ink=True)["task"]
+    assert task["stage"] == "dictate" and task["number"] == 1
+    _ask(h, "check it", state="celebrating", ink=True)
+    assert h.assistant.tutor.score == 1, "asking to hear it again is not a miss"
+
+
+def _tutor_action(spoken: str, state: str, **extra: Any) -> Any:
+    from biobench_sar.llm.vlm_client import TutorAction
+
+    return TutorAction(spoken, state, 10, 20, **extra)  # type: ignore[arg-type]
+
+
+def test_failed_model_call_is_not_a_wrong_answer(h: Harness) -> None:
+    _bank(h, "a.md", ("3x + 5 = 20", "x = 5", 1))
+    _ask(h, "quiz me")
+    h.vlm.action = _tutor_action("The AI model took too long to answer. Please try again.", "error", failed=True)
+    h.vision.frame = np.zeros((4, 4, 3), np.uint8)
+    h.assistant.handle_query("check my answer")
+    tutor = h.assistant.tutor
+    assert tutor.quiz_number == 1 and tutor.turns()[-1]["q"] == "quiz me", "not graded and not remembered"
+    assert h.assistant.history()[0]["error"] is True
+    _ask(h, "check my answer", state="celebrating", ink=True)
+    assert tutor.score == 1, "the first try still counts after a network error"
+
+
+def test_ungraded_check_is_not_recorded(h: Harness) -> None:
+    _bank(h, "a.md", ("3x + 5 = 20", "x = 5", 1))
+    _ask(h, "quiz me")
+    h.vlm.action = _tutor_action("I can't see your answer yet.", "idle", verdict=None)
+    h.vision.frame = np.zeros((4, 4, 3), np.uint8)
+    h.assistant.handle_query("check my answer")
+    _ask(h, "check my answer", state="celebrating", ink=True)
+    assert h.assistant.tutor.score == 1
+
+
+def test_next_problem_is_dictated_only_when_read_out(h: Harness) -> None:
+    _bank(h, "a.md", ("x + 1 = 2", "x = 1", 1), ("x + 2 = 5", "x = 3", 1))
+    _ask(h, "quiz me")
+    h.vlm.action = _tutor_action("Correct!", "celebrating", verdict="correct", dictated=None)
+    h.vision.frame = np.zeros((4, 4, 3), np.uint8)
+    h.assistant.handle_query("check")
+    assert h.assistant.tutor.quiz_number == 2 and not h.assistant.tutor.dictated
+    assert _ask(h, "ok")["task"]["stage"] == "dictate", "problem two is read out before it is checked"
+
+
+def test_quiz_check_without_ink_says_so_instead_of_praising(h: Harness) -> None:
+    _bank(h, "a.md", ("x + 1 = 2", "x = 1", 1), ("x + 2 = 5", "x = 3", 1))
+    _ask(h, "quiz me")
+    _ask(h, "check it", state="celebrating", spoken="Correct, great job! Problem 2. x + 2 = 5")
+    said = h.payloads("speak")[-1]["text"]
+    assert "Correct" not in said and "Problem 2" not in said and "board" in said
+    assert h.assistant.tutor.quiz_number == 1
 
 
 def test_stop_the_quiz(h: Harness) -> None:

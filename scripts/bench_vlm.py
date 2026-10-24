@@ -108,10 +108,12 @@ INVENTED_PROBLEM = "4x - 3 = 13"  # an invented quiz problem: the task has no an
 
 def seed_context(*needles: str) -> list[RetrievedChunk]:
     """The real seeded math chunks that mention a problem: with their "Answer:" lines and "answer is" columns."""
-    from biobench_sar.rag.ingestor import ingest_file
+    from biobench_sar.rag.ingestor import SUPPORTED_EXTENSIONS, ingest_file
 
     chunks: list[RetrievedChunk] = []
     for path in sorted(MATH_SEED_DIR.glob("*")):
+        if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            continue
         for c in ingest_file(path):
             if any(n in c.text for n in needles):
                 chunks.append(RetrievedChunk(c.text, c.source, 0.7, {}))
