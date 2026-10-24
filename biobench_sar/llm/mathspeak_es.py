@@ -254,8 +254,25 @@ _VERB_NOUNS = _with_plurals("muestra forma suma resta duda potencia parte cuadra
 _VERB_OBJECT = _word_set("que el la los las lo un una unos unas cómo como al parte partes")
 # "solo" is also the adverb ("vale 1 solo cuando..."): it agrees only in front of a noun ("1 solo paso").
 _SOLO = frozenset(["solo", "solos"])
-# A plain noun after an unspaced "3–5" makes it a range ("3–5 muestras", "24–48 horas"), not a subtraction.
-_RANGE_UNITS = _word_set("km cm mm m kg g mg ml mL L µm μm µL μL µl μl µg μg h hr hrs min seg s")
+# Range policy for an unspaced "a-b" / "a–b" between two plain numbers. It is a minus unless every condition holds:
+#   1. the pair runs upward (a < b): "72-48 horas" subtracts;
+#   2. it is one of: followed by a word below or by "°" / "%" ("3–5 muestras", "25-37 °C"), right after
+#      "entre" / "de" / "del" ("entre 3 y 5", "de 3 a 5", "del 3 al 5"), or two four-digit years ("1990–2000");
+#   3. nothing vetoes it: a relation sign on the line, a group holding just the pair ("(10-4)", "2(3-5)"), an
+#      operator or a variable touching it ("x + 3-5", "3-5 x"), or one of _RANGE_MINUS_WORDS right before it
+#      ("Réstale 3–8").
+# A range with no word after it (rule 2's second and third cases) also yields to a subtraction cue
+# ("Calcula 1990-2000", "el resultado de 3-5"). The unit and noun list is closed on purpose: a word missing
+# from it ("3-5 libros") reads "menos". A missed range is the accepted cost of never reading a subtraction as one.
+_RANGE_WORDS = _word_set(
+    """
+    µm μm um mm cm m km mL ml L g kg h min s horas minutos segundos días semanas meses años muestras células páginas
+    ejercicios problemas personas alumnos veces
+    """
+)
+_RANGE_MINUS_WORDS = _word_set("resta restar restarle réstale restale quita quitar quitarle quítale quitale menos")
+_AT_LEAST = re.compile(r"(?<![^\W\d_])(?:al|lo)[ \t]+menos[ \t]+$", re.I)  # "al menos 2-3 veces" is "at least"
+_YEAR = re.compile(r"[12]\d{3}")
 _MONTHS = "enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre"
 # "Calcula 8–3", "¿cuánto es 8-3?", "el resultado de 8-3": a subtraction even without another operator.
 _SUBTRACT_CUES = _word_set(
@@ -329,9 +346,7 @@ _SPACE_THOUSANDS = re.compile(
 )
 _NUMBER_RANGE = re.compile(rf"(?<![\w.,^/])({_NUM})([-–—‒])({_NUM})(?![^\W\d_µμ]|\d|[.,]\d|[\^/(])")
 _BOUNDARY = re.compile(r"[!?;\n]|\.(?!\d)")
-_SENTENCE_SPLIT = re.compile(r"((?:[!?;\n]|\.(?!\d))+)")
-_SENTENCE_OPS = re.compile(r"[=<>≤≥≠≈+*/×·÷±^]|[-–—‒](?=[ \t]*(?:\d|\(|[a-zA-Z](?![^\W\d_])))")
-_RANGE_TAIL = re.compile(rf"[ \t]*(?:[°%]|(?P<word>[^\W\d_]+)(?:[ \t]+(?P<month>{_MONTHS})(?![^\W\d_]))?)")
+_RANGE_TAIL = re.compile(r"[ \t]*(?:[°%]|(?P<word>[^\W\d_]+))")
 _INCLUSIVE_SLASH = re.compile(r"(?<![\w/])([^\W\d_]{2,})/(as|os|a|o|es|s)(?![\w/])")
 _INCLUSIVE_PAREN = re.compile(r"(?<![\w(])([^\W\d_]{2,})\((as|os|a|o|es|s)\)(s?)(?![^\W\d_])")
 _RANGE = re.compile(
@@ -348,10 +363,13 @@ _SIGNED_TAIL = re.compile(
 )
 _SUPERSCRIPT_RUN = re.compile("[⁰¹²³⁴⁵⁶⁷⁸⁹⁻ⁿ]+")
 _UNICODE_FRACTION = re.compile("(\\d?)([" + "".join(_UNICODE_FRACTIONS) + "])")
+# "$" + amount + optional magnitude + optional currency, either one spaced or glued ("$100USD", "$10mil").
+# The amount is always the whole number: the guard after it stops "$100USD" from backtracking to "$10" + "0USD".
 _CURRENCY = re.compile(
-    r"\$[ \t]?(?P<neg>-[ \t]?)?(?P<whole>\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.(?P<frac>\d+))?(?![^\W\d_])"
-    r"(?:[ \t]+(?P<mag>mil(?:[ \t]+millones)?|(?:mill[óo]n|millones)(?:[ \t]+y[ \t]+medio)?)(?![^\W\d_]))?"
-    r"(?:[ \t]+(?:de[ \t]+)?(?P<named>pesos?|d[óo]lar(?:es)?|dlls?|usd|mxn)(?![^\W\d_]))?",
+    r"\$[ \t]?(?P<neg>-[ \t]?)?(?P<whole>\d{1,3}(?:,\d{3})+|\d+)(?:\.(?P<frac>\d+))?(?!\d|\.\d|,\d{3}(?!\d))"
+    r"(?:[ \t]*(?P<mag>mil(?:[ \t]+millones)?|(?:mill[óo]n|millones)(?:[ \t]+y[ \t]+medio)?)(?![^\W\d_]))?"
+    r"(?:[ \t]*(?:de[ \t]+)?(?P<named>pesos?|d[óo]lar(?:es)?|dlls?|usd|mxn)(?![^\W\d_]))?"
+    r"(?![^\W\d_])",
     re.I,
 )
 # "$50 pesos" / "$50 MXN" / "$50 USD": a currency written after the amount wins over the default.
@@ -435,7 +453,7 @@ _FUNCTION_CALL = re.compile(r"(?<![^\W\d_])(?:(sen|cos|tg|cot|sec|csc|log|ln)[ \
 _FUNCTION_POWER = re.compile(rf"(?<![^\W\d_])({_FN_NAMES})\^([23])[ \t]*(?=\()", re.I)
 _FUNCTION_WORD = re.compile(rf"(?<![^\W\d_])({_FN_NAMES}){FN}(?={LF})", re.I)
 _BARE_FUNCTION = re.compile(
-    r"(?<![^\W\d_])(sen|cos|tg|cot|sec|csc|log|ln)[ \t]+(?=\d|[a-zA-Z](?![^\W\d_]))",
+    r"(?<![^\W\d_])(sen|cos|tg|cot|sec|csc|log|ln)[ \t]+(?:(?P<y>[yY])(?![^\W\d_])|(?=\d|[a-zA-Z](?![^\W\d_])))",
     re.I,
 )
 _MATH_CONTENT = re.compile("[\\s\\d.a-zA-Z+\\-*/×·÷=<>≤≥≠≈±^√∛∜%π°\ue000-\ue00d]*")
@@ -495,36 +513,13 @@ _NOUN_IS_VERB = re.compile(r"[ \t]+(?:-?[ \t]*\d|[b-df-hj-np-tv-xzB-DF-HJ-NP-TV-
 _LETTER_RUN = re.compile(r"(?<![^\W\d_])[a-z]{2,3}(?![^\W\d_])")
 _VARIABLE_Y = re.compile(r"(?<![^\W\d_])[yY](?![^\W\d_])")
 _PREV_WORD = re.compile(r"([^\W\d_]+)[ \t]+$")
-# No conjunction can follow these words: "despeja y", "el eje y", "el valor de y", "despeja la y", "x y y".
-_Y_CUES = frozenset(["despeja", "despejar", "despejamos", "despejas", "eje", "variable", "de", "la", "y"])
-_Y_DESPEJA = frozenset(["despeja", "despejar", "despejamos", "despejas"])
-# "Despeja y calcula la cantidad": a second instruction right after "despeja y" makes the y a conjunction.
-_Y_SECOND_VERB = _word_set(
-    """
-    calcula comprueba verifica sustituye reemplaza resuelve simplifica encuentra halla escribe anota grafica evalúa
-    factoriza multiplica divide suma resta explica responde contesta dime determina obtén revisa compara redondea
-    aplica interpreta identifica completa justifica expresa reduce ordena traza dibuja marca mide registra calcular
-    comprobar verificar sustituir reemplazar resolver simplificar encontrar hallar escribir anotar graficar evaluar
-    factorizar multiplicar dividir sumar restar explicar responder contestar determinar obtener revisar comparar
-    """
-)
-_Y_VERBS = frozenset(
-    ["encuentra", "encontrar", "halla", "hallar", "calcula", "calcular", "determina", "determinar", "obtén", "obtener"]
-)
-# After "encuentra" / "calcula", y is the variable only before a math cue ("Encuentra y en 2x + y = 5");
-# any other word ("Calcula y luego suma", "Encuentra y dime") keeps the conjunction.
-_Y_MATH_NEXT = re.compile(
-    r"[ \t]+(?:(?:en|sabiendo|dad[oa]s?|tal[ \t]+que|a[ \t]+partir)(?![^\W\d_])"
-    r"|(?:si|cuando|para)[ \t]+(?:-?\d|[a-zA-Z](?![^\W\d_]))"
-    r"|de[ \t]+(?!(?:ah[íi]|aqu[íi]|all[íi]|nuevo|inmediato|igual|manera|forma|modo|una)(?![^\W\d_])))",
-    re.I,
-)
-# "Resuelve para y" names the variable; "Para y piensa" is a conjunction.
-_Y_SOLVE = re.compile(
-    r"(?<![^\W\d_])(?:resuelve|resolver|resolvemos|resuelva|resuelvan|despeja|despejar|despejamos|soluciona"
-    r"|solucionar)(?![^\W\d_])[^.;:!?\n]*$",
-    re.I,
-)
+# Variable policy: a lone "y" is the conjunction ("i" to a Spanish voice) unless it touches math (a glued digit
+# "2y" / "y2", an operator or relation, an exponent, a group or function "f(y)", a root) or ends one of three fixed
+# phrases: "el valor de y", "despeja y", "cuánto vale y". The phrase counts only when the clause stops or goes on
+# with a condition right after the y ("?", ",", end of clause, "si", "cuando", "en", "es", or the conjunction "y"),
+# so "Despeja y calcula..." and "¿Cuánto vale y cuánto cuesta?" keep the conjunction.
+_Y_PHRASE = re.compile(r"(?<![^\W\d_])(?:valor[ \t]+de|despej(?:a|ar|amos|as)|cu[áa]nto[ \t]+vale)[ \t]+$", re.I)
+_Y_PHRASE_END = re.compile(r"[ \t]*(?:[?.,;:!\n]|$)|[ \t]+(?:si|cuando|en|es|y)(?![^\W\d_])", re.I)
 _CONTRACT = re.compile("(?<![^\\W\\d_])(a|de)([ \t" + OS + OE + SOFT + "]*)" + EL, re.I)
 _SOFT_RUN = re.compile("[ \t]*" + SOFT + "[ \t" + SOFT + "]*")
 _NESTED_QUANTITY = re.compile(LQ + "[ \t" + SOFT + "]*(?=" + LQ + ")")
@@ -609,7 +604,7 @@ def _speak(text: str, currency: tuple[str, str]) -> str:
     s = _FUNCTION_CALL.sub(lambda m: (m[1] or m[2]) + FN, s)
     s = _mark_groups(s)
     s = _FUNCTION_WORD.sub(lambda m: _FUNCTIONS[m[1].lower()], s).replace(FN, "")
-    s = _BARE_FUNCTION.sub(lambda m: _FUNCTIONS[m[1].lower()] + " de ", s)
+    s = _BARE_FUNCTION.sub(lambda m: _FUNCTIONS[m[1].lower()] + " de " + (YV if m["y"] else ""), s)
     s = _LETTER_RUN.sub(_split_letters, s)
     s = _VARIABLE_Y.sub(_variable_y, s)
     s = s.replace("∉", SOFT + "no pertenece a" + SOFT).replace("∈", SOFT + "pertenece a" + SOFT)
@@ -715,39 +710,42 @@ def _space_thousands(m: re.Match[str]) -> str:
 
 
 def _number_ranges(text: str) -> str:
-    # One pass per sentence, so the "is anything else math here?" test stays linear on long input.
+    # One relation test per line keeps long input linear.
     if not _NUMBER_RANGE.search(text):
         return text
-    parts = _SENTENCE_SPLIT.split(text)
-    for k in range(0, len(parts), 2):
-        found = len(_NUMBER_RANGE.findall(parts[k]))
-        if found:
-            busy = len(_SENTENCE_OPS.findall(parts[k])) > found
-            parts[k] = _NUMBER_RANGE.sub(functools.partial(_number_range, busy=busy), parts[k])
-    return "".join(parts)
+    lines = text.split("\n")
+    for k, line in enumerate(lines):
+        if _NUMBER_RANGE.search(line):
+            relation = any(c in line for c in _RELATIONS)
+            lines[k] = _NUMBER_RANGE.sub(functools.partial(_number_range, relation=relation), line)
+    return "\n".join(lines)
 
 
-def _number_range(m: re.Match[str], *, busy: bool) -> str:
-    # "3–5 muestras", "25-37 °C", "1990–2000" are ranges; "8–3 = 5", "2(8-3)", "Calcula 8–3" subtract.
-    s, i, j = m.string, m.start(), m.end()
-    minus = m[1] + "-" + m[3]
-    upward = float(m[1].replace(",", "")) < float(m[3].replace(",", ""))
-    if _in_expression(s, i, j):
-        prev = _prev_char(s, i)
-        # "2-3 días = 48-72 horas": a measurement after a relation is still a range ("x = 3-5 m" may be algebra).
-        measured = prev != "" and prev in _RELATIONS and not _joined_after(s, j) and _range_tail(s, j, short=False)
-        if not (measured and upward):
-            return minus
-    if not _range_tail(s, j):
-        words = re.findall(r"[^\W\d_]+", s[max(0, i - 32) : i])[-2:]
-        if busy or any(w.lower() in _SUBTRACT_CUES for w in words):
-            return minus
-        if not upward:
-            return minus  # a range runs upward: a bare "8-3" is a subtraction
+def _number_range(m: re.Match[str], *, relation: bool) -> str:
+    # The policy above _RANGE_WORDS: minus unless the pair runs upward, has a range cue and nothing vetoes it.
+    s, i, j, a, b = m.string, m.start(), m.end(), m[1], m[3]
+    minus = a + "-" + b
+    if relation or float(a.replace(",", "")) >= float(b.replace(",", "")):
+        return minus
+    if _parenthesized(s, i, j) or _in_expression(s, i, j):
+        return minus
     before = _PREV_WORD.search(s, max(0, i - 24), i)
     word = before[1].lower() if before else ""
+    if word in _RANGE_MINUS_WORDS and not (word == "menos" and _AT_LEAST.search(s, max(0, i - 24), i)):
+        return minus
+    if not _range_tail(s, j):
+        if word not in ("entre", "de", "del") and not (_YEAR.fullmatch(a) and _YEAR.fullmatch(b)):
+            return minus
+        words = re.findall(r"[^\W\d_]+", s[max(0, i - 32) : i])[-2:]
+        if any(w.lower() in _SUBTRACT_CUES for w in words):
+            return minus
     joiner = " y " if word == "entre" else " al " if word == "del" else " a "
-    return m[1] + joiner + m[3]
+    return a + joiner + b
+
+
+def _parenthesized(s: str, i: int, j: int) -> bool:
+    # "(10-4)", "2(3-5)", "[2-5]": a group that holds just the pair is a subtraction.
+    return _prev_char(s, i) in ("(", "[") and _next_char(s, j) in (")", "]")
 
 
 def _in_expression(s: str, i: int, j: int) -> bool:
@@ -756,12 +754,12 @@ def _in_expression(s: str, i: int, j: int) -> bool:
         k -= 1
     if k >= 0 and s[k] in "([":
         if k > 0 and (s[k - 1].isalnum() or s[k - 1] == ")"):
-            return True  # "2(8-3)"
+            return True  # "2(8-3 + 1)"
         k -= 1
         while k >= 0 and s[k] in " \t":
             k -= 1
     if k >= 0 and s[k] in _OPS + _PREFIX + "–—‒|":
-        return True  # "x = 8-3", "√(8-3)"
+        return True  # "x + 3-5", "√(3-5 + 1)"
     return _joined_after(s, j)
 
 
@@ -771,23 +769,14 @@ def _joined_after(s: str, j: int) -> bool:
         k += 1
     if k < len(s) and s[k] in _OPS + "–—‒(|":
         return True
-    if k < len(s) and _lone_letter_after(s, k) and s[k] not in "aeouyAEOUY" and s[k] not in _RANGE_UNITS:
+    if k < len(s) and _lone_letter_after(s, k) and s[k] not in "aeouyAEOUY" and s[k] not in _RANGE_WORDS:
         return True  # "3-5 x" is algebra
     return bool(_EQUALS_WORD.match(s, j))
 
 
-def _range_tail(s: str, j: int, *, short: bool = True) -> bool:
+def _range_tail(s: str, j: int) -> bool:
     tail = _RANGE_TAIL.match(s, j)
-    if not tail:
-        return False
-    word = tail["word"]
-    if word is None:
-        return True  # "25-37 °C", "5–10 %"
-    if word.lower() == "de":
-        return bool(tail["month"])  # "Del 3–7 de marzo"
-    if word in _RANGE_UNITS:
-        return short or len(word) > 1  # a one-letter unit ("m", "g") can also be a variable
-    return _noun_gender(word) is not None or _noun_gender(word.lower()) is not None
+    return bool(tail) and (tail["word"] is None or tail["word"] in _RANGE_WORDS)
 
 
 def _other_gender(stem: str, suffix: str) -> str | None:
@@ -1049,10 +1038,12 @@ def _split_letters(m: re.Match[str]) -> str:
     return SOFT + SOFT.join(YV if c == "y" else c for c in run) + SOFT
 
 
-def _variable_y(m: re.Match[str], *, chained: bool = True) -> str:
-    s, i, y = m.string, m.start(), m[0]
-    prev, nxt = _prev_char(s, i), _next_char(s, m.end())
-    if (i > 0 and s[i - 1].isdigit()) or (prev and prev in _OPS + _OPENERS + _PREFIX + "%"):
+def _variable_y(m: re.Match[str]) -> str:
+    # The policy above _Y_PHRASE: the conjunction unless the y touches math or ends a fixed phrase.
+    s, i, j, y = m.string, m.start(), m.end(), m[0]
+    prev, nxt = _prev_char(s, i), _next_char(s, j)
+    glued = (i > 0 and s[i - 1].isdigit()) or (j < len(s) and s[j].isdigit())
+    if glued or (prev and prev in _OPS + _OPENERS + _PREFIX):
         return YV
     if y == "Y":
         # A capital "Y" opens sentences; it is the variable only right before an operator ("Y = 2x").
@@ -1060,39 +1051,9 @@ def _variable_y(m: re.Match[str], *, chained: bool = True) -> str:
     # "y - 3 = 0" is the variable, but "son 3 y -2" is the conjunction before a negative number.
     if nxt and (nxt in _OPS.replace("-", "") + _CLOSERS + "∈∉" or (nxt == "-" and not prev)):
         return YV
-    # A conjunction cannot end a clause: "¿cuánto vale y?", "los ejes x, y" (but "Bueno, y." is still one).
-    clause_end = (not nxt or nxt in "?.!;:") and bool(prev) and prev not in "¿¡"
-    if clause_end and (prev != "," or _operand_before_comma(s, i)):
-        return YV
-    word = _PREV_WORD.search(s, max(0, i - 24), i)
-    cue = word[1].lower() if word else ""
-    if cue in _Y_CUES:
-        if cue == "y" and chained:
-            # "x y y" ends on the variable, but "el valor de y y el de x" joins the variable to more prose.
-            before = _VARIABLE_Y.match(s, word.start(1))
-            if before and _variable_y(before, chained=False) == YV:
-                return y
-        if cue in _Y_DESPEJA:
-            after = _NEXT_WORD.match(s, m.end())
-            if after and after[1].lower() in _Y_SECOND_VERB:
-                return y
-        return YV
-    if cue == "para" and _Y_SOLVE.search(s, max(0, i - 80), i):
-        return YV  # "Resuelve la ecuación para y en..."
-    if cue in _Y_VERBS and _Y_MATH_NEXT.match(s, m.end()):
+    if _Y_PHRASE.search(s, max(0, i - 24), i) and _Y_PHRASE_END.match(s, j):
         return YV
     return y
-
-
-def _operand_before_comma(s: str, i: int) -> bool:
-    k = s.rfind(",", 0, i) - 1
-    while k >= 0 and s[k] in " \t" + SOFT:
-        k -= 1
-    if k < 0:
-        return False
-    if s[k].isascii() and s[k].isalpha():
-        return k == 0 or not s[k - 1].isalpha()  # "los ejes x, y"
-    return s[k].isdigit() or s[k] in _CLOSERS + YV + ")"
 
 
 def _is_math(inner: str, *, powered: bool = False) -> bool:

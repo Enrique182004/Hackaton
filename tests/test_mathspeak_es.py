@@ -247,13 +247,9 @@ GROUPS_AND_POINTS = [
     ("f(2, 3)", "f de dos, tres"),
 ]
 VARIABLE_Y = [
-    ("despeja la y", "despeja la ye"),
-    ("el valor de la y", "el valor de la ye"),
     ("¿cuánto vale y?", "¿cuánto vale ye?"),
-    ("Encuentra x y y.", "Encuentra x y ye."),
-    ("Los ejes son x, y", "Los ejes son x, ye"),
     ("Y = 2x", "ye es igual a dos x"),
-    ("Encuentra y en 2x + y = 5", "Encuentra ye en dos x más ye es igual a cinco"),
+    ("Encuentra y en 2x + y = 5", "Encuentra y en dos x más ye es igual a cinco"),
     ("√y", "la raíz cuadrada de ye"),
     ("2√y", "dos por la raíz cuadrada de ye"),
 ]
@@ -333,15 +329,11 @@ RANGES = [
     ("Del 3–7 de marzo.", "Del tres al siete de marzo."),
     ("del 5–10 %", "del cinco al diez por ciento"),
     ("entre 20–30 °C", "entre veinte y treinta grados Celsius"),
-    ("pH 7–8", "pH siete a ocho"),
-    ("Lee 2-3 libros", "Lee dos a tres libros"),
     ("1990-2000", "mil novecientos noventa a dos mil"),
     (
         "Incuba a 25-37 °C durante 24-48 h.",
         "Incuba a veinticinco a treinta y siete grados Celsius durante veinticuatro a cuarenta y ocho horas.",
     ),
-    ("Toma 1–2 tazas", "Toma una a dos tazas"),
-    ("21–25 alumnas", "veintiuna a veinticinco alumnas"),
     ("1.5-2.5 mL", "uno punto cinco a dos punto cinco mililitros"),
     ("1-2 h", "una a dos horas"),
     # ...and a subtraction next to a relation, another operator, a math cue or a group.
@@ -359,14 +351,9 @@ RANGES = [
     ("3-5x", "tres menos cinco x"),
     ("3-5 x", "tres menos cinco x"),
     ("Si x = 2, entonces 3-5", "Si x es igual a dos, entonces tres menos cinco"),
-    ("Toma 3-5 muestras y calcula 8-3 = 5", "Toma tres a cinco muestras y calcula ocho menos tres es igual a cinco"),
     ("x - 4", "x menos cuatro"),
     ("9 – 4", "nueve menos cuatro"),
     ("5-3", "cinco menos tres"),
-    ("3-4", "tres a cuatro"),
-    # A measurement after a relation is still a range; a one-letter unit there may be a variable, so it subtracts.
-    ("Dura 2-3 días = 48-72 horas", "Dura dos a tres días es igual a cuarenta y ocho a setenta y dos horas"),
-    ("La distancia ≈ 2-3 km", "La distancia es aproximadamente igual a dos a tres kilómetros"),
     ("x = 3-5 m", "x es igual a tres menos cinco m"),
     ("t = 72-48 horas", "t es igual a setenta y dos menos cuarenta y ocho horas"),
     # The end of a range carries a one-letter unit.
@@ -449,17 +436,15 @@ Y_IN_MATH = [
     ("Resta 3 y divide", "Resta tres y divide"),
     ("el valor de y", "el valor de ye"),
     ("despeja y", "despeja ye"),
-    ("Resuelve para y: 2y = 4", "Resuelve para ye: dos ye es igual a cuatro"),
-    ("Halla y cuando x = 3", "Halla ye cuando x es igual a tres"),
-    ("Calcula y si x = 2", "Calcula ye si x es igual a dos"),
-    ("Encuentra y de la ecuación 2y = 6", "Encuentra ye de la ecuación dos ye es igual a seis"),
+    ("Resuelve para y: 2y = 4", "Resuelve para y: dos ye es igual a cuatro"),
+    ("Halla y cuando x = 3", "Halla y cuando x es igual a tres"),
+    ("Calcula y si x = 2", "Calcula y si x es igual a dos"),
+    ("Encuentra y de la ecuación 2y = 6", "Encuentra y de la ecuación dos ye es igual a seis"),
     ("y ∈ [0, 1]", "ye pertenece al intervalo de cero a uno"),
-    ("Encuentra y sabiendo que x = 2", "Encuentra ye sabiendo que x es igual a dos"),
-    # Right after the variable y, another y is the conjunction; after the conjunction it is the variable.
+    ("Encuentra y sabiendo que x = 2", "Encuentra y sabiendo que x es igual a dos"),
+    # A conjunction right after a fixed phrase ends its clause: the first y is the variable, the second joins.
     ("el valor de y y el de x", "el valor de ye y el de x"),
     ("despeja y y luego comprueba", "despeja ye y luego comprueba"),
-    ("x y y son enteros", "x y ye son enteros"),
-    ("Calcula x y y", "Calcula x y ye"),
     ("Despeja y en 3y = 9", "Despeja ye en tres ye es igual a nueve"),
     ("Despeja y, luego calcula x.", "Despeja ye, luego calcula x."),
 ]
@@ -546,6 +531,96 @@ OLDER = [
     ("Recuerda: el 1° de cada mes revisamos la tarea.", "Recuerda: el primero de cada mes revisamos la tarea."),
     ("El 1° del mes", "El primero del mes"),
 ]
+# Review round 4 (fix/mathspeak-es-round4): one conservative, documented policy per ambiguity instead of heuristics.
+# Ranges: minus unless the pair runs upward, has a range cue (a listed unit / noun after it, "entre" / "de" / "del"
+# before it, two four-digit years) and nothing vetoes it.
+RANGE_POLICY = [
+    # Round-3 verdict examples.
+    ("Réstale 3–8", "Réstale tres menos ocho"),
+    ("(10-4)", "la cantidad diez menos cuatro"),
+    ("72-48 horas", "setenta y dos menos cuarenta y ocho horas"),
+    # Range cues, each with a listed unit or noun.
+    ("Hay 2-3 personas", "Hay dos a tres personas"),
+    ("Espera 10-15 segundos", "Espera diez a quince segundos"),
+    ("cada 2-4 semanas", "cada dos a cuatro semanas"),
+    ("Revisa 3-5 células", "Revisa tres a cinco células"),
+    ("Lee 10-12 páginas", "Lee diez a doce páginas"),
+    ("Haz 3-5 ejercicios", "Haz tres a cinco ejercicios"),
+    ("Resuelve 2-3 problemas", "Resuelve dos a tres problemas"),
+    ("5-10 kg", "cinco a diez kilogramos"),
+    ("10-20 cm", "diez a veinte centímetros"),
+    ("30-60 min", "treinta a sesenta minutos"),
+    ("5–10 mm", "cinco a diez milímetros"),
+    ("15–45 μm", "quince a cuarenta y cinco micrómetros"),
+    ("1990–2000", "mil novecientos noventa a dos mil"),
+    ("de 3-5", "de tres a cinco"),
+    ("entre 3-5", "entre tres y cinco"),
+    ("del 3-5", "del tres al cinco"),
+    ("Repite al menos 2–3 veces.", "Repite al menos dos a tres veces."),
+    ("por lo menos 2-3 veces", "por lo menos dos a tres veces"),
+    # A range inside a prose aside is still a range; a group holding just the pair is a subtraction.
+    ("Trofozoítos (15–45 µm)", "Trofozoítos (quince a cuarenta y cinco micrómetros)"),
+    ("(range 25-37 °C; higher)", "(range veinticinco a treinta y siete grados Celsius; higher)"),
+    ("(4-10)", "la cantidad cuatro menos diez"),
+    ("(3-5)", "la cantidad tres menos cinco"),
+    ("2(3-5)", "dos por la cantidad tres menos cinco"),
+    ("[2-5]", "la cantidad dos menos cinco"),
+    # Vetoes: a subtraction word, a relation on the line, a touching operator or variable, a subtraction cue.
+    ("Réstale 3-8 muestras", "Réstale tres menos ocho muestras"),
+    ("Quítale 2–4 g de sal", "Quítale dos menos cuatro gramos de sal"),
+    ("x = 3-5 horas", "x es igual a tres menos cinco horas"),
+    ("Toma 3-5 muestras. Luego calcula x = 2.", "Toma tres menos cinco muestras. Luego calcula x es igual a dos."),
+    ("Toma 3-5 muestras.\nLuego calcula x = 2.", "Toma tres a cinco muestras.\nLuego calcula x es igual a dos."),
+    ("Toma 3-5 muestras y suma 2 + 3", "Toma tres a cinco muestras y suma dos más tres"),
+    ("x + 3-5 muestras", "x más tres menos cinco muestras"),
+    ("de 3-5 x", "de tres menos cinco x"),
+    ("El resultado de 3-5", "El resultado de tres menos cinco"),
+    ("Calcula 1990-2000", "Calcula mil novecientos noventa menos dos mil"),
+    # Without a cue it subtracts: a word off the list, a bare pair, a pair that is not two years.
+    ("3-4", "tres menos cuatro"),
+    ("pH 7–8", "pH siete menos ocho"),
+    ("Lee 2-3 libros", "Lee dos menos tres libros"),
+    ("Toma 1–2 tazas", "Toma uno menos dos tazas"),
+    ("21–25 alumnas", "veintiuno menos veinticinco alumnas"),
+    ("1234-5678", "mil doscientos treinta y cuatro menos cinco mil seiscientos setenta y ocho"),
+    (
+        "Toma 3-5 muestras y calcula 8-3 = 5",
+        "Toma tres menos cinco muestras y calcula ocho menos tres es igual a cinco",
+    ),
+    ("Dura 2-3 días = 48-72 horas", "Dura dos menos tres días es igual a cuarenta y ocho menos setenta y dos horas"),
+    ("La distancia ≈ 2-3 km", "La distancia es aproximadamente igual a dos menos tres kilómetros"),
+]
+# The amount is the whole number even when a currency or magnitude is glued to it.
+MONEY_GLUED = [
+    ("$100USD", "cien dólares"),
+    ("$100USD.", "cien dólares."),
+    ("$5mxn", "cinco pesos"),
+    ("$1,000pesos", "mil pesos"),
+    ("$2.50USD", "dos dólares con cincuenta centavos"),
+    ("$5dlls", "cinco dólares"),
+    ("$100usd y $5mxn", "cien dólares y cinco pesos"),
+    ("$10mil", "diez mil dólares"),
+    ("$1millón", "un millón de dólares"),
+    ("$3.5millones", "tres punto cinco millones de dólares"),
+    ("Cuesta $10mil pesos", "Cuesta diez mil pesos"),
+]
+# y is the variable next to math or in a fixed phrase before a clause end or a condition; otherwise the conjunction.
+Y_POLICY = [
+    ("¿cuánto vale y si x = 2?", "¿cuánto vale ye si x es igual a dos?"),
+    ("¿Cuánto vale y cuando x = 2?", "¿Cuánto vale ye cuando x es igual a dos?"),
+    ("¿Cuánto vale y en la ecuación?", "¿Cuánto vale ye en la ecuación?"),
+    ("El valor de y es 3.", "El valor de ye es tres."),
+    ("Halla el valor de y.", "Halla el valor de ye."),
+    ("Despeja y.", "Despeja ye."),
+    ("sen y", "seno de ye"),
+    ("cos y = 0", "coseno de ye es igual a cero"),
+    ("f(y) = 2", "f de ye es igual a dos"),
+    ("y2 - y1", "ye dos menos ye uno"),
+    ("y² + 1", "ye al cuadrado más uno"),
+    ("3 + y", "tres más ye"),
+    ("x/y", "x sobre ye"),
+    ("el 5% y el 10%", "el cinco por ciento y el diez por ciento"),
+]
 REVIEW_CASES = (
     POWERED_GROUPS
     + NEGATIVE_OPERANDS
@@ -571,6 +646,9 @@ REVIEW_CASES = (
     + MEASUREMENTS
     + SETS_AND_INTERVALS
     + OLDER
+    + RANGE_POLICY
+    + MONEY_GLUED
+    + Y_POLICY
 )
 
 PROSE = [
@@ -608,6 +686,17 @@ PROSE = [
     # Seen live from qwen2.5vl:3b: a second instruction right after "despeja y" makes it the conjunction.
     "Despeja y calcula la cantidad de carbono en el suelo.",
     "Hay que despejar y comprobar el resultado.",
+    # Round 4: outside a fixed phrase and away from math, y is the conjunction. These read "i" where a teacher
+    # means the variable: the accepted cost of never reading an everyday "y" as "ye".
+    "despeja la y",
+    "el valor de la y",
+    "Encuentra x y y.",
+    "Los ejes son x, y",
+    "x y y son enteros",
+    "Calcula x y y",
+    "el eje y",
+    "la variable y",
+    "Si y es positivo",
 ]
 
 NUMBERS = [
@@ -896,3 +985,12 @@ def test_has_math_symbols_defers_to_the_shared_detector(monkeypatch: pytest.Monk
         assert not has_math_symbols("hola")
     finally:
         mathspeak_es._shared_detector.cache_clear()
+
+
+def test_range_words_are_the_documented_closed_list() -> None:
+    # Growing the list is a policy change: a word missing from it reads "menos", never a guessed range.
+    documented = """
+        µm μm um mm cm m km mL ml L g kg h min s horas minutos segundos días semanas meses años muestras células
+        páginas ejercicios problemas personas alumnos veces
+    """
+    assert frozenset(documented.split()) == mathspeak_es._RANGE_WORDS
