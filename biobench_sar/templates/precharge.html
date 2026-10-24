@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>SAR Assistant - Precharge</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/precharge.css') }}">
+</head>
+<body>
+  <header><h1>SAR Whiteboard Assistant</h1><span id="conn" class="pill">socket: connecting</span></header>
+  <main>
+    <section class="card">
+      <h2>Knowledge upload</h2>
+      <div id="drop" tabindex="0">
+        <p>Drop files here or click to choose</p>
+        <small>.pdf .txt .md .csv .docx .pptx .png .jpg .jpeg</small>
+        <input id="file-input" type="file" multiple hidden accept=".pdf,.txt,.md,.csv,.docx,.pptx,.png,.jpg,.jpeg">
+      </div>
+      <ul id="upload-results"></ul>
+      <p id="upload-total"></p>
+    </section>
+
+    <section class="card">
+      <h2>Status</h2>
+      <dl id="status-list"><dt>server</dt><dd>unknown</dd></dl>
+    </section>
+
+    <section class="card">
+      <h2>Controls</h2>
+      <div class="row">
+        <button id="btn-calibrate">Calibrate</button>
+        <button id="btn-listen">Listen</button>
+      </div>
+      <p id="control-result" class="muted"></p>
+      <form id="ask-form" class="row">
+        <input id="ask-text" type="text" placeholder="Ask the assistant..." autocomplete="off">
+        <button type="submit">Ask</button>
+      </form>
+    </section>
+
+    <section class="card wide">
+      <h2>Camera preview</h2>
+      <div class="previews">
+        <figure><img id="frame-raw" alt="raw camera frame"><figcaption>Raw</figcaption></figure>
+        <figure><img id="frame-warped" alt="warped camera frame"><figcaption>Warped</figcaption></figure>
+      </div>
+    </section>
+
+    <section class="card wide">
+      <h2>Event log</h2>
+      <pre id="log"></pre>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='js/vendor/socket.io.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/precharge.js') }}"></script>
+</body>
+</html>

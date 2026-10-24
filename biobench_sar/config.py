@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+PACKAGE_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(os.environ.get("SAR_DATA_DIR", PACKAGE_DIR.parent / "data"))
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+@dataclass(frozen=True)
+class Settings:
+    camera_index: int = field(default_factory=lambda: _env_int("SAR_CAMERA_INDEX", 0))
+    camera_width: int = field(default_factory=lambda: _env_int("SAR_CAMERA_WIDTH", 1280))
+    camera_height: int = field(default_factory=lambda: _env_int("SAR_CAMERA_HEIGHT", 720))
+    projector_width: int = field(default_factory=lambda: _env_int("SAR_PROJECTOR_WIDTH", 1920))
+    projector_height: int = field(default_factory=lambda: _env_int("SAR_PROJECTOR_HEIGHT", 1080))
+    checker_cols: int = field(default_factory=lambda: _env_int("SAR_CHECKER_COLS", 9))
+    checker_rows: int = field(default_factory=lambda: _env_int("SAR_CHECKER_ROWS", 6))
+    calibration_file: Path = field(
+        default_factory=lambda: Path(os.environ.get("SAR_CALIBRATION_FILE", DATA_DIR / "calibration.json"))
+    )
+    chroma_dir: Path = field(default_factory=lambda: Path(os.environ.get("SAR_CHROMA_DIR", DATA_DIR / "chroma_db")))
+    upload_dir: Path = field(default_factory=lambda: Path(os.environ.get("SAR_UPLOAD_DIR", DATA_DIR / "uploads")))
+    tts_dir: Path = field(default_factory=lambda: Path(os.environ.get("SAR_TTS_DIR", DATA_DIR / "tts")))
+    embed_model: str = field(default_factory=lambda: os.environ.get("SAR_EMBED_MODEL", "all-MiniLM-L6-v2"))
+    rag_top_k: int = field(default_factory=lambda: _env_int("SAR_RAG_TOP_K", 4))
+    # ollama | openai | mock
+    vlm_backend: str = field(default_factory=lambda: os.environ.get("SAR_VLM_BACKEND", "ollama"))
+    vlm_model: str = field(default_factory=lambda: os.environ.get("SAR_VLM_MODEL", "qwen2.5vl:3b"))
+    vlm_base_url: str = field(default_factory=lambda: os.environ.get("SAR_VLM_BASE_URL", "http://localhost:11434"))
+    vlm_api_key: str | None = field(default_factory=lambda: os.environ.get("SAR_VLM_API_KEY"))
+    vlm_timeout: float = field(default_factory=lambda: float(os.environ.get("SAR_VLM_TIMEOUT", "90")))
+    whisper_model: str = field(default_factory=lambda: os.environ.get("SAR_WHISPER_MODEL", "base"))
+    wake_word: str = field(default_factory=lambda: os.environ.get("SAR_WAKE_WORD", "assistant"))
+    # push (hotkey/button only) | wake (always listening for wake word)
+    listen_mode: str = field(default_factory=lambda: os.environ.get("SAR_LISTEN_MODE", "push"))
+    record_seconds: float = field(default_factory=lambda: float(os.environ.get("SAR_RECORD_SECONDS", "5")))
+    # edge | pyttsx3 | say | none
+    tts_backend: str = field(default_factory=lambda: os.environ.get("SAR_TTS_BACKEND", "edge"))
+    tts_voice: str = field(default_factory=lambda: os.environ.get("SAR_TTS_VOICE", "en-US-AriaNeural"))
+    host: str = field(default_factory=lambda: os.environ.get("SAR_HOST", "127.0.0.1"))
+    port: int = field(default_factory=lambda: _env_int("SAR_PORT", 5000))
+
+    @property
+    def projector_size(self) -> tuple[int, int]:
+        return (self.projector_width, self.projector_height)

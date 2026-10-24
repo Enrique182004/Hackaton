@@ -1,0 +1,6 @@
+site_id,zone,soil_type,depth_m,notes
+EX-01,North shore near stream inflow,Leptosol,0.4,EXAMPLE DATA. Stony slope; expect high turbidity after rain.
+EX-02,East shore agricultural edge,Feozem,0.6,EXAMPLE DATA. Orchard and crop runoff; dark organic-rich sediment.
+EX-03,Open water centre,Mixed,1.2,EXAMPLE DATA. Reference site away from direct runoff.
+EX-04,South shore near town outfall,Feozem,0.5,EXAMPLE DATA. Urban and agricultural runoff; check for organic load.
+EX-05,West shore rocky bank,Leptosol,0.3,EXAMPLE DATA. Shallow and rocky; low organic matter.
