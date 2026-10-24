@@ -237,9 +237,6 @@ class _Words:
         self.signs, self.points = _SIGN_WORDS[language], _POINT_WORDS[language]
         self.operators = _OPERATOR_WORDS[language]
 
-    def is_number(self, word: str) -> bool:
-        return word in self.small or word in self.tens or word in self.hundreds or word in self.thousands
-
     def run(self, words: list[str], i: int) -> tuple[int, int] | None:
         """The number spelled by words[i:], and the index after it; None when words[i] starts no number."""
         total, current, last, j = 0, 0, None, i
@@ -808,6 +805,8 @@ def _stated(sentence: str, solutions: Answers, language: str | None) -> bool:
     for letter, value in solutions:
         by_letter.setdefault(letter, []).append(value)
     every = [v for _, v in solutions]
+    # An answer written without its letter ("8", "(7, 3)") is any letter's value: "x = 8" gives it away too.
+    named = any(letter and not letter.startswith("#") for letter in by_letter)
 
     def says(found: re.Match[str], wanted: list[Value]) -> bool:
         run, after = _value_run(text[found.end() :])
@@ -819,9 +818,10 @@ def _stated(sentence: str, solutions: Answers, language: str | None) -> bool:
     for found in _ASSIGNED.finditer(text):
         letter = found.group(1)
         before = text[: found.start()]
-        if letter not in by_letter or _TERM_END.search(before):
+        wanted = by_letter.get(letter) or ([] if named else every)
+        if not wanted or _TERM_END.search(before):
             continue
-        if says(found, by_letter[letter]):
+        if says(found, wanted):
             return True
     if any(says(found, every) for found in _ANSWER_WORDS.finditer(text)):
         return True

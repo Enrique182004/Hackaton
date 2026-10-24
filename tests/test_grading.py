@@ -344,3 +344,13 @@ def test_to_math() -> None:
     assert to_math("x = 2y") == "x = 2y", "a term keeps its spacing"
     assert to_math("x es una variable", "es") == "x = una variable", "un / una is no number before a noun"
     assert to_math("un medio", "es") == "1/2"
+
+
+def test_an_answer_written_without_its_letter_is_still_the_letters_value() -> None:
+    bare = parse_answers("8")  # a worksheet's "The answer is 8." for 2x = 16
+    assert states_solution("Not quite, x = 8.", bare) and states_solution("So y is eight.", bare)
+    assert not states_solution("Divide both sides by 2.", bare)
+    pair = parse_answers("(7, 3)")
+    assert states_solution("So x = 7.", pair) and not states_solution("Add the two equations.", pair)
+    named = parse_answers("x = 5")
+    assert not states_solution("y = 5", named), "another letter of a named answer is not its value"

@@ -1937,3 +1937,14 @@ def test_bench_flow_runs_the_whole_pipeline(
     out = capsys.readouterr().out
     assert out.count(f"[flow {language} run 1]") == len(b.FLOWS[language])
     assert f"flow {language} run 1:" in out and "hl=[" in out, "the checks highlight the answer line"
+
+
+def test_a_check_whose_post_processing_fails_is_never_graded_by_the_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*args: Any, **kwargs: Any) -> AvatarAction:
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(vc, "check_quiz_answer", boom)
+    praise = {"board_answer": "x = 7", **PRAISE.to_dict()}
+    action, _ = _ask(_math_client(), praise, mode="quiz", task=QUIZ_CHECK)
+    assert action.animation_state == "idle" and action.verdict is None  # type: ignore[attr-defined]
+    assert action.spoken_text == vc.TEXTS["en"]["reread"]

@@ -1600,6 +1600,11 @@ class VLMClient:
             return action
         except Exception as exc:  # evaluate must never raise
             logger.exception("Math post-processing failed, using the raw answer: %s", exc)
+            if resolve_mode(mode, task) == "quiz" and quiz_stage(task) == "check":
+                # Never the model's own verdict: an answer code could not grade is not graded ("ask me again").
+                return _tutor(
+                    reply.action, spoken_text=text_for(language, "reread"), animation_state="idle", verdict=None
+                )
             return reply.action
 
     def _wrong_answer_hint(

@@ -693,3 +693,12 @@ def test_a_yes_that_says_more_keeps_its_meaning() -> None:
 
     assert detect_offer_reply("yes I do") == "own" and detect_offer_reply_any("sí, tengo uno", "es") == "own"
     assert detect_offer_reply("okay make one") == "generate"
+
+
+@pytest.mark.parametrize(
+    "text", ["quiero terminar el problema", "quiero terminar la tarea", "I want to finish this step"]
+)
+def test_finishing_the_work_is_no_stop(text: str) -> None:
+    from biobench_sar.tutor import is_stop_intent_any
+
+    assert not is_stop_intent_any(text)

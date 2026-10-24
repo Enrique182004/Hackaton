@@ -348,7 +348,8 @@ def is_quiz_stop_any(text: str) -> bool:
 _STOP_INTENT_ES = _compile(
     r"^(?:ya\s+)?(?:para|paremos|alto|basta|ya\s+basta|detente|deten|termina|terminemos|terminalo|salir|salte|"
     r"cancela|cancelalo)(?:\s+(?:ya|por\s+favor|porfa|aqui|ahi|ahora))*$",
-    r"\b(?:quiero|queremos|podemos|vamos\s+a|me\s+gustaria)\s+(?:parar|terminar|salir|dejarlo|acabar|detenerlo)\b",
+    r"\b(?:quiero|queremos|podemos|vamos\s+a|me\s+gustaria)\s+(?:parar|terminar|salir|dejarlo|acabar|detenerlo)\b"
+    r"(?!\s+(?:el|la|este|esta|mi)\s+(?:problema|ejercicio|ecuacion|paso|respuesta|tarea))",
     r"\bya\s+no\s+quiero\s+(?:seguir|continuar|jugar|hacer\s+esto)\b",
 )
 
