@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 import types
 from collections.abc import Callable
 from typing import Any
@@ -276,6 +278,30 @@ def test_history_returns_independent_copies(h: Harness) -> None:
     h.assistant.history()[0]["sources"].append("x")
     h.assistant.history().clear()
     assert len(h.assistant.history()) == 1
+
+
+def test_history_readable_while_pipeline_appends(h: Harness) -> None:
+    for n in range(HISTORY_SIZE):
+        h.assistant.handle_query(f"q{n}")
+    stop = threading.Event()
+
+    def pipeline() -> None:
+        while not stop.is_set():
+            h.assistant.handle_query("more")
+
+    interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)  # switch threads mid-iteration as often as possible
+    writer = threading.Thread(target=pipeline)
+    writer.start()
+    try:
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            assert len(h.assistant.history()) == HISTORY_SIZE
+            assert h.assistant.last_latency_s is not None
+    finally:
+        stop.set()
+        writer.join()
+        sys.setswitchinterval(interval)
 
 
 def test_vlm_error_action_recorded_as_error(h: Harness) -> None:

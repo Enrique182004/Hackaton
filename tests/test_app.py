@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import dataclasses
 import io
+import json
 import sys
 import threading
 import time
 import types
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -73,7 +75,10 @@ def test_status_shape(built: Any) -> None:
     assert data["state"] == "idle" and data["audio_available"] is True
 
 
-def test_upload_good_and_bad(built: Any, fakes: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+@pytest.fixture
+def ingest_texts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The chunk texts the fake ingestor returns for any .txt file; mutate to simulate an edited file."""
+    texts = ["a", "b"]
     ingestor = types.ModuleType("biobench_sar.rag.ingestor")
 
     @dataclass(frozen=True)
@@ -83,11 +88,21 @@ def test_upload_good_and_bad(built: Any, fakes: Any, monkeypatch: pytest.MonkeyP
         metadata: dict[str, str | int]
 
     def ingest_file(path: Any) -> list[Chunk]:
-        return [Chunk(t, str(path), {"source": str(path)}) for t in ("a", "b")]
+        return [Chunk(t, str(path), {"source": str(path)}) for t in texts]
 
     ingestor.ingest_file = ingest_file  # type: ignore[attr-defined]
     ingestor.SUPPORTED_EXTENSIONS = frozenset({".txt"})  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "biobench_sar.rag.ingestor", ingestor)
+    return texts
+
+
+def _upload(client: Any, name: str = "notes.txt", **kwargs: Any) -> Any:
+    return client.post(
+        "/api/upload", data={"files[]": [(io.BytesIO(b"hello"), name)]}, content_type="multipart/form-data", **kwargs
+    )
+
+
+def test_upload_good_and_bad(built: Any, fakes: Any, ingest_texts: list[str], tmp_path: Any) -> None:
     app, _ = built
     r = app.test_client().post(
         "/api/upload",
@@ -102,6 +117,18 @@ def test_upload_good_and_bad(built: Any, fakes: Any, monkeypatch: pytest.MonkeyP
     assert "error" in by_name["bad.exe"]
     assert fakes.store.count() == 2
     assert not any((tmp_path / "uploads").iterdir()), "uploaded files are deleted after ingest"
+
+
+def test_reupload_replaces_edited_file_and_reports_counts(built: Any, fakes: Any, ingest_texts: list[str]) -> None:
+    client = built[0].test_client()
+    first = _upload(client).get_json()
+    assert first == {"files": [{"name": "notes.txt", "chunks": 2, "replaced": 0}], "total_chunks": 2}
+    ingest_texts[:] = ["a", "c"]
+    edited = _upload(client).get_json()
+    assert edited == {"files": [{"name": "notes.txt", "chunks": 2, "replaced": 1}], "total_chunks": 1}
+    assert sorted(c.text for c in fakes.store.chunks) == ["a", "c"], "stale chunk 'b' is gone"
+    unchanged = _upload(client).get_json()
+    assert unchanged == {"files": [{"name": "notes.txt", "chunks": 2, "replaced": 0}], "total_chunks": 0}
 
 
 def test_query_event_order(built: Any) -> None:
@@ -359,6 +386,64 @@ def test_query_empty_text_is_400(built: Any) -> None:
     assert client.post("/api/query", json={}).status_code == 400
 
 
+@pytest.mark.parametrize("payload", ["[1]", '"abc"', "5", "true", "null"])
+def test_query_non_object_json_is_400(built: Any, fakes: Any, payload: str) -> None:
+    r = built[0].test_client().post("/api/query", data=payload, content_type="application/json")
+    assert r.status_code == 400 and r.get_json() == {"accepted": False, "error": "empty text"}
+    assert fakes.vlm.calls == []
+
+
+# ---- cross-origin guard ---------------------------------------------------------
+
+EVIL = {"Origin": "http://evil.example"}
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"Origin": "http://localhost"},
+        {"Origin": "HTTP://LOCALHOST:80"},
+        {"Referer": "http://localhost/dashboard"},
+        {"Origin": "http://localhost", "Referer": "http://evil.example/"},
+    ],
+)
+def test_post_allowed_same_origin_or_without_headers(built: Any, fakes: Any, headers: dict[str, str]) -> None:
+    assert built[0].test_client().post("/api/listen", headers=headers).status_code == 202
+    assert fakes.audio.triggered == 1
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        EVIL,
+        {"Origin": "https://localhost"},
+        {"Origin": "http://localhost:8080"},
+        {"Origin": "null"},
+        {"Origin": "http://localhost:bad"},
+        {"Referer": "http://evil.example/page"},
+    ],
+)
+def test_cross_origin_post_blocked(built: Any, fakes: Any, headers: dict[str, str]) -> None:
+    r = built[0].test_client().post("/api/listen", headers=headers)
+    assert r.status_code == 403 and r.get_json() == {"error": "cross-origin request blocked"}
+    assert fakes.audio.triggered == 0
+
+
+def test_cross_origin_blocks_upload_calibrate_and_delete(built: Any, fakes: Any, ingest_texts: list[str]) -> None:
+    client = built[0].test_client()
+    fakes.vision.frame = np.zeros((10, 10, 3), np.uint8)
+    fakes.store.sources = [{"source": "a.pdf", "type": "pdf", "chunks": 1}]
+    assert _upload(client, headers=EVIL).status_code == 403
+    assert client.post("/api/calibrate", headers=EVIL).status_code == 403
+    assert client.delete("/api/documents/a.pdf", headers=EVIL).status_code == 403
+    assert fakes.store.chunks == [] and fakes.store.sources != []
+
+
+def test_cross_origin_get_still_allowed(built: Any) -> None:
+    assert built[0].test_client().get("/api/status", headers=EVIL).status_code == 200
+
+
 def test_query_returns_409_while_busy(built: Any, fakes: Any) -> None:
     app, _ = built
     gate = threading.Event()
@@ -421,6 +506,38 @@ def test_socket_connect_receives_current_status(built: Any, fakes: Any) -> None:
     got = sio.get_received()
     assert [m["name"] for m in got] == ["status"]
     assert got[0]["args"][0] == {"state": "idle"}
+
+
+def _poll(base: str, sid: str | None = None, body: bytes | None = None) -> str:
+    url = f"{base}/socket.io/?EIO=4&transport=polling" + (f"&sid={sid}" if sid else "")
+    with urllib.request.urlopen(urllib.request.Request(url, data=body), timeout=5) as response:
+        return response.read().decode()
+
+
+def test_socket_connect_packet_precedes_status_push(built: Any) -> None:
+    # socket.io-client replays events that arrive before CONNECT ahead of its "connect" event, where the
+    # projector resets to idle; so on the wire the status push must follow CONNECT. The test client
+    # can't see this, so speak raw Engine.IO long-polling to a real server.
+    from werkzeug.serving import make_server
+
+    server = make_server("127.0.0.1", 0, built[0], threaded=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        sid = json.loads(_poll(base)[1:])["sid"]
+        assert _poll(base, sid, b"40") == "OK"
+        packets: list[str] = []
+        deadline = time.time() + 5
+        while time.time() < deadline and not (
+            any(p.startswith("40") for p in packets) and any(p.startswith('42["status"') for p in packets)
+        ):
+            packets += _poll(base, sid).split("\x1e")
+    finally:
+        server.shutdown()
+        server.server_close()
+    messages = [p for p in packets if p[:2] in ("40", "42")]
+    assert [p[:2] for p in messages] == ["40", "42"], packets
+    assert json.loads(messages[1][2:]) == ["status", {"state": "idle"}]
 
 
 def test_socket_connect_mid_query_gets_current_state(built: Any, fakes: Any) -> None:

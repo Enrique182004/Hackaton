@@ -57,24 +57,56 @@ class VectorStore:
         # Content-addressed per source: re-uploading the same file (in any batch order) is a no-op.
         return hashlib.sha1(f"{chunk.source}\x00{chunk.text}".encode()).hexdigest()[:16]
 
-    def add_chunks(self, chunks: list[Chunk]) -> int:
+    def _unique(self, chunks: list[Chunk]) -> dict[str, Chunk]:
         unique: dict[str, Chunk] = {}
         for c in chunks:
             if c.text.strip():
                 unique.setdefault(self._id(c), c)
-        chunks = list(unique.values())
-        if not chunks:
+        return unique
+
+    def _upsert(self, unique: dict[str, Chunk], embeddings: list[list[float]]) -> None:
+        self._col.upsert(
+            ids=list(unique),
+            documents=[c.text for c in unique.values()],
+            embeddings=embeddings,
+            metadatas=[{**c.metadata, "source": c.source} for c in unique.values()],
+        )
+
+    def _source_ids(self, source: str) -> list[str]:
+        return list(self._col.get(where={"source": source}, include=[])["ids"])
+
+    def add_chunks(self, chunks: list[Chunk]) -> int:
+        unique = self._unique(chunks)
+        if not unique:
             return 0
-        embeddings = self._embed([c.text for c in chunks])
+        embeddings = self._embed([c.text for c in unique.values()])
         with self._lock:
-            self._col.upsert(
-                ids=list(unique),
-                documents=[c.text for c in chunks],
-                embeddings=embeddings,
-                metadatas=[{**c.metadata, "source": c.source} for c in chunks],
-            )
+            self._upsert(unique, embeddings)
             self._count = int(self._col.count())
-        return len(chunks)
+        return len(unique)
+
+    def replace_source(self, source: str, chunks: list[Chunk]) -> tuple[int, int]:
+        """Make `chunks` the only ones stored for `source`. Returns (newly added, stale removed).
+
+        Ids are content hashes, so plain add_chunks() on an edited file would keep serving its old text.
+        """
+        if any(c.source != source for c in chunks):
+            raise ValueError(f"every chunk must have source {source!r}")
+        unique = self._unique(chunks)
+        embeddings = self._embed([c.text for c in unique.values()]) if unique else []
+        with self._lock:
+            existing = set(self._source_ids(source))
+            if unique:
+                self._upsert(unique, embeddings)
+            stale = list(existing - unique.keys())
+            if stale:
+                self._col.delete(ids=stale)
+            self._count = int(self._col.count())
+        return len(unique.keys() - existing), len(stale)
+
+    def source_count(self, source: str) -> int:
+        with self._lock:
+            return len(self._source_ids(source))
 
     def query(self, text: str, k: int = 4) -> list[RetrievedChunk]:
         n = self._count

@@ -74,7 +74,8 @@ class Assistant:
         return self._busy.locked()
 
     def history(self) -> list[dict[str, Any]]:
-        return [item.to_dict() for item in reversed(self._history)]
+        # Snapshot first: the pipeline thread appends while to_dict() runs, and a live deque iterator raises.
+        return [item.to_dict() for item in reversed(list(self._history))]
 
     @property
     def last_latency_s(self) -> float | None:
