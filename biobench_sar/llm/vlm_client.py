@@ -451,7 +451,7 @@ def quiz_stage(task: Mapping[str, Any] | None) -> str:
 def system_prompt(profile: str, mode: str, language: str = "en") -> str:
     language = normalize_reply_language(language)
     if normalize_profile(profile) == "biology":
-        return SYSTEM_PROMPT + (BIOLOGY_SPANISH if language == "es" else "")
+        return SYSTEM_PROMPT + BIOLOGY_SPANISH if language == "es" else SYSTEM_PROMPT
     kind = str(mode or "").strip().lower()
     return MATH_PROMPTS_BY_LANGUAGE[language][kind if kind in PROMPT_KINDS else "help"]
 
@@ -902,22 +902,29 @@ def reveals_value(spoken: str, language: str = "en") -> bool:
     return any(pattern.search(s.strip(" ¿¡")) for s in sentences if not s.strip().endswith("?"))
 
 
+_WORD_RE = re.compile(r"[^\W\d_]{3,}")
+
+
+def _sentence_in_language(sentence: str, language: str) -> bool:
+    from biobench_sar.lang import detect_language
+
+    if language == "es":
+        # A Spanish voice reading "Correct, great job!" is wrong even though no word of it is on the English list:
+        # a sentence with real words must lean Spanish. Math alone ("x = 5") leans neither way and is fine.
+        if len(_WORD_RE.findall(sentence)) < 2:
+            return True
+        return detect_language(sentence, default="en") == "es"
+    # English replies ("Great job!") often use words on neither list: only plain Spanish counts as wrong.
+    return len(sentence.split()) < 3 or detect_language(sentence, default="en") == "en"
+
+
 def in_language(text: str, language: str = "en") -> bool:
-    """Whether no sentence of a reply (3 words or more) is plainly in the other language."""
+    """Whether every sentence of a reply is in the reply language (or in neither, like bare math)."""
     language = normalize_reply_language(language)
     try:
-        from biobench_sar.lang import detect_language
-    except ImportError:
+        return all(_sentence_in_language(sentence, language) for sentence in _raw_sentences(text))
+    except Exception:  # language detection missing or broken: never block a reply on it
         return True
-    for sentence in _raw_sentences(text):
-        if len(sentence.split()) < 3:
-            continue
-        try:
-            if detect_language(sentence, default=language) != language:
-                return False
-        except Exception:
-            return True
-    return True
 
 
 def _similar(a: str, b: str, language: str = "en") -> float:

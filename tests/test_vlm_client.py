@@ -1142,8 +1142,11 @@ def test_bench_math_heuristics(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -> None:
     b = _bench(monkeypatch)
     assert set(b.MATH_SCENARIOS) == {
-        *("H", "HA", "P", "PF", "QD", "QH", "QC", "QW", "QN", "QDI", "QCI", "QWI", "LO", "LE", "HF")
+        *("H", "HA", "P", "PF", "QD", "QH", "QC", "QW", "QN", "QDI", "QCI", "QWI", "LO", "LE", "HF"),
+        *("ELO", "ELE", "EH", "EHA", "EQD", "EQC", "EQW"),
+        *("CR", "CRW", "CRH", "CRHW"),
     }
+    assert all(b.MATH_SCENARIOS[k].language == "es" for k in ("ELO", "ELE", "EH", "EHA", "EQD", "EQC", "EQW"))
     assert set(b.BIO_SCENARIOS) == {"A", "B", "AB", "BA"}
     assert b.BIO_SCENARIOS["AB"].turns and b.BIO_SCENARIOS["BA"].turns
     follow_up = b.MATH_SCENARIOS["HF"]
@@ -1156,3 +1159,325 @@ def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -
     assert b.judge(offer, AvatarAction(OFFER_QUESTION, "idle", 960, 540)) == []
     assert b.judge(offer, AvatarAction("Fractions.", "pointing", 1, 1)) == ["state pointing", offer.check("Fractions.")]
     assert b.MATH_SCENARIOS["LE"].turns and b.MATH_SCENARIOS["QC"].task["answer"] == "x = 5"
+
+
+def test_bench_spanish_heuristics(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = _bench(monkeypatch)
+    for leak in ("Entonces x es igual a cinco.", "La respuesta es 5.", "x vale cinco", "Quince entre tres es cinco."):
+        assert b._no_leak_es(leak), leak
+    for fine in ("Resta cinco en ambos lados.", "Tres x más cinco es igual a veinte.", "¿Cuánto es tres por cinco?"):
+        assert b._no_leak_es(fine) is None, fine
+    assert b.spanish("Resta cinco en ambos lados.") is None
+    assert b.spanish("Subtract five from both sides.") == "not Spanish"
+    assert b.spanish("Resta 5 en ambos lados.") == "symbols/digits"
+    assert b._offer_es(vc.OFFER_QUESTION_ES) is None and b._offer_es("Las fracciones son partes.")
+    assert b._fraction_es("Un medio más un cuarto.") is None
+    assert b._fraction_es("Un medio más un cuarto es igual a tres cuartos.") == "solved the starter problem"
+    assert b.MATH_SCENARIOS["EQC"].check("¡Correcto! Problema dos. Dos x menos cuatro es igual a diez.") is None
+    assert b.MATH_SCENARIOS["EQD"].check("Problem two. Two x plus three equals eleven.")
+
+
+def test_bench_crop_scenario_uses_the_pipeline_crop(monkeypatch: pytest.MonkeyPatch) -> None:
+    b = _bench(monkeypatch)
+    jpeg, regions, crop = b.crop_board()
+    assert jpeg == crop.jpeg and regions and crop.roi[2] < b.BOARD[0] // 2, "a crop of the small equation"
+    image = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    assert image.shape[1] == crop.size[0] and crop.scale > 1, "rendered from the raw frame at camera detail"
+    whole, ink = b.whole_board()
+    assert ink and cv2.imdecode(np.frombuffer(whole, np.uint8), cv2.IMREAD_COLOR).shape[:2] == (800, 1280)
+    scenario = b.MATH_SCENARIOS["CR"]
+    assert scenario.reads and scenario.check("3.5 - x squared equals 0.25") is None
+    assert scenario.check("3.5 + x^2 = 0.25") and scenario.check("35 - x^2 = 0.25") and scenario.check("")
+    assert b.judge(scenario, AvatarAction("ok", "walking", 1, 1), "3.5 - x^2 = 0.25") == []
+    assert b.MATH_SCENARIOS["CRH"].check("Add x squared to get three point five alone.") is None
+
+
+# ---- Spanish replies -------------------------------------------------------------------------------------------
+
+ES_QUIZ = {
+    "kind": "quiz",
+    "stage": "check",
+    "number": 1,
+    "total": 5,
+    "problem": "3x + 5 = 20",
+    "answer": "x = 5",
+    "next_problem": "2x - 4 = 10",
+}
+
+
+def _digits_or_symbols(text: str) -> bool:
+    return bool(re.search(r"[\d^/*=+<>]", text))
+
+
+@pytest.mark.parametrize("kind", vc.PROMPT_KINDS)
+def test_spanish_math_prompts_are_spanish_with_the_scan_rule(kind: str) -> None:
+    prompt = system_prompt("math", kind, "es")
+    assert vc.SCAN_RULE in prompt and vc.SCAN_RULE_ES in prompt
+    assert "Responde SIEMPRE en español de Latinoamérica" in prompt and "háblale de tú" in prompt
+    for phrase in ("dos tercios", "x al cuadrado", "tres x más cinco es igual a doce", "menos cuatro"):
+        assert phrase in prompt
+    assert ("board_answer" in prompt) == (kind == "quiz") and ("board_problem" in prompt) == (kind == "practice")
+    for example in _few_shot(prompt):
+        assert set(example) >= {"spoken_text", "animation_state", "target_x", "target_y"}
+        assert not _digits_or_symbols(example["spoken_text"]), example
+    assert len(prompt) < 3800
+
+
+@pytest.mark.parametrize("kind", vc.PROMPT_KINDS)
+def test_english_math_prompt_carries_the_scan_rule(kind: str) -> None:
+    prompt = system_prompt("math", kind)
+    assert (
+        "Scan carefully for easily missed math symbols: negative signs (-), decimal points (.), fraction bars and "
+        "small exponents (^2). Read exactly what the ink says." in prompt
+    )
+    assert vc.SCAN_RULE_ES not in prompt
+
+
+def test_spanish_offer_question_in_the_learn_prompt() -> None:
+    assert vc.OFFER_QUESTION_ES == "¿Tienes un ejercicio en mente o quieres que invente uno?"
+    assert vc.OFFER_QUESTION_ES in system_prompt("math", "learn", "es")
+
+
+def test_biology_spanish_asks_for_a_spanish_reply() -> None:
+    assert system_prompt("biology", "help", "es").startswith(SYSTEM_PROMPT)
+    assert "Reply in Spanish" in system_prompt("biology", "help", "es")
+    prompt = build_prompt("¿Está completo?", [], [], SIZE, profile="biology", language="es")
+    assert prompt.endswith("spoken_text in Spanish.")
+
+
+def test_spanish_user_prompt_labels() -> None:
+    turns = [{"q": "Quiero aprender fracciones", "a": vc.OFFER_QUESTION_ES}]
+    prompt = build_prompt(
+        "Invéntame uno", CHUNKS, REGIONS, (1280, 800), profile="math", mode="help", recent_turns=turns, language="es"
+    )
+    for label in (
+        "Modo: ayuda (paso a paso).",
+        "Conversación hasta ahora",
+        "Estudiante: Quiero aprender fracciones",
+        "El estudiante dijo: Invéntame uno",
+        "Centro de la pantalla: (640, 400).",
+        "Regiones de tinta detectadas en el pizarrón:",
+        "Contexto de referencia:",
+        "en español",
+    ):
+        assert label in prompt
+    quiz = build_prompt("¿Está bien?", [], [], SIZE, profile="math", mode="quiz", task=ES_QUIZ, language="es")
+    assert "Etapa del quiz: revisar. Problema 1 de 5: 3x + 5 = 20" in quiz and "Siguiente problema: 2x - 4 = 10" in quiz
+    assert "x = 5" not in quiz, "a numeric answer is checked in code, never shown"
+    learn = vc.learn_task_text({"kind": "learn", "topic": "fracciones", "stage": "offer"}, "es")
+    assert learn.startswith("Etapa de aprender: ofrecer. Tema: fracciones") and vc.OFFER_QUESTION_ES in learn
+
+
+def test_spanish_reply_goes_through_mathspeak_es_and_keeps_display_text() -> None:
+    reply = {
+        "spoken_text": "Resta 5 en ambos lados: 3x = 15.",
+        "animation_state": "pointing",
+        "target_x": 7,
+        "target_y": 9,
+    }
+    action, payload = _ask(_math_client(), reply, query="¿Qué hago?", language="es")
+    assert payload["messages"][0]["content"] == system_prompt("math", "help", "es")
+    assert action.spoken_text == "Resta cinco en ambos lados: tres x es igual a quince."
+    assert action.display_text == "Resta 5 en ambos lados: 3x = 15."  # type: ignore[attr-defined]
+    english, _ = _ask(_math_client(), {**reply, "spoken_text": "Subtract 5: 3x = 15."}, query="help")
+    assert english.spoken_text == "Subtract five: three x equals fifteen."
+    assert english.display_text == "Subtract 5: 3x = 15."  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("text", "reveals"),
+    [
+        ("Entonces x es igual a cinco.", True),
+        ("La respuesta es cinco.", True),
+        ("Muy bien, x vale 5.", True),
+        ("Ahora tienes tres x es igual a quince.", False),
+        ("¿Cuánto vale x?", False),
+        ("Resta cinco en ambos lados.", False),
+        ("x más tres es igual a ocho.", False),
+    ],
+)
+def test_reveals_value_in_spanish(text: str, reveals: bool) -> None:
+    assert vc.reveals_value(text, "es") is reveals
+
+
+def test_reads_problem_in_spanish_words() -> None:
+    assert vc.reads_problem("Problema dos. Dos x menos cuatro es igual a diez.", "2x - 4 = 10", "es")
+    assert vc.reads_problem("dos x menos 4 es igual a diez", "2x - 4 = 10", "es")
+    assert not vc.reads_problem("Dos x más cuatro es igual a diez.", "2x - 4 = 10", "es")
+    assert vc.reads_back("Prueba un medio más un cuarto, por favor.", "1/2 + 1/4", "es")
+    assert not vc.dictates_problem("Escríbelo por favor.", None, "es"), "'por favor' is no product"
+
+
+def test_spanish_quiz_check_correct_reads_the_next_problem_in_spanish_words() -> None:
+    action = AvatarAction("¡Excelente trabajo!", "celebrating", 1, 2)
+    checked = vc.speakable(vc.check_quiz_answer(action, ES_QUIZ, "x = 5", language="es"), "es")
+    assert checked.animation_state == "celebrating" and checked.verdict == "correct"  # type: ignore[attr-defined]
+    assert checked.display_text == "¡Excelente trabajo! Problema 2. 2x - 4 = 10"  # type: ignore[attr-defined]
+    assert checked.spoken_text == "¡Excelente trabajo! Problema dos. dos x menos cuatro es igual a diez"
+    assert not _digits_or_symbols(checked.spoken_text)
+
+
+def test_spanish_quiz_check_wrong_and_missing_answers() -> None:
+    leak = AvatarAction("Casi. La respuesta es cinco.", "error", 1, 2)
+    wrong = vc.check_quiz_answer(leak, ES_QUIZ, "x = 7", language="es")
+    assert wrong.spoken_text == vc.TEXTS["es"]["wrong"] and wrong.verdict == "wrong"  # type: ignore[attr-defined]
+    hint = AvatarAction("Casi. ¿Qué restas en ambos lados?", "error", 1, 2)
+    assert vc.check_quiz_answer(hint, ES_QUIZ, "x = 7", language="es").spoken_text == hint.spoken_text
+    none = vc.check_quiz_answer(hint, ES_QUIZ, None, language="es")
+    assert none.spoken_text == vc.TEXTS["es"]["no_answer"] and none.animation_state == "idle"
+    english = AvatarAction("Correct, great job!", "celebrating", 1, 2)
+    praised = vc.check_quiz_answer(english, {**ES_QUIZ, "next_problem": None, "number": 5}, "x = 5", language="es")
+    assert praised.spoken_text == "¡Correcto, muy bien! Ese fue el último problema. ¡Terminaste el quiz!"
+
+
+def test_spanish_quiz_dictation_is_spanish_even_when_the_model_answers_in_english() -> None:
+    task = {"kind": "quiz", "stage": "dictate", "number": 2, "total": 10, "problem": "2x + 3 = 11"}
+    english = AvatarAction("Problem two of ten. Two x plus three equals eleven. Write your answer.", "idle", 1, 2)
+    dictated = vc.speakable(vc.apply_task_rules(english, "quiz", task, language="es"), "es")
+    assert dictated.display_text == "Problema 2 de 10. 2x + 3 = 11. Escribe tu respuesta en el pizarrón."  # type: ignore[attr-defined]
+    assert (
+        dictated.spoken_text
+        == "Problema dos de diez. dos x más tres es igual a once. Escribe tu respuesta en el pizarrón."
+    )
+    spanish = AvatarAction("Problema dos de diez. Dos x más tres es igual a once. Escríbelo.", "pointing", 1, 2)
+    kept = vc.apply_task_rules(spanish, "quiz", task, language="es")
+    assert kept.spoken_text == spanish.spoken_text and kept.animation_state == "idle"
+
+
+def test_spanish_learn_offer_asks_the_spanish_question() -> None:
+    offer = {"kind": "learn", "topic": "fracciones", "stage": "offer"}
+    intro = AvatarAction("Una fracción es una parte de un todo. ¿Quieres saber más?", "pointing", 1, 2)
+    asked = vc.apply_task_rules(intro, "help", offer, language="es")
+    assert asked.spoken_text == f"Una fracción es una parte de un todo. {vc.OFFER_QUESTION_ES}"
+    own = AvatarAction("Una fracción es una parte. ¿Tienes un ejercicio o lo invento yo?", "idle", 1, 2)
+    assert vc.apply_task_rules(own, "help", offer, language="es").spoken_text == own.spoken_text
+
+
+def test_spanish_starter_problem_drops_the_result_and_keeps_notation_elsewhere() -> None:
+    example = {"kind": "learn", "topic": "fracciones", "stage": "example"}
+    solved = AvatarAction("Prueba 1/2 + 1/4. Un medio más un cuarto es igual a tres cuartos.", "idle", 1, 2)
+    out = vc.apply_task_rules(solved, "help", example, language="es").spoken_text
+    assert out == "Prueba 1/2 + 1/4. Un medio más un cuarto."
+    equation = AvatarAction("Resuelve x más tres es igual a ocho.", "idle", 1, 2)
+    assert vc.apply_task_rules(equation, "help", example, language="es").spoken_text == equation.spoken_text
+
+
+def test_spanish_reply_in_english_is_asked_again_then_salvaged() -> None:
+    english = {
+        "spoken_text": "First subtract five from both sides.",
+        "animation_state": "pointing",
+        "target_x": 7,
+        "target_y": 9,
+    }
+    c = _math_client()
+    with patch.object(c.session, "post", return_value=_ollama_resp(json.dumps(english))) as post:
+        action = c.evaluate("¿Qué hago?", JPEG, CHUNKS, REGIONS, SIZE, language="es")
+    assert post.call_count == 2, "asked again"
+    assert vc.RETRY_NOTES["es"]["language"] in post.call_args.kwargs["json"]["messages"][1]["content"]
+    assert action.display_text == vc.TEXTS["es"]["step"]  # type: ignore[attr-defined]
+    assert action.spoken_text == vc.TEXTS["es"]["step"]
+
+
+def test_spanish_help_answer_leak_is_retried_in_spanish() -> None:
+    leak = {"spoken_text": "Entonces x es igual a cinco.", "animation_state": "pointing", "target_x": 7, "target_y": 9}
+    step = {"spoken_text": "Resta cinco en ambos lados.", "animation_state": "pointing", "target_x": 7, "target_y": 9}
+    c = _math_client()
+    responses = [_ollama_resp(json.dumps(leak)), _ollama_resp(json.dumps(step))]
+    with patch.object(c.session, "post", side_effect=responses) as post:
+        action = c.evaluate("Dime cuánto vale x", JPEG, CHUNKS, REGIONS, SIZE, language="es")
+    assert vc.RETRY_NOTES["es"]["reveal"] in post.call_args.kwargs["json"]["messages"][1]["content"]
+    assert action.spoken_text == "Resta cinco en ambos lados."
+
+
+def test_spanish_failures_are_spanish() -> None:
+    action, _ = _ask(_math_client(), requests.Timeout("slow"), language="es")
+    assert action.spoken_text == vc.TEXTS["es"]["timeout"] and action.failed  # type: ignore[attr-defined]
+    c = _math_client()
+    with patch.object(c.session, "post", return_value=_ollama_resp("no json")):
+        garbled = c.evaluate("hola", JPEG, [], [], SIZE, language="es")
+    assert garbled.spoken_text == vc.TEXTS["es"]["not_json"]
+
+
+def test_mock_backend_speaks_spanish() -> None:
+    c = _math_client("mock")
+    task = {"kind": "quiz", "stage": "dictate", "number": 1, "total": 3, "problem": "x + 2 = 5"}
+    dictated = c.evaluate("Hazme un quiz", None, [], [], SIZE, mode="quiz", task=task, language="es")
+    assert (
+        dictated.spoken_text == "Problema uno de tres. x más dos es igual a cinco. Escribe tu respuesta en el pizarrón."
+    )
+    plain = c.evaluate("hola", None, [], [], SIZE, language="es")
+    assert plain.spoken_text.startswith('Escuché: "hola".')
+
+
+def test_unknown_language_is_english() -> None:
+    assert vc.normalize_reply_language("fr") == "en" and vc.normalize_reply_language("es-MX") == "es"
+    assert vc.normalize_reply_language(None) == "en"
+
+
+# ---- the high-res ink crop -------------------------------------------------------------------------------------
+
+
+class _Crop:
+    """InkCrop's shape: a 600x300 crop of the board area (400, 300, 300, 150) at 2 crop px per projector px."""
+
+    def __init__(self, jpeg: bytes = JPEG) -> None:
+        self.jpeg, self.roi, self.size, self.scale = jpeg, (400, 300, 300, 150), (600, 300), 2.0
+
+    def to_projector(self, x: float, y: float) -> tuple[float, float]:
+        return self.roi[0] + x / self.scale, self.roi[1] + y / self.scale
+
+
+def _wide_jpeg() -> bytes:
+    ok, buf = cv2.imencode(".jpg", np.full((900, 1800, 3), 200, np.uint8))
+    assert ok
+    return buf.tobytes()
+
+
+def test_crop_is_sent_unshrunk_and_located_in_the_prompt() -> None:
+    big = _wide_jpeg()
+    reply = {"spoken_text": "Look here.", "animation_state": "pointing", "target_x": 500, "target_y": 350}
+    c = VLMClient("ollama", "m", "http://x:11434", profile="math", max_image_side=1024)
+    with patch.object(c.session, "post", return_value=_ollama_resp(json.dumps(reply))) as post:
+        action = c.evaluate("help", big, [], REGIONS, (1280, 800), crop=_Crop(big))
+    sent = post.call_args.kwargs["json"]["messages"][1]
+    assert base64.b64decode(sent["images"][0]) == big, "never shrunk again"
+    assert "left=400 top=300 width=300 height=150" in sent["content"] and "not photo pixels" in sent["content"]
+    assert (action.target_x, action.target_y) == (500, 350), "inside the crop's board area: projector pixels"
+    with patch.object(c.session, "post", return_value=_ollama_resp(json.dumps(reply))) as post:
+        c.evaluate("help", big, [], REGIONS, (1280, 800))
+    whole = base64.b64decode(post.call_args.kwargs["json"]["messages"][1]["images"][0])
+    assert cv2.imdecode(np.frombuffer(whole, np.uint8), cv2.IMREAD_COLOR).shape[1] == 1024, "a whole board shrinks"
+
+
+@pytest.mark.parametrize(
+    ("state", "target", "expected"),
+    [
+        ("pointing", (100, 60), (450, 330)),  # crop pixels -> projector pixels
+        ("celebrating", (590, 290), (695, 445)),
+        ("pointing", (450, 320), (450, 320)),  # already projector pixels inside the crop's area
+        ("idle", (100, 60), (100, 60)),  # idle targets are the screen center by rule: never moved
+        ("pointing", (1000, 700), (1000, 700)),  # outside both: left alone
+    ],
+)
+def test_crop_targets_end_in_projector_pixels(state: str, target: tuple[int, int], expected: tuple[int, int]) -> None:
+    reply = {"spoken_text": "Mira aquí.", "animation_state": state, "target_x": target[0], "target_y": target[1]}
+    c = VLMClient("ollama", "m", "http://x:11434", profile="biology")
+    with patch.object(c.session, "post", return_value=_ollama_resp(json.dumps(reply))) as post:
+        action = c.evaluate("check", JPEG, [], REGIONS, (1280, 800), crop=_Crop())
+    assert (action.target_x, action.target_y) == expected
+    assert "left=400 top=300" in post.call_args.kwargs["json"]["messages"][1]["content"], "biology gets it too"
+
+
+def test_crop_text_absent_without_a_crop() -> None:
+    assert vc.crop_text(None) is None
+    assert "píxeles del proyector" in str(vc.crop_text(_Crop(), "es"))
+    assert "not photo pixels" not in build_prompt("q", [], REGIONS, SIZE, profile="math")
+
+
+def test_context_strips_an_answer_key_spread_over_chunks() -> None:
+    chunks = [
+        RetrievedChunk("7. x = 14\n8. x = 2\n\n## Notes\nShow each step.", "ws.md", 0.9, {}),
+        RetrievedChunk("# Worksheet\n7. x/2 - 4 = 3\n## Answer key\n1. x = 6", "ws.md", 0.8, {}),
+    ]
+    prompt = build_prompt("help", chunks, [], SIZE, profile="math")
+    assert "x = 14" not in prompt and "x = 6" not in prompt and "x/2 - 4 = 3" in prompt and "Show each step." in prompt
