@@ -445,6 +445,29 @@ def test_learn_offer_idea_with_numbers_is_replaced() -> None:
     assert spoken.startswith("Let's look at adding fractions. For example, ")
 
 
+@pytest.mark.parametrize(
+    ("idea", "language", "topic"),
+    [
+        # the model's own arithmetic in words is still its own example (review: it survived the digit check)
+        ("Adding fractions is like one half plus one third equals two fifths.", "en", "adding fractions"),
+        ("Sumar fracciones es como un medio más un tercio es igual a dos quintos.", "es", "sumar fracciones"),
+        # "e.g." ends a sentence for the splitter: half an idea is no idea
+        ("A fraction is a part of a whole, e.g. a slice of pizza.", "en", "a fraction"),
+    ],
+)
+def test_learn_offer_idea_with_the_models_own_math_is_replaced(idea: str, language: str, topic: str) -> None:
+    task = {"kind": "learn", "topic": topic, "stage": "offer"}
+    spoken = vc.apply_task_rules(AvatarAction(idea, "idle", 1, 2), "help", task, language=language).spoken_text
+    fallback = vc.text_for(language, "learn_idea", topic=topic)
+    assert spoken.startswith(f"{fallback} "), spoken
+    assert "two fifths" not in spoken and "dos quintos" not in spoken and "e.g." not in spoken
+
+
+def test_spanish_fallback_idea_is_spanish() -> None:
+    # A bare topic ("numerador") in the fallback must still read as Spanish, or the reply is asked again for nothing.
+    assert vc.in_language(vc.text_for("es", "learn_idea", topic="numerador"), "es")
+
+
 def test_spanish_learn_offer_gets_a_spanish_worked_example() -> None:
     model = AvatarAction("Una fracción es una parte de un entero.", "idle", 1, 2)
     task = {"kind": "learn", "topic": "una fracción", "stage": "offer"}

@@ -94,7 +94,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "dictation": "Problema {number} de {total}. {problem}. Escribe tu respuesta en el pizarrón.",
         "try_this": "Prueba este. {problem}. Escríbelo y resuélvelo.",
         "learn_offer": "Vamos a aprender sobre {topic}. {offer}",
-        "learn_idea": "Veamos {topic}.",
+        "learn_idea": "Veamos el tema de {topic} con un ejemplo.",
         "learn_example": "Empecemos con uno fácil. {problem}. Escríbelo en el pizarrón e intenta el primer paso.",
         "learn_own": "¡Muy bien! Escribe tu ejercicio en el pizarrón y luego pídeme ayuda.",
         "write_problem": "Escribe el problema en el pizarrón y luego pídeme ayuda con el primer paso.",
@@ -1148,7 +1148,10 @@ def _worked_offer(spoken: str, task: Mapping[str, Any], language: str) -> str:
     idea = ""
     for sentence in sentences:
         if not sentence.endswith("?"):
-            if not re.search(r"\d|example|ejemplo", sentence, re.IGNORECASE):
+            own_math = re.search(r"\d|example|ejemplo|\b(?:e\.g|i\.e)\.$", sentence, re.IGNORECASE) or says_equation(
+                sentence, language
+            )
+            if not own_math and not dictates_problem(sentence, None, language):
                 idea = sentence
             break
     # The model's closing question stays last: _with_offer_question keeps it when it asks the offer in its own words.

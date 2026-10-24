@@ -923,6 +923,7 @@ def test_is_quiz_stop_es(text: str, expected: bool) -> None:
         ("¿qué quiere decir ecuación?", "ecuación"),
         # "¿cómo es una fracción?" asks what it is like; Whisper also hears "¿qué es...?" this way
         ("¿Cómo es una fracciones?", "una fracciones"),
+        ("no sé qué es una fracción", "una fracción"),
         ("¿cómo son las fracciones equivalentes?", "las fracciones equivalentes"),
     ],
 )
@@ -965,6 +966,11 @@ def test_detect_learn_request_es(text: str, expected: str) -> None:
         "¿qué significa eso?",
         "¿cómo es la respuesta?",
         "¿cómo es posible?",
+        # "que" (that) is not "qué" (what): statements are not questions
+        "creo que es una fracción",
+        "ya sé que es una fracción",
+        "mi maestra dijo que es una ecuación",
+        "¿qué es mi fracción?",
         "¿cómo es que se hace?",
     ],
 )

@@ -4,7 +4,7 @@ from fractions import Fraction
 
 import pytest
 
-from biobench_sar.worked_examples import KINDS, topic_kind, worked_example
+from biobench_sar.worked_examples import KINDS, example_for_kind, topic_kind, worked_example
 
 
 @pytest.mark.parametrize(
@@ -38,6 +38,13 @@ from biobench_sar.worked_examples import KINDS, topic_kind, worked_example
         ("solving equations", "equation"),
         ("resolver ecuaciones", "equation"),
         ("una ecuación", "equation"),
+        # the operation wins over "different denominators" (review: these got an addition example)
+        ("subtracting fractions with different denominators", "subtract_unlike"),
+        ("restar fracciones con distinto denominador", "subtract_unlike"),
+        ("dividing fractions with different denominators", "divide"),
+        ("multiplying fractions with unlike denominators", "multiply"),
+        ("una fracción mixta", "mixed"),
+        ("fracciones mixtas", "mixed"),
     ],
 )
 def test_topic_kind(topic: str, kind: str) -> None:
@@ -97,7 +104,7 @@ ARITHMETIC = [k for k in KINDS if k not in ("concept", "equation")]
 @pytest.mark.parametrize("kind", ARITHMETIC)
 def test_every_equality_in_an_example_is_true(kind: str, language: str) -> None:
     for seed in range(40):
-        text = worked_example(kind, language, random.Random(seed))
+        text = example_for_kind(kind, language, random.Random(seed))
         assert text, (kind, language, seed)
         chains = _chains(text)
         assert chains, text
@@ -138,10 +145,10 @@ def test_examples_vary_between_asks() -> None:
 
 def test_common_denominator_sums_stay_under_one_and_divisions_differ() -> None:
     for seed in range(60):
-        added = _chains(worked_example("add_unlike", "en", random.Random(seed)))[-1][-1]
+        added = _chains(example_for_kind("add_unlike", "en", random.Random(seed)))[-1][-1]
         assert added < 1, seed
         a, b, c, d = map(
-            int, re.search(r"(\d+)/(\d+) ÷ (\d+)/(\d+)", worked_example("divide", "en", random.Random(seed))).groups()
+            int, re.search(r"(\d+)/(\d+) ÷ (\d+)/(\d+)", example_for_kind("divide", "en", random.Random(seed))).groups()
         )
         assert Fraction(a, b) != Fraction(c, d), seed
 
@@ -149,7 +156,7 @@ def test_common_denominator_sums_stay_under_one_and_divisions_differ() -> None:
 def test_examples_stay_middle_school_easy() -> None:
     for kind in ARITHMETIC:
         for seed in range(40):
-            numbers = [int(n) for n in re.findall(r"\d+", worked_example(kind, "en", random.Random(seed)))]
+            numbers = [int(n) for n in re.findall(r"\d+", example_for_kind(kind, "en", random.Random(seed)))]
             assert max(numbers) <= 60, (kind, seed, numbers)
 
 
@@ -162,6 +169,6 @@ def test_the_voice_reads_every_fraction_as_words(kind: str, language: str) -> No
 
     speak, over = (to_speech_es, " sobre ") if language == "es" else (to_speech, " over ")
     for seed in range(40):
-        text = worked_example(kind, language, random.Random(seed))
+        text = example_for_kind(kind, language, random.Random(seed))
         assert all(2 <= int(b) <= 20 for b in re.findall(r"\d+/(\d+)", text)), text
         assert over not in speak(text), speak(text)

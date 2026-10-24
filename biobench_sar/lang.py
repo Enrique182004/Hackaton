@@ -744,7 +744,11 @@ _LEARN_EXPLAIN_ES = re.compile(
 )
 # "¿qué es una fracción?" asks for the idea; "¿qué es tres más cinco?" names no topic and stays help. "¿cómo es una
 # fracción?" asks the same (and is how Whisper often hears it); the article keeps "¿cómo es posible?" out.
-_LEARN_WHAT_ES = re.compile(r"\bque\s+(?:es|son|significa|quiere\s+decir)\s+(?P<rest>[^,]+)")
+# "que" (that) and "qué" (what) are the same once accents are stripped: "creo que es una fracción" is a statement.
+# So the accented "qué", or a bare "que" opening the question ("que es una fraccion", typed without accents).
+_WHAT_ES = r"(?:es|son|significa|quiere\s+decir)\s+(?P<rest>[^,]+)"
+_LEARN_WHAT_ES = re.compile(rf"\bqué\s+{_WHAT_ES}")
+_LEARN_WHAT_START_ES = re.compile(rf"^(?:(?:y|oye|dime|pero|entonces|bueno|a\s+ver|profe)\s*,?\s*)?que\s+{_WHAT_ES}")
 _LEARN_LIKE_ES = re.compile(r"\bcomo\s+(?:es|son)\s+(?P<rest>(?:un|una|el|la|los|las)\s+[^,]+)")
 _HOWTO_ES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -820,7 +824,7 @@ _MATH_TOPIC_ES = re.compile(
 )
 _DEIXIS_ES = re.compile(
     r"\b(?:esto|este|esta|estos|estas|eso|ese|esa|esos|esas|aqui|aca|ahi|alli|alla|pizarron|pizarra|arriba|abajo|"
-    r"mio|mia|lo|le)\b|\b\w+(?:ar|er|ir)(?:lo|la|los|las|le|les)\b"
+    r"mio|mia|mi|mis|lo|le)\b|\b\w+(?:ar|er|ir)(?:lo|la|los|las|le|les)\b"
 )
 _LEADING_FILLER_ES = re.compile(
     r"^(?:mas\s+(?:sobre|de|acerca\s+de)|un\s+poco\s+(?:mas\s+)?(?:de|sobre|acerca\s+de)|un\s+poquito\s+(?:de|sobre)|"
@@ -952,7 +956,12 @@ def detect_learn_request_es(text: str) -> str | None:
         for found in pattern.finditer(plain):
             if not _negated(plain, found.start()):
                 return _topic_es(*_words(plain, accented, found, "rest"), guarded=False)
-    found = _LEARN_EXPLAIN_ES.search(plain) or _LEARN_WHAT_ES.search(plain) or _LEARN_LIKE_ES.search(plain)
+    found = (
+        _LEARN_EXPLAIN_ES.search(plain)
+        or _LEARN_WHAT_ES.search(accented)  # same length as plain: its spans slice both
+        or _LEARN_WHAT_START_ES.search(plain)
+        or _LEARN_LIKE_ES.search(plain)
+    )
     if found:
         return _topic_es(*_words(plain, accented, found, "rest"), guarded=True)
     return _howto(plain, accented, guarded=True)

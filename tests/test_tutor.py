@@ -196,6 +196,14 @@ def test_long_topic_without_board_words_is_cut_to_eight_words() -> None:
     assert topic == "adding and subtract fractions with unlike denominators and"
 
 
+def test_what_does_mean_stays_fast_on_long_input() -> None:
+    import time
+
+    started = time.perf_counter()
+    assert detect_learn_request("what does fraction " * 1600) is None
+    assert time.perf_counter() - started < 0.5
+
+
 def test_learn_topic_is_short() -> None:
     topic = detect_learn_request("teach me " + " ".join(["fractions"] * 20))
     assert topic is not None and len(topic.split()) == 8

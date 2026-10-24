@@ -21,6 +21,7 @@ KINDS = (
     "add",
     "add_unlike",
     "subtract",
+    "subtract_unlike",
     "multiply",
     "divide",
     "equivalent",
@@ -30,22 +31,24 @@ KINDS = (
 )
 
 _FRACTION = r"fraction|fraccion|numerator|denominator|numerador|denominador"
-# Most specific first: "adding fractions with different denominators" is add_unlike, not add; "denominador" alone is
-# the concept. Arithmetic kinds need a fraction in the topic, so "multiplying decimals" gets no fraction example.
+_UNLIKE = (
+    r"common denominator|different denominator|unlike denominator|comun denominador|denominador comun|"
+    r"(?:distinto|diferente)s? denominador|denominadores (?:distintos|diferentes)"
+)
+# Only the two-step linear example exists: a quadratic or a system gets the idea only, never the wrong example.
+_NOT_LINEAR = r"quadratic|cuadr|segundo grado|system|sistema|\bline\b|recta|inequal|desigualdad|exponen"
+# Most specific first: subtracting / multiplying / dividing "with different denominators" are still those operations,
+# so they come before the common-denominator rule; "denominador" alone is the concept. Arithmetic kinds need a fraction
+# in the topic, so "multiplying decimals" gets no fraction example.
 _RULES: tuple[tuple[str, str, bool], ...] = (
     ("equation", r"equation|ecuacion|solve for|despej", False),
-    ("mixed", r"mixed|improper|mixto|impropi", False),
-    (
-        "add_unlike",
-        r"common denominator|different denominator|unlike denominator|comun denominador|denominador comun|"
-        r"(?:distinto|diferente)s? denominador|denominadores (?:distintos|diferentes)",
-        False,
-    ),
+    ("mixed", r"mixed|improper|mixt[oa]|impropi", False),
     ("equivalent", r"equivalen", True),
     ("simplify", r"simplif|reduc|lowest terms|minima expresion", True),
     ("divide", r"divid|division", True),
     ("multipl", r"multipl", True),
     ("subtract", r"subtract|\brest(?:a|ar|ando|amos)\b|minus", True),
+    ("add_unlike", _UNLIKE, False),
     ("add", r"\badd|\bsum|addition|\bsuma", True),
     ("concept", _FRACTION, False),
 )
@@ -61,12 +64,15 @@ def topic_kind(topic: str | None) -> str | None:
     plain = _plain(topic or "")
     if not plain.strip():
         return None
-    if plain.strip() in KINDS:
-        return plain.strip()
     has_fraction = bool(re.search(_FRACTION, plain))
     for kind, pattern, needs_fraction in _RULES:
-        if re.search(pattern, plain) and (has_fraction or not needs_fraction):
-            return "multiply" if kind == "multipl" else kind
+        if not re.search(pattern, plain) or (needs_fraction and not has_fraction):
+            continue
+        if kind == "equation" and re.search(_NOT_LINEAR, plain):
+            return None
+        if kind == "subtract" and re.search(_UNLIKE, plain):
+            return "subtract_unlike"
+        return "multiply" if kind == "multipl" else kind
     return None
 
 
@@ -110,27 +116,39 @@ def _add(rng: random.Random, es: bool) -> str:
     )
 
 
-def _add_unlike(rng: random.Random, es: bool) -> str:
-    while True:  # a sum under one whole: easier to picture than 17/12
+def _unlike(rng: random.Random, es: bool, minus: bool) -> str:
+    while True:  # a sum under one whole (easier to picture than 17/12); a difference above zero
         b, d = rng.choice([(2, 3), (2, 4), (3, 4), (2, 5), (3, 6), (4, 6), (2, 6), (3, 5)])
         a, c = rng.randint(1, b - 1), rng.randint(1, d - 1)
-        if Fraction(a, b) + Fraction(c, d) < 1:
+        if (Fraction(a, b) - Fraction(c, d) > 0) if minus else (Fraction(a, b) + Fraction(c, d) < 1):
             break
     common = lcm(b, d)
     top_a, top_c = a * common // b, c * common // d
+    op = "-" if minus else "+"
+    top = top_a - top_c if minus else top_a + top_c
     if es:
+        verb = "restamos" if minus else "sumamos"
         return (
-            f"Por ejemplo, {a}/{b} + {c}/{d}. Los números de abajo son distintos, así que buscamos un común "
-            f"denominador: {common}, porque el {b} y el {d} caben exactos en él. Cambiamos cada fracción: "
-            f"{a}/{b} = {top_a}/{common} y {c}/{d} = {top_c}/{common}. Ahora sumamos los de arriba: "
-            f"{top_a}/{common} + {top_c}/{common} = {_sum_to(top_a + top_c, common)}."
+            f"Por ejemplo, {a}/{b} {op} {c}/{d}. Los números de abajo son distintos, así que buscamos un denominador "
+            f"común: {common}, porque el {b} y el {d} caben exactos en él. Cambiamos cada fracción: "
+            f"{a}/{b} = {top_a}/{common} y {c}/{d} = {top_c}/{common}. Ahora {verb} los de arriba: "
+            f"{top_a}/{common} {op} {top_c}/{common} = {_sum_to(top, common)}."
         )
+    verb = "subtract" if minus else "add"
     return (
-        f"For example, {a}/{b} + {c}/{d}. The bottom numbers are different, so find a common denominator: {common}, "
+        f"For example, {a}/{b} {op} {c}/{d}. The bottom numbers are different, so find a common denominator: {common}, "
         f"because both {b} and {d} go into it evenly. Change each fraction: {a}/{b} = {top_a}/{common} and "
-        f"{c}/{d} = {top_c}/{common}. Now add the tops: {top_a}/{common} + {top_c}/{common} = "
-        f"{_sum_to(top_a + top_c, common)}."
+        f"{c}/{d} = {top_c}/{common}. Now {verb} the tops: {top_a}/{common} {op} {top_c}/{common} = "
+        f"{_sum_to(top, common)}."
     )
+
+
+def _add_unlike(rng: random.Random, es: bool) -> str:
+    return _unlike(rng, es, minus=False)
+
+
+def _subtract_unlike(rng: random.Random, es: bool) -> str:
+    return _unlike(rng, es, minus=True)
 
 
 def _subtract(rng: random.Random, es: bool) -> str:
@@ -226,8 +244,8 @@ def _mixed(rng: random.Random, es: bool) -> str:
     n = q * d + r
     if es:
         return (
-            f"Por ejemplo, {n}/{d}. Vemos cuántos grupos completos de {d} caben en {n}: {q} × {d} = {q * d}, y sobran "
-            f"{r}. Entonces {n}/{d} = {q} y {r}/{d}."
+            f"Por ejemplo, {n}/{d}. Vemos cuántos grupos completos de {d} caben en {n}: {q} × {d} = {q * d}, y "
+            f"{'sobra' if r == 1 else 'sobran'} {r}. Entonces {n}/{d} = {q} y {r}/{d}."
         )
     return (
         f"For example, {n}/{d}. See how many whole groups of {d} fit in {n}: {q} × {d} = {q * d}, with {r} left over. "
@@ -253,6 +271,7 @@ _MAKERS = {
     "concept": _concept,
     "add": _add,
     "add_unlike": _add_unlike,
+    "subtract_unlike": _subtract_unlike,
     "subtract": _subtract,
     "multiply": _multiply,
     "divide": _divide,
@@ -266,6 +285,9 @@ _MAKERS = {
 def worked_example(topic: str | None, language: str = "en", rng: random.Random | None = None) -> str | None:
     """One easy example on the topic, solved step by step in the reply language, or None for other topics."""
     kind = topic_kind(topic)
-    if kind is None:
-        return None
+    return None if kind is None else example_for_kind(kind, language, rng)
+
+
+def example_for_kind(kind: str, language: str = "en", rng: random.Random | None = None) -> str:
+    """The worked example of one kind from KINDS (tests check every kind this way)."""
     return _MAKERS[kind](rng or random.Random(), str(language or "").lower().startswith("es"))
