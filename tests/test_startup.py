@@ -5,8 +5,12 @@ import socket
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from biobench_sar import app as app_module
 from biobench_sar.app import _port_free, seed_app_knowledge, seed_knowledge
 from biobench_sar.config import PACKAGE_DIR, Settings
+from biobench_sar.ports import BROWSER_BLOCKED_PORTS
 from biobench_sar.rag.quiz_bank import QuizBank
 
 BIOLOGY = PACKAGE_DIR / "knowledge" / "biology"
@@ -138,6 +142,26 @@ def test_port_free_detects_a_bound_port() -> None:
         sock.listen()
         port = sock.getsockname()[1]
         assert _port_free("127.0.0.1", port) is False
+
+
+def test_blocked_ports_are_the_fetch_standards_bad_ports() -> None:
+    assert len(BROWSER_BLOCKED_PORTS) == 83
+    assert {5060, 5061, 6000, 10080} <= BROWSER_BLOCKED_PORTS
+    # The default port and the ones the launcher suggests when it is busy stay usable.
+    assert not {5050, 5051, 5052} & BROWSER_BLOCKED_PORTS
+
+
+@pytest.mark.parametrize("port", [5060, 5061, 6000])
+def test_main_refuses_a_port_browsers_block(
+    port: int, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("SAR_PORT", str(port))
+    monkeypatch.setattr(app_module, "_port_free", lambda host, port: True)
+    monkeypatch.setattr(app_module, "create_app", lambda settings: pytest.fail("no page could load on this port"))
+    with pytest.raises(SystemExit) as exit_info:
+        app_module.main()
+    assert exit_info.value.code == 1
+    assert f"Browsers refuse to open port {port}" in caplog.text and "SAR_PORT" in caplog.text
 
 
 def test_default_port_avoids_airplay(monkeypatch: Any) -> None:

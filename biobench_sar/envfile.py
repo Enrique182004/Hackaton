@@ -50,7 +50,7 @@ def decode_env_bytes(data: bytes) -> str:
 def load_env_file(path: Path | None = None) -> list[str]:
     """Apply KEY=VALUE pairs that aren't already set in the environment; returns the keys applied.
 
-    Real environment variables win, so `SAR_PORT=6000 python -m biobench_sar` still overrides the file.
+    Real environment variables win, so `SAR_PORT=6001 python -m biobench_sar` still overrides the file.
     """
     path = path or env_file_path()
     try:

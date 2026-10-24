@@ -41,6 +41,7 @@ if not getattr(sys, "frozen", False):
 
 from biobench_sar import __version__
 from biobench_sar.paths import APP_NAME, executable_dir, is_frozen, resource_dir, user_data_dir
+from biobench_sar.ports import BROWSER_BLOCKED_PORTS
 
 ENV_FILE_NAME = "sar.env"
 OLLAMA_DOWNLOAD_URL = "https://ollama.com/download"
@@ -171,6 +172,14 @@ def damaged_install_advice() -> str:
             "(an antivirus program may have removed a file). Install the app again."
         )
     return "Part of the program could not be loaded. Install the packages again: pip install -r requirements.txt"
+
+
+def blocked_port_advice(port: int) -> str:
+    # Never the default port, and --port rejects these itself, so the value came from a sar.env or the environment.
+    return (
+        f"Port {port} can't be used: web browsers refuse to open it, so the dashboard would never load. "
+        f"Change SAR_PORT in {setting_origin('SAR_PORT')} to another number, for example SAR_PORT=5050."
+    )
 
 
 def busy_port_advice(port: int) -> str:
@@ -845,13 +854,17 @@ def run_app(open_browser: bool = True, out: Out = say, env_files: Sequence[Path]
     out(f"{APP_NAME} {__version__}")
     out(f"  Data folder  {os.environ.get('SAR_DATA_DIR', '')}")
     out(f"  Dashboard    {url}")
+    # app.main() would stop on a blocked or busy port too, but with a message meant for developers, and only after
+    # the browser had been sent to a page that can't load.
+    if settings.port in BROWSER_BLOCKED_PORTS:
+        reason = ValueError(f"port {settings.port} is on the browsers' list of unsafe ports")
+        raise StartupFailed(blocked_port_advice(settings.port)) from reason
     with startup_step(
         f"{settings.host}:{settings.port} is not an address this computer can serve on. Set SAR_HOST to "
         "127.0.0.1 (this computer only) or 0.0.0.0 (phones and tablets too), and SAR_PORT to a number "
         "from 1024 to 65535."
     ):
         busy = busy_port_error(settings.host, settings.port)
-    # app.main() would stop on a busy port too, with a message meant for developers.
     if busy is not None:
         raise StartupFailed(busy_port_advice(settings.port)) from busy
     if serves_network(settings.host):
@@ -884,6 +897,8 @@ def _port_number(text: str) -> int:
     port = int(text)
     if not 1 <= port <= 65535:
         raise argparse.ArgumentTypeError(f"{port} is not a port number (1-65535)")
+    if port in BROWSER_BLOCKED_PORTS:
+        raise argparse.ArgumentTypeError(f"browsers refuse to open port {port}; choose another, such as 5050")
     return port
 
 

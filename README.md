@@ -319,7 +319,7 @@ wins over the file. Desktop builds also look next to the app and in the data fol
 | `SAR_TTS_VOICE` | `en-US-AnaNeural` | Edge voice for its own language. Spanish uses `es-MX-DaliaNeural` (pitched up to sound like a kid) unless this names a Spanish voice |
 | **Server and phones** | | |
 | `SAR_HOST` | `127.0.0.1` (`0.0.0.0` with `SAR_LAN=1`) | Bind address. Anything other than `127.0.0.1`, `localhost` or `::1` turns the phone PIN gate on |
-| `SAR_PORT` | `5050` | Server port |
+| `SAR_PORT` | `5050` | Server port. The app won't start on a port browsers refuse to open (5060, 5061, 6000 and the rest of [the Fetch standard's list](https://fetch.spec.whatwg.org/#port-blocking)) |
 | `SAR_LAN` | off | `1` = phone mode: listen on the Wi-Fi, behind a six-digit PIN ([docs/MOBILE.md](docs/MOBILE.md)) |
 | `SAR_LAN_HOSTNAMES` | empty | Comma list of extra host names phones may use (e.g. `my-laptop.local`). IP addresses and `localhost` always work |
 | **Files** | | |
@@ -364,7 +364,7 @@ change goes through its own branch and PR (see [CONTRIBUTING.md](CONTRIBUTING.md
 | `biobench_sar/lang.py` | English/Spanish detection and the Spanish tutor intents |
 | `biobench_sar/lan.py` | Phones on the Wi-Fi: addresses, the join PIN, device cookies, the Socket.IO gate |
 | `biobench_sar/accessibility.py` | The room's accessibility settings (captions, text size, voice speed, calm mode, high contrast): checked, saved and loaded |
-| `biobench_sar/config.py`, `envfile.py`, `jsonfile.py`, `paths.py`, `schemas.py` | Settings, `sar.env` loading, the one atomic JSON write, where files live (checkout or desktop build), shared types |
+| `biobench_sar/config.py`, `envfile.py`, `jsonfile.py`, `paths.py`, `ports.py`, `schemas.py` | Settings, `sar.env` loading, the one atomic JSON write, where files live (checkout or desktop build), ports browsers refuse to open, shared types |
 | `biobench_sar/core/` | Camera loop and ink detection, high-resolution ink crop, glare check, homography calibration, mic and wake word |
 | `biobench_sar/rag/` | Document ingestion (answer keys stripped for math), ChromaDB store, quiz bank parser and problem generator |
 | `biobench_sar/llm/` | VLM client (prompts per profile, mode and language + JSON schema), math-to-speech in English and Spanish, text-to-speech |
