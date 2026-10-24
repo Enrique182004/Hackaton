@@ -284,7 +284,8 @@ def test_math_prompts_have_phonetic_rules_schema_and_stay_compact(kind: str) -> 
         assert key in prompt
     assert "Conversation so far" in prompt
     assert ("board_answer" in prompt) == (kind == "quiz")
-    assert len(prompt) < 3000  # every token of system prompt is paid on each question
+    # Every token of system prompt is paid on each question; the scan rule for small symbols is worth its 160.
+    assert len(prompt) < 3200
 
 
 @pytest.mark.parametrize(
@@ -469,7 +470,9 @@ def test_math_evaluate_sends_mode_prompt_and_turns() -> None:
     assert "Mode: practice" in user and "Student said: another one" in user and "Student: I want to learn" in user
     assert payload["options"] == {"temperature": 0.6, "num_predict": 200} and payload["keep_alive"] == "30m"
     assert payload["format"] == "json" and payload["messages"][1]["images"] == [B64]
-    assert action == AvatarAction("Subtract five from both sides.", "idle", 7, 9)  # dictating, not pointing
+    # dictating, not pointing
+    assert action.to_dict() == AvatarAction("Subtract five from both sides.", "idle", 7, 9).to_dict()
+    assert action.display_text == "Subtract five from both sides."  # type: ignore[attr-defined]
 
 
 @pytest.mark.usefixtures("no_mathspeak")
