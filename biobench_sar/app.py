@@ -728,15 +728,15 @@ def create_app(
         if not socket_allowed():
             raise flask_socketio.ConnectionRefusedError("join with the PIN first")
         if lan_on and not is_local_request(request.remote_addr):
-            phones.add(request.sid)  # type: ignore[attr-defined]
+            phones.add(request.sid)
         # A client that (re)connects mid-query must not show a stale state.
-        socketio.emit("status", {"state": assistant.state}, to=request.sid)  # type: ignore[attr-defined]
-        socketio.emit("tutor", assistant.tutor.to_dict(), to=request.sid)  # type: ignore[attr-defined]
-        socketio.emit("language", assistant.language_body(), to=request.sid)  # type: ignore[attr-defined]
+        socketio.emit("status", {"state": assistant.state}, to=request.sid)
+        socketio.emit("tutor", assistant.tutor.to_dict(), to=request.sid)
+        socketio.emit("language", assistant.language_body(), to=request.sid)
 
     @socketio.on("disconnect")
     def on_disconnect(*_args: Any) -> None:
-        phones.discard(request.sid)  # type: ignore[attr-defined]
+        phones.discard(request.sid)
 
     @socketio.on("text_query")
     def on_text_query(data: Any) -> None:
