@@ -233,7 +233,8 @@ _CLOSING_FILLER_ES = (
 )
 # The clause ends here, maybe after a "porfa": "ya me cansé" / "ya me cansé, porfa", not "ya me cansé de estudiar".
 _CLAUSE_END_ES = rf"(?=(?:\s+{_CLOSING_FILLER_ES})*\s*(?:,|$))"
-# "luego luego" is Mexican for "right away", so neither "luego" of it puts anything off.
+# A time right after a stop command says when the quiz ends (_NOT_NOW_ES). "luego luego" is Mexican for "right
+# away", so neither "luego" of it is a time.
 _LATER_WORD_ES = (
     r"(?:despues|(?<!\bluego )luego(?!\s+luego\b)|al\s+rato|mas\s+tarde|otro\s+dia|"
     r"(?<!\bde )(?<!\bpara )(?:pasado\s+)?manana)"
@@ -314,7 +315,7 @@ _OPENING_FILLER_ES = (
     r"dale|orale|andale|sip|entonces|ay|y\s+ya|a\s+ver|nomas|ya\s+estuvo)"
 )
 # "no, para el examen" / "sí, para el examen" answer "¿para qué estudias?", so after them a bare "para el quiz"
-# needs a reason to quit; "no, termina el quiz" still quits.
+# needs a reason to quit, a "ya" or a "porfa" (_URGED_PARA_ES); "no, termina el quiz" still quits.
 _ANSWER_FILLER_ES = r"(?:no|si\s+,)"
 _OPENED_ES = rf"(?:(?:{_OPENING_FILLER_ES}|{_ANSWER_FILLER_ES})\s+(?:,\s+)?)*"
 # Whisper writes "Sí termina el quiz" with no comma; the accent says "yes", where "si termina el quiz" is "if".
