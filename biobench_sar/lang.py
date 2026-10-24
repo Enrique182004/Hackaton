@@ -653,7 +653,8 @@ def detect_mode_es(text: str) -> str | None:
         return "help"
     if _requested(_QUIZ_ES, plain) or _alone(_QUIZ_ALONE_ES, plain):
         return "quiz"
-    asked = "?" in text[:MAX_INPUT_CHARS] or "¿" in text[:MAX_INPUT_CHARS]
+    capped = (text or "")[:MAX_INPUT_CHARS]
+    asked = "?" in capped or "¿" in capped
 
     def describes(plain: str, found: re.Match[str]) -> bool:
         return _describes(plain, found, asked=asked)
@@ -775,7 +776,7 @@ _VAGUE_TOPIC_ES = _word_set(
 )
 _DANGLING_WORDS = _word_set("de del al a en con por para sin sobre entre y o e u el la los las lo un una unos unas que")
 _THEN_WORDS = _word_set("luego despues tambien ademas")
-_ASKING_WORDS = _word_set(
+_REQUEST_START_WORDS = _word_set(
     "me nos quiero quisiera necesito hacemos practicamos repasamos vemos seguimos empezamos pasamos"
 )
 _ANOTHER_REQUEST_ES = re.compile(
@@ -816,7 +817,9 @@ def _first_request(plain: list[str], accented: list[str]) -> tuple[list[str], li
             continue
         after = plain[index + 2 : index + 5]
         if after and (
-            after[0] in _ASKING_WORDS or _ORDER_ES.fullmatch(after[0]) or _ANOTHER_REQUEST_ES.match(" ".join(after))
+            after[0] in _REQUEST_START_WORDS
+            or _ORDER_ES.fullmatch(after[0])
+            or _ANOTHER_REQUEST_ES.match(" ".join(after))
         ):
             return plain[:index], accented[:index]
     return plain, accented
