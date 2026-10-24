@@ -1173,6 +1173,33 @@ def fallback_problem(kind: str, task: Mapping[str, Any] | None) -> str | None:
     return _seed_problem(3, 6) if kind == "practice" else None
 
 
+# What a 3B model writes for "nothing on the board" instead of "".
+_NO_PROBLEM = frozenset(
+    {"n/a", "na", "none", "null", "nothing", "empty", "blank", "unknown", "nada", "ninguno", "vacio", "vacío"}
+)
+_MATH_LIKE = re.compile(r"\d|\w\s*[=+\-*/^<>]\s*\w")
+
+
+def _card_value(text: str | None) -> str | None:
+    """A problem the projector's card can show: math-looking, not a placeholder; None otherwise."""
+    clean = _clean(text) if text else None
+    if not clean or clean.strip(" .").lower() in _NO_PROBLEM or not _MATH_LIKE.search(clean):
+        return None
+    return clean
+
+
+def _card_problems(action: AvatarAction, kind: str, task: Mapping[str, Any] | None, language: str) -> AvatarAction:
+    """Keep only the problems the projector's card may show for this reply: board_problem in help and practice,
+    new_problem only when the reply dictates one (practice, a lesson's example) and its words read that problem out,
+    so the card never shows a problem the voice did not say."""
+    board = _card_value(getattr(action, "board_problem", None)) if kind in ("help", "practice") else None
+    new = _card_value(getattr(action, "new_problem", None))
+    dictates = kind == "practice" or (kind == "learn" and learn_stage(task) == "example")
+    if not dictates or (new and not reads_problem(action.spoken_text, new, language)):
+        new = None
+    return _tutor(action, board_problem=board, new_problem=new)
+
+
 def fallback_text(kind: str, task: Mapping[str, Any] | None, has_ink: bool, language: str = "en") -> str:
     """What to say when the model's reply is unusable even after a retry."""
     t = task or {}
@@ -1474,19 +1501,19 @@ class VLMClient:
             if self.backend != "mock":
                 note = _retry_note(action, kind, task, query, recent_turns, board, language, reply.board_answer)
             if note is None:
-                return action
+                return _card_problems(action, kind, task, language)
             logger.info("asking the model again: %s", note)
             retry = self._evaluate(*args, note=note, **extra)
             if not retry.failed:
                 again, board = self._finish(retry, mode, task, query, language), retry.board_problem or board
                 again = _tutor(again, board_problem=board)  # a retry that left the board out keeps the first read
                 if _retry_note(again, kind, task, query, recent_turns, board, language, retry.board_answer) is None:
-                    return again
+                    return _card_problems(again, kind, task, language)
                 action = again
             if kind == "quiz" and quiz_stage(task) == "check":
                 return action  # graded in code: still the next problem, so it stays ungraded ("ask me again")
             salvaged = _salvage(action, kind, task, query, recent_turns, bool(ink_regions), board, language)
-            return speakable(salvaged, language)
+            return _card_problems(speakable(salvaged, language), kind, task, language)
         except Exception as exc:  # evaluate must never raise
             logger.exception("Math post-processing failed, using the raw answer: %s", exc)
             return reply.action

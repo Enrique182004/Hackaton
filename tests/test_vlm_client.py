@@ -1724,3 +1724,68 @@ def test_mock_dictates_a_problem_for_the_card(language: str) -> None:
     practice = client.evaluate("another", None, [], [], (1920, 1080), mode="practice", task={"kind": "practice"})
     assert lesson.new_problem == "1/5 + 2/5"
     assert practice.new_problem == vc.fallback_problem("practice", {"kind": "practice"})
+
+
+def test_new_problem_the_words_do_not_read_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    reply = (
+        '{"board_problem": "2x + 3 = 11", "new_problem": "5x + 2 = 17", "spoken_text": "Try this one. Four x plus '
+        'seven equals nineteen. Write it down and solve it.", "animation_state": "idle", "target_x": 960, '
+        '"target_y": 540}'
+    )
+    action = _card_ask(_client_replying(monkeypatch, reply), "practice", {"kind": "practice"}, "another one")
+    assert action.new_problem is None, "the card must never show a problem the voice did not say"
+    assert action.board_problem == "2x + 3 = 11"
+
+
+@pytest.mark.parametrize("language", ["en", "es"])
+def test_spanish_and_english_dictation_keeps_the_new_problem(monkeypatch: pytest.MonkeyPatch, language: str) -> None:
+    spoken = (
+        "Prueba este. Cuatro x más siete es igual a diecinueve. Escríbelo y resuélvelo."
+        if language == "es"
+        else "Try this one. Four x plus seven equals nineteen. Write it down and solve it."
+    )
+    reply = json.dumps(
+        {
+            "board_problem": "2x + 3 = 11",
+            "new_problem": "4x + 7 = 19",
+            "spoken_text": spoken,
+            "animation_state": "idle",
+            "target_x": 960,
+            "target_y": 540,
+        }
+    )
+    client = _client_replying(monkeypatch, reply)
+    action = client.evaluate(
+        "otro", b"jpg", [], [], (1920, 1080), mode="practice", task={"kind": "practice"}, language=language
+    )
+    assert action.new_problem == "4x + 7 = 19"
+
+
+def test_a_problem_only_where_the_mode_has_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A stray new_problem in help, or in a lesson's offer stage, is not a dictated problem.
+    help_reply = (
+        '{"board_problem": "2x + 3 = 11", "new_problem": "4x + 7 = 19", "spoken_text": "Subtract three from both '
+        'sides.", "animation_state": "pointing", "target_x": 700, "target_y": 400}'
+    )
+    assert _card_ask(_client_replying(monkeypatch, help_reply), "help").new_problem is None
+    offer = (
+        '{"board_problem": "x = 2", "new_problem": "1/4 + 2/4", "spoken_text": "A fraction is a part of a whole. '
+        f'{OFFER_QUESTION}", "animation_state": "idle", "target_x": 960, "target_y": 540}}'
+    )
+    task = {"kind": "learn", "topic": "fractions", "stage": "offer"}
+    lesson = _card_ask(_client_replying(monkeypatch, offer), "help", task, "teach me fractions")
+    assert (lesson.board_problem, lesson.new_problem) == (None, None)
+
+
+@pytest.mark.parametrize("value", ["N/A", "None", "none.", "nothing", "", "   ", "the board is empty"])
+def test_placeholder_board_problems_are_dropped(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    reply = json.dumps(
+        {
+            "board_problem": value,
+            "spoken_text": "Write your problem on the board.",
+            "animation_state": "idle",
+            "target_x": 960,
+            "target_y": 540,
+        }
+    )
+    assert _card_ask(_client_replying(monkeypatch, reply), "help").board_problem is None
