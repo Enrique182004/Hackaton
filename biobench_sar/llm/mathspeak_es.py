@@ -256,6 +256,7 @@ _NORMALIZE = (
     (re.compile(r"\bsqrt\s*(?=\()", re.I), "√"),
     (re.compile(r"\bcbrt\s*(?=\()", re.I), "∛"),
     (re.compile(r"\by/o\b"), "y o"),
+    (re.compile(r"(?<![\w/])c/u(?![\w/])", re.I), "cada uno"),  # "$5 c/u" in word problems
     (re.compile(r"\b(ra[ií]z)(?:\s+cuadrada)?(?:\s+de)?\s*√", re.I), r"\1 cuadrada de "),
     (re.compile(r"(?<![\w&#])#(?=\d)"), "número "),
 )

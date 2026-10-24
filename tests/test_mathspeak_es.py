@@ -226,6 +226,7 @@ CURRENCY = [
     ("$5 - $3 = $2", "cinco dólares menos tres dólares es igual a dos dólares"),
     ("$50 pesos", "cincuenta pesos"),
     ("$50 MXN", "cincuenta pesos"),
+    ("Las manzanas cuestan $5 c/u", "Las manzanas cuestan cinco dólares cada uno"),
 ]
 GROUPS_AND_POINTS = [
     ("la solución (x = 3)", "la solución x es igual a tres"),
@@ -266,6 +267,7 @@ UNITS_AND_FUNCTIONS = [
     ("log(100)", "logaritmo de cien"),
     ("ln(e) = 1", "logaritmo natural de e es igual a uno"),
     ("cos(30°)", "coseno de treinta grados"),
+    ("tan(45°) = 1", "tangente de cuarenta y cinco grados es igual a uno"),
     ("sen²(x) + cos²(x) = 1", "seno cuadrado de x más coseno cuadrado de x es igual a uno"),
     ("2pi", "dos pi"),
 ]
