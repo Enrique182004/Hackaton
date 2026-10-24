@@ -431,7 +431,19 @@ def test_solver_agrees_with_every_seed_answer() -> None:
 
 
 @pytest.mark.parametrize(
-    "problem", ["3/4 - 1/2", "1/2 + 1/3", "5/6 ÷ 1/3", "3x + 5 = 20", "x/4 + 3 = 8", "10 - 3x = 4", "2(x + 5) = 3x + 4"]
+    "problem",
+    [
+        "3/4 - 1/2",
+        "1/2 + 1/3",
+        "5/6 ÷ 1/3",
+        "3x + 5 = 20",
+        "x/4 + 3 = 8",
+        "10 - 3x = 4",
+        "2(x + 5) = 3x + 4",
+        "3y + 5 = 20",
+        "2n - 4 = 10",
+        "a/4 + 3 = 8",
+    ],
 )
 def test_similar_problem_keeps_the_shape_with_new_numbers(problem: str) -> None:
     import random

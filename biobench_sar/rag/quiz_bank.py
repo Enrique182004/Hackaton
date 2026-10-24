@@ -486,8 +486,10 @@ def similar_problem(problem: str, rng: random.Random | None = None) -> str | Non
     """A problem shaped like `problem` with new numbers ("3/4 - 1/2" -> "5/6 - 1/3", "3x + 5 = 20" -> "4x + 7 = 19"),
     for when the model reads the board's problem back instead of making a new one. None if code can't vary it."""
     r = rng or random.Random()
-    if solve_problem(problem) is None:
+    solved = solve_problem(problem)
+    if solved is None:
         return None
+    letter = solved.partition(" = ")[0]  # "y = 5" -> "y"; any letter, not only x
     sides = problem.split("=")
     for _ in range(30):
         if "=" not in problem:
@@ -500,7 +502,7 @@ def similar_problem(problem: str, rng: random.Random | None = None) -> str | Non
             left = _INT.sub(lambda m: _new_int(m, r), sides[0])
             if len(sides) == 2 and _INT.fullmatch(sides[1].strip()):
                 # One number on the right: pick the answer first, so it stays a whole number.
-                value = solve_problem(left.replace("x", f"({r.randint(2, 9)})"))
+                value = solve_problem(left.replace(letter, f"({r.randint(2, 9)})"))
                 candidate = f"{left.rstrip()} = {value}" if value and value.isdigit() and value != "0" else ""
             else:
                 candidate = "=".join([left, *(_INT.sub(lambda m: _new_int(m, r), s) for s in sides[1:])])
