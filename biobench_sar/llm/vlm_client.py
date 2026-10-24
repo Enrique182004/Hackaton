@@ -353,7 +353,7 @@ def build_prompt(
         f"{size} Screen center: ({width // 2}, {height // 2}).",
         _ink_text(ink_regions, math=True),
         _context_text(context),
-        "Answer with the JSON object only. Write all math in words.",
+        "Answer with the JSON object only. Write all math in words, numbers too (five, not 5).",
     ]
     return "\n\n".join(parts)
 
@@ -501,12 +501,17 @@ class VLMClient:
         task: Mapping[str, Any] | None = None,
         recent_turns: Sequence[Mapping[str, Any]] | None = None,
     ) -> AvatarAction:
+        task = task if isinstance(task, Mapping) else None
         action, answer_on_board = self._evaluate(
             query, image_jpeg, context, ink_regions, projector_size, mode, task, recent_turns
         )
         if self.profile != "math":
             return action
-        return speakable(apply_task_rules(action, mode, task, answer_on_board))
+        try:
+            return speakable(apply_task_rules(action, mode, task, answer_on_board))
+        except Exception as exc:  # evaluate must never raise
+            logger.exception("Math post-processing failed, using the raw answer: %s", exc)
+            return action
 
     def _evaluate(
         self,

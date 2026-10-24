@@ -318,7 +318,7 @@ def test_build_prompt_math_help() -> None:
     assert prompt.startswith("Mode: help (step-by-step).")
     assert "Student said: I'm stuck" in prompt and "Screen center: (960, 540)" in prompt
     assert "center=(600, 450)" in prompt and "protocol.pdf" in prompt and "x" * 900 not in prompt
-    assert "Write all math in words" in prompt and "Never say the final answer" in prompt
+    assert "Write all math in words, numbers too (five, not 5)." in prompt and "Never say the final answer" in prompt
     # "x=500" would read as the student's answer; math boxes avoid the letter.
     assert "1. left=0 top=0 width=10 height=10, center=(5, 5)" in prompt and "x=500" not in prompt
     assert "Conversation so far" not in prompt and "Quiz stage" not in prompt
@@ -658,6 +658,22 @@ def test_math_failures_still_give_error_action() -> None:
         assert garbage.evaluate("q", None, [], [], SIZE, mode="quiz").animation_state == "error"
 
 
+@pytest.mark.usefixtures("no_mathspeak")
+def test_evaluate_ignores_a_malformed_task() -> None:
+    action, payload = _ask(_math_client(), MATH_GOOD, mode="quiz", task="quiz")  # type: ignore[arg-type]
+    assert "Quiz stage: dictate" in payload["messages"][1]["content"] and action.animation_state == "idle"
+
+
+@pytest.mark.usefixtures("no_mathspeak")
+def test_evaluate_survives_post_processing_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*args: Any) -> AvatarAction:
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(vc, "apply_task_rules", boom)
+    action, _ = _ask(_math_client(), MATH_GOOD, task=LEARN_OFFER)
+    assert action == AvatarAction("Subtract five from both sides.", "pointing", 7, 9)
+
+
 # --- scripts/bench_vlm.py -----------------------------------------------------------------------------------
 
 
@@ -681,9 +697,16 @@ def test_bench_script_runs_from_any_directory(tmp_path: Path) -> None:
 
 def test_bench_math_heuristics(monkeypatch: pytest.MonkeyPatch) -> None:
     b = _bench(monkeypatch)
-    for leak in ("So x equals five.", "x = 5", "Fifteen divided by three is five.", "The answer is 5."):
+    for leak in ("So x equals five.", "x = 5", "Fifteen divided by three is five.", "The answer is 5.", "x would be 5"):
         assert b.leaks_answer(leak), leak
-    for fine in ("Subtract five from both sides.", "Three x plus five equals twenty.", "x is fifteen over three?"):
+    fine_replies = (
+        "Subtract five from both sides.",
+        "Three x plus five equals twenty.",
+        "x is fifteen over three?",
+        "What is five less than twenty?",
+        "Next, what is 3x equal to?",
+    )
+    for fine in fine_replies:
         assert not b.leaks_answer(fine), fine
     assert b.dictates_new_equation("Try this. Four x plus seven equals nineteen.")
     assert not b.dictates_new_equation("Three x plus five equals twenty. Solve it.")
@@ -695,7 +718,10 @@ def test_bench_math_heuristics(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_bench_math_scenarios_are_well_formed(monkeypatch: pytest.MonkeyPatch) -> None:
     b = _bench(monkeypatch)
-    assert set(b.MATH_SCENARIOS) == {"H", "P", "QC", "QW", "LO", "LE"}
+    assert set(b.MATH_SCENARIOS) == {"H", "HA", "P", "QC", "QW", "LO", "LE", "HF"}
+    follow_up = b.MATH_SCENARIOS["HF"]
+    assert follow_up.turns and follow_up.check("Add them to get three fourths.") == "gave the final answer"
+    assert follow_up.check("Find a common denominator first. What do two and four both go into?") is None
     offer = b.MATH_SCENARIOS["LO"]
     jpeg, regions = offer.board()
     assert jpeg[:2] == b"\xff\xd8" and regions == []

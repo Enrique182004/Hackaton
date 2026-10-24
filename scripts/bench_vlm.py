@@ -58,9 +58,11 @@ MATH_CONTEXT = [
 EQUATION = "3x + 5 = 20"
 SPOKEN_EQUATION = "three x plus five equals twenty"
 # The solved value said as a result ("x equals five", "fifteen divided by three is five"), not the constant in
-# "plus five" or "subtract five".
+# "plus five" / "subtract five" or a question like "what is five less than twenty?".
 _LEAK_RE = re.compile(
-    r"(?:=|\b(?:is|equals|equal\s+to|be|get|gives(?:\s+you)?))\s*(?:5|five)\b(?!\s+from)", re.IGNORECASE
+    r"(?:\bx|\banswer|\bsolution|\b(?:three|3))\s*(?:=|equals|is(?:\s+equal\s+to)?|would\s+be|will\s+be|"
+    r"gives(?:\s+you)?)\s*(?:5|five)\b",
+    re.IGNORECASE,
 )
 _NOTATION_RE = re.compile(r"[\^/*=+<>]|\d")
 _FRACTION_RE = re.compile(
@@ -83,6 +85,12 @@ OFFER_TURN = {
     "q": LEARN_QUERY,
     "a": "A fraction is a part of a whole. Do you have an exercise in mind, or should I make one up for you?",
 }
+EXAMPLE_TURN = {
+    "q": "Make one up for me.",
+    "a": "Let's start easy. One half plus one fourth. Write it on the board and try the first step.",
+}
+FRACTION_SUM = "1/2 + 1/4"
+_FRACTION_LEAK_RE = re.compile(r"\b(?:three\s+(?:fourths|quarters)|3\s*/\s*4)\b", re.IGNORECASE)
 
 
 def leaks_answer(spoken: str) -> bool:
@@ -180,6 +188,10 @@ def _next_problem(spoken: str) -> str | None:
     return None if reads_next_problem(spoken) else "next problem not read"
 
 
+def _no_fraction_leak(spoken: str) -> str | None:
+    return "gave the final answer" if _FRACTION_LEAK_RE.search(spoken) else None
+
+
 def _offer(spoken: str) -> str | None:
     return None if asks_offer(spoken) else "did not ask: exercise in mind or make one up"
 
@@ -196,6 +208,14 @@ MATH_SCENARIOS = {
     "H": Scenario(
         f"help on {EQUATION}",
         "I'm stuck. What do I do next?",
+        lambda: make_board([EQUATION]),
+        "pointing",
+        context=MATH_CONTEXT,
+        check=_no_leak,
+    ),
+    "HA": Scenario(
+        f"asks for the answer to {EQUATION}",
+        "Just tell me what x is.",
         lambda: make_board([EQUATION]),
         "pointing",
         context=MATH_CONTEXT,
@@ -249,6 +269,15 @@ MATH_SCENARIOS = {
         context=[],
         check=_fraction,
         turns=[OFFER_TURN],
+    ),
+    "HF": Scenario(
+        f"follow-up help on the dictated {FRACTION_SUM}",
+        "I wrote it. What do I do first?",
+        lambda: make_board([FRACTION_SUM]),
+        "pointing",
+        context=[],
+        check=_no_fraction_leak,
+        turns=[OFFER_TURN, EXAMPLE_TURN],
     ),
 }
 SCENARIOS = {"biology": BIO_SCENARIOS, "math": MATH_SCENARIOS}
