@@ -59,8 +59,8 @@ All paths are inside `biobench_sar/`.
 | Dashboard | `templates/precharge.html`, `static/css/dashboard.css`, `static/js/dashboard/*.js`, `static/js/i18n.js` (English and Spanish text for both pages) |
 
 Outside the package: `packaging/` (desktop builds: `launcher.py`, `sar.spec`, `windows/installer.iss`,
-`fetch_models.py`, `check_macos_app.py`), `scripts/` (setup, hardware check, VLM benchmark, ink sweep, local
-builds, icons) and `docs/` (specs, build plan, hardware guides in English and Spanish, desktop builds, phones).
+`fetch_models.py`, `check_macos_app.py`), `scripts/` (setup, hardware check, macOS dev launcher, VLM benchmark,
+ink sweep, local builds, icons) and `docs/` (specs, build plan, hardware guides in English and Spanish, desktop builds, phones).
 
 Optional: to keep your own agent focused across sessions, add to your personal
 `~/.claude/CLAUDE.md`:
