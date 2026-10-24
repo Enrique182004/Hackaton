@@ -160,3 +160,58 @@ def test_find_ink_regions_merges_strokes_and_caps() -> None:
 
 def test_find_ink_regions_blank() -> None:
     assert find_ink_regions(np.full((200, 200, 3), 255, np.uint8)) == []
+
+
+def _flowchart(size: tuple[int, int] = (1080, 1920), wobble: bool = False):
+    h, w = size
+    img = np.full((h, w, 3), 255, np.uint8)
+    centers = [(200 + i * 340, 540) for i in range(5)]
+    bw, bh = 220, 120
+    rng = np.random.default_rng(0)
+    for i, (cx, cy) in enumerate(centers):
+        x0, y0, x1, y1 = cx - bw // 2, cy - bh // 2, cx + bw // 2, cy + bh // 2
+        if wobble:
+            pts = np.array([(x0, y0), (cx, y0), (x1, y0), (x1, cy), (x1, y1), (cx, y1), (x0, y1), (x0, cy)])
+            pts = pts + rng.integers(-4, 5, pts.shape)
+            cv2.polylines(img, [pts.astype(np.int32)], True, (20, 20, 20), 4)
+        else:
+            cv2.rectangle(img, (x0, y0), (x1, y1), (20, 20, 20), 4)
+        cv2.putText(img, f"Step {i}", (x0 + 30, cy + 10), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (20, 20, 20), 3)
+        if i < 4:
+            cv2.arrowedLine(img, (x1, cy), (centers[i + 1][0] - bw // 2, cy), (20, 20, 20), 4, tipLength=0.25)
+    return img, centers
+
+
+def test_flowchart_boxes_split_into_regions() -> None:
+    img, centers = _flowchart()
+    regions = find_ink_regions(img)
+    assert len(regions) == 5
+    for cx, cy in centers:
+        assert any(abs(r["cx"] - cx) <= 15 and abs(r["cy"] - cy) <= 15 for r in regions)
+
+
+def test_wobbly_boxes_still_detected() -> None:
+    img, centers = _flowchart(wobble=True)
+    regions = find_ink_regions(img)
+    assert len(regions) == 5
+    for cx, cy in centers:
+        assert any(abs(r["cx"] - cx) <= 15 and abs(r["cy"] - cy) <= 15 for r in regions)
+
+
+def test_flowchart_keeps_standalone_text_blob() -> None:
+    img, _ = _flowchart()
+    cv2.putText(img, "note", (100, 900), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (20, 20, 20), 4)
+    regions = find_ink_regions(img)
+    assert len(regions) == 6
+    assert any(abs(r["cy"] - 880) <= 30 and r["cx"] < 300 for r in regions)
+
+
+def test_find_ink_regions_fast_on_1080p() -> None:
+    img, _ = _flowchart()
+    find_ink_regions(img)
+    start = time.perf_counter()
+    for _ in range(5):
+        find_ink_regions(img)
+    per_call_ms = (time.perf_counter() - start) / 5 * 1000
+    print(f"find_ink_regions 1080p: {per_call_ms:.1f} ms")
+    assert per_call_ms < 150  # target <50 ms; loose bound for loaded CI machines
