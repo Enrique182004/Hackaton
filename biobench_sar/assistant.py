@@ -258,15 +258,19 @@ def _same_line(a: Box, b: Box) -> bool:
     return shared >= 0.5 * min(a[3], b[3]) and gap <= LINE_GAP * max(a[3], b[3])
 
 
-def _stacked(a: Box, b: Box, glyph: float) -> bool:
-    """One row right above the other, overlapping side to side: the rows of a stacked fraction, an exponent."""
+def _stacked(a: Box, b: Box, glyph: float, body_a: tuple[float, float], body_b: tuple[float, float]) -> bool:
+    """One row right above the other, overlapping side to side: the rows of a stacked fraction, an exponent. The gap
+    is measured between the rows' bodies, the (top, bottom) most of their blobs share, so an exponent starting the
+    lower of two lines of writing, or a descender in the upper one, does not pull the lines together."""
     across = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
     if across < 0.5 * min(a[2], b[2]):
         return False
-    upper, lower = (a, b) if a[1] <= b[1] else (b, a)
-    gap = lower[1] - (upper[1] + upper[3])
-    flat = min(a[3], b[3]) <= FLAT_ROW * glyph
-    return gap <= (BAR_GAP if flat else STACK_GAP) * glyph
+    (upper, upper_body), (lower, lower_body) = sorted(((a, body_a), (b, body_b)), key=lambda row: row[0][1])
+    gap = lower_body[0] - upper_body[1]
+    if min(body_a[1] - body_a[0], body_b[1] - body_b[0]) > FLAT_ROW * glyph:
+        return gap <= STACK_GAP * glyph
+    # A fraction bar's row: the "+", "=" and whole numbers centred on its bars reach towards its glyphs too.
+    return gap <= BAR_GAP * glyph or lower[1] - (upper[1] + upper[3]) <= STACK_GAP * glyph
 
 
 def _merged(boxes: list[Box], joined: Callable[[Box, Box], bool]) -> list[Box]:
@@ -289,13 +293,25 @@ def ink_lines(boxes: Iterable[Box]) -> list[Box]:
     """Blobs grouped into written lines ("x", "=", "7" -> "x = 7"): boxes that share half the smaller height or more
     and sit within LINE_GAP heights of each other side by side form rows; rows stacked within STACK_GAP glyph heights
     (BAR_GAP next to a flat row), overlapping side to side, are one line ("1/2 + 1/2" written as two stacked
-    fractions). Each line is the union of its blobs."""
+    fractions, an exponent written apart from its base). Each line is the union of its blobs."""
     blobs = list(boxes)
     if not blobs:
         return []
     rows = _merged(blobs, _same_line)
     # The board's glyph height: the median blob, leaving out flat strokes (fraction bars, minus signs).
     glyph = statistics.median([b[3] for b in blobs if b[3] > 0.4 * b[2]] or [b[3] for b in blobs])
+
+    # Each row's body, the (top, bottom) most of its blobs share: one raised or lowered blob (an exponent, a
+    # descender) does not move it. A blob is the row's it overlaps most, the smaller row's on a tie.
+    owned: list[list[Box]] = [[] for _ in rows]
+    for blob in blobs:
+        owned[min(range(len(rows)), key=lambda i: (-_overlap(blob, rows[i]), rows[i][2] * rows[i][3]))].append(blob)
+    bodies = [
+        (statistics.median_high([b[1] for b in own]), statistics.median_low([b[1] + b[3] for b in own]))
+        if own
+        else (row[1], row[1] + row[3])
+        for row, own in zip(rows, owned, strict=True)
+    ]
     # Judged row by row before any union, so a fraction bar joins its numerator and its denominator even after one
     # of them has made the bar's row taller than a bar.
     group = list(range(len(rows)))
@@ -305,10 +321,27 @@ def ink_lines(boxes: Iterable[Box]) -> list[Box]:
             i = group[i]
         return i
 
-    for i in range(len(rows)):
-        for j in range(i + 1, len(rows)):
-            if _stacked(rows[i], rows[j], glyph):
-                group[root(j)] = root(i)
+    pairs = [
+        (i, j)
+        for i in range(len(rows))
+        for j in range(i + 1, len(rows))
+        if _stacked(rows[i], rows[j], glyph, bodies[i], bodies[j])
+    ]
+
+    def exponent_reaching_up(small: int, above: int) -> bool:
+        """`small`, a row shorter than a glyph stacked on a taller row below it, is that row's exponent: it does not
+        also join the line `above` it ("x² = 9" written under "2x + 3 = 21", its 2 apart from the x)."""
+        height = rows[small][3]
+        if rows[above][1] > rows[small][1] or height >= min(glyph, rows[above][3]):
+            return False
+        if any(b[3] <= min(FLAT_ROW * glyph, 0.5 * b[2]) for k in (small, above) for b in owned[k]):
+            return False  # a fraction bar's row: its glyphs sit above and below it
+        below = [i + j - small for i, j in pairs if small in (i, j) and rows[i + j - small][1] > rows[small][1]]
+        return any(rows[k][3] > height for k in below)
+
+    for i, j in pairs:
+        if not (exponent_reaching_up(i, j) or exponent_reaching_up(j, i)):
+            group[root(j)] = root(i)
     stacks: dict[int, Box] = {}
     for i, row in enumerate(rows):
         r = root(i)

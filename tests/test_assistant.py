@@ -1878,6 +1878,92 @@ def test_ink_lines_keeps_lines_of_writing_apart(blobs: list[Blob], lines: list[B
     assert sorted(ink_lines(_boxes(blobs))) == [tuple(map(float, b)) for b in lines]
 
 
+# A lower line that starts with an exponent: the exponent raises its first blob (or, written further from its base,
+# stands alone between the lines) and must not pull the line into the one above. Same board and detector as above,
+# lines 75 px apart (85 for the raised exponents, still under the TIGHT_LINES pitch's gap).
+SQUARE_UNDER = [
+    (398, 441, 37, 38),
+    (400, 356, 72, 48),
+    (436, 418, 66, 54),
+    (482, 364, 39, 38),
+    (515, 431, 38, 47),
+    (532, 356, 39, 48),
+    (584, 356, 121, 47),
+]  # "2x + 3 = 21" over "x² = 9", the 2 in the x's blob
+POWER_UNDER = [
+    (399, 356, 73, 48),
+    (400, 441, 38, 47),
+    (439, 419, 66, 48),
+    (472, 441, 84, 48),
+    (482, 364, 39, 38),
+    (532, 356, 39, 48),
+    (584, 356, 121, 48),
+]  # "3x + 5 = 20" over "2ˣ = 8", the x raised high
+COMPLETE_SQUARE = [
+    (398, 266, 37, 38),
+    (398, 341, 37, 38),
+    (398, 416, 77, 38),
+    (436, 243, 61, 47),
+    (436, 318, 61, 47),
+    (489, 406, 37, 47),
+    (510, 256, 117, 48),
+    (510, 331, 72, 48),
+    (539, 406, 86, 47),
+    (592, 339, 39, 38),
+    (641, 256, 74, 48),
+    (644, 331, 83, 47),
+    (741, 331, 74, 48),
+]  # "x² - 2x = 15", "x² - 2x + 1 = 16", "x - 1 = 4"
+COMPLETE_SQUARE_APART = [
+    (398, 266, 37, 38),
+    (398, 351, 37, 38),
+    (398, 436, 77, 38),
+    (436, 227, 28, 34),
+    (436, 312, 28, 34),
+    (471, 256, 158, 48),
+    (471, 341, 113, 48),
+    (489, 426, 37, 47),
+    (539, 426, 86, 47),
+    (594, 349, 39, 38),
+    (643, 256, 74, 48),
+    (646, 341, 83, 47),
+    (743, 341, 74, 48),
+]  # the same steps, each 2 its own blob, between the lines
+
+
+@pytest.mark.parametrize(
+    ("blobs", "lines"),
+    [
+        (SQUARE_UNDER, [(398, 418, 155, 61), (400, 356, 305, 48)]),
+        (POWER_UNDER, [(399, 356, 306, 48), (400, 419, 156, 70)]),
+        (COMPLETE_SQUARE, [(398, 243, 317, 61), (398, 318, 417, 61), (398, 406, 227, 48)]),
+        (COMPLETE_SQUARE_APART, [(398, 227, 319, 77), (398, 312, 419, 77), (398, 426, 227, 48)]),
+        ([b for b in COMPLETE_SQUARE_APART if b[1] < 400], [(398, 227, 319, 77), (398, 312, 419, 77)]),  # two steps
+    ],
+)
+def test_ink_lines_keeps_a_line_starting_with_an_exponent_apart(blobs: list[Blob], lines: list[Blob]) -> None:
+    from biobench_sar.assistant import ink_lines
+
+    assert sorted(ink_lines(_boxes(blobs))) == [tuple(map(float, b)) for b in lines]
+
+
+def test_ink_lines_keeps_an_exponent_written_apart_on_its_line() -> None:
+    from biobench_sar.assistant import ink_lines
+
+    alone = [b for b in COMPLETE_SQUARE_APART if b[1] < 300]  # "x² - 2x = 15", its 2 a blob of its own
+    assert ink_lines(_boxes(alone)) == [(398.0, 227.0, 319.0, 77.0)]
+
+
+def test_pointing_at_a_line_starting_with_an_exponent_outlines_that_line() -> None:
+    # Help mode: the model points at the second step; the outline and the fingertip are on it, not between two lines.
+    from biobench_sar.assistant import POINT_GAP, place_target
+
+    ink = [{"x": x, "y": y, "w": w, "h": h} for x, y, w, h in COMPLETE_SQUARE]
+    action, highlight = place_target(AvatarAction("a", "pointing", 600, 350), ink, (1920, 1080), lines=True)
+    assert highlight == [398, 318, 417, 61]
+    assert (action.target_x, action.target_y) == (398 - POINT_GAP, 348)
+
+
 def test_quiz_check_highlights_a_stacked_fraction_answer(monkeypatch: pytest.MonkeyPatch) -> None:
     # The lowest row of "x = 3/4" is its denominator alone; the answer is the whole line.
     monkeypatch.setenv("SAR_PROJECTOR_WIDTH", "1920")
