@@ -229,6 +229,25 @@ like worksheet problems.
   un quiz", "Quiero aprender a resolver fracciones", "Termina el quiz") are understood by
   `biobench_sar/lang.py`. Math is spoken in Spanish words, and quiz answers in Spanish words are graded.
 
+## Accessibility
+
+A teacher can make the assistant easier to follow for a student with a disability from the dashboard's
+**More tools → Accessibility** card, on the laptop or a joined phone. The settings apply to the whole room at
+once (the projector, the voice and every open dashboard) and are kept in `SAR_ACCESSIBILITY_FILE`.
+
+- **Keep captions up until the next question** (deaf and hard-of-hearing students, slower readers): the speech
+  bubble stays until the next answer instead of fading, and clears as soon as a new question starts.
+- **Text size on the board**: Normal, Large (1.25×) or Extra large (1.5×) for the bubble, the quiz card, the
+  heard words and the status.
+- **Voice speed**: Slower (0.75×), Normal or Faster (1.25×), for every voice (Edge, `say` and pyttsx3).
+- **Calm mode** (autism, ADHD, motion or light sensitivity): no bouncing, shaking or pulsing, and softer glows.
+  Pip still glides to the ink it talks about.
+- **High contrast** (low vision, colour-blind students): thicker outlines and pure white text. A wrong answer's
+  bubble has a dashed border and a right one's a double border, so they differ by more than colour.
+
+Over HTTP: `GET /api/accessibility` and `PUT /api/accessibility` with only the keys to change, e.g.
+`{"speech_rate": "slower"}`. Every change reaches the pages as an `accessibility` Socket.IO event.
+
 ## The dashboard
 
 Open `http://localhost:5050/dashboard` on your laptop. It has four tabs:
@@ -242,8 +261,8 @@ Open `http://localhost:5050/dashboard` on your laptop. It has four tabs:
 3. **Ask**: pick a mode, start or stop a quiz, type a question, press **Talk**, or click an example. Every
    answer is written into the notebook with a note saying what the assistant did, which files it read and how
    long it took.
-4. **More tools**: the lined-up or raw camera view, detected drawings, file search, settings, the activity
-   log and, in phone mode, the **Use a phone or tablet** card.
+4. **More tools**: the lined-up or raw camera view, detected drawings, file search, the **Accessibility** card,
+   settings, the activity log and, in phone mode, the **Use a phone or tablet** card.
 
 ## Phones and tablets
 
@@ -317,6 +336,7 @@ wins over the file. Desktop builds also look next to the app and in the data fol
 | `SAR_TTS_DIR` | `data/tts` | Generated speech audio |
 | `SAR_SELECTION_FILE` | `data/selection.json` | Which files are ticked |
 | `SAR_QUIZ_BANK_FILE` | `data/quiz_bank.json` | Quiz problems parsed from uploaded CSVs and worksheets |
+| `SAR_ACCESSIBILITY_FILE` | `data/accessibility.json` | Accessibility settings for the room (captions, text size, voice speed, calm mode, high contrast) |
 
 ## Development
 
@@ -344,12 +364,13 @@ change goes through its own branch and PR (see [CONTRIBUTING.md](CONTRIBUTING.md
 | Path | What |
 | --- | --- |
 | `biobench_sar/app.py` | Flask + Socket.IO routes, the phone PIN gate's wiring, the startup banner |
-| `biobench_sar/assistant.py` | Sense → Think → Act pipeline, status, history, file selection, language, target snapping, UI masking |
+| `biobench_sar/assistant.py` | Sense → Think → Act pipeline, status, history, file selection, language, accessibility, target snapping, UI masking |
 | `biobench_sar/tutor.py` | Tutor modes (help / practice / quiz), learn-a-topic requests, voice commands, quiz progress, stop confirmation, conversation memory |
 | `biobench_sar/grading.py` | Quiz answers graded in code with sympy: `parse_answers`, `grade` |
 | `biobench_sar/lang.py` | English/Spanish detection and the Spanish tutor intents |
 | `biobench_sar/lan.py` | Phones on the Wi-Fi: addresses, the join PIN, device cookies, the Socket.IO gate |
-| `biobench_sar/config.py`, `envfile.py`, `paths.py`, `ports.py`, `schemas.py` | Settings, `sar.env` loading, where files live (checkout or desktop build), ports browsers refuse to open, shared types |
+| `biobench_sar/accessibility.py` | The room's accessibility settings (captions, text size, voice speed, calm mode, high contrast): checked, saved and loaded |
+| `biobench_sar/config.py`, `envfile.py`, `jsonfile.py`, `paths.py`, `ports.py`, `schemas.py` | Settings, `sar.env` loading, the one atomic JSON write, where files live (checkout or desktop build), ports browsers refuse to open, shared types |
 | `biobench_sar/core/` | Camera loop and ink detection, high-resolution ink crop, glare check, homography calibration, mic and wake word |
 | `biobench_sar/rag/` | Document ingestion (answer keys stripped for math), ChromaDB store, quiz bank parser and problem generator |
 | `biobench_sar/llm/` | VLM client (prompts per profile, mode and language + JSON schema), math-to-speech in English and Spanish, text-to-speech |

@@ -101,10 +101,12 @@ export function initCamera() {
   const [w, h] = projectorSize();
   // The box takes the projector's shape, so the lined-up picture fills it with no bars.
   $("viewport").style.aspectRatio = `${w} / ${h}`;
-  for (const button of document.querySelectorAll(".seg button")) {
+  // Only the camera's own toggle: More tools has other segmented groups (Accessibility).
+  const views = [...$("camera-view").querySelectorAll("button")];
+  for (const button of views) {
     button.addEventListener("click", () => {
       warped = button.dataset.view === "1";
-      for (const b of document.querySelectorAll(".seg button")) b.setAttribute("aria-pressed", String(b === button));
+      for (const b of views) b.setAttribute("aria-pressed", String(b === button));
       $("ink-overlay").replaceChildren();
     });
   }

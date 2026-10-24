@@ -121,6 +121,10 @@ _LEARN_GUARDED = _compile(
     r"\bhow\s+(?:do|can|should|would|could)\s+(?:i|you|we|one|people)\s+(?P<verb>.+)",
     r"\bhow\s+to\s+(?P<verb>.+)",
     r"\bexplain(?:\s+to\s+me)?\s+(?P<rest>.+)",
+    # "what is a fraction?" asks for the idea; "what is three plus five?" names no topic and stays help. Whisper
+    # often hears "what is a ..." as "what is that ...": these forms only run with an empty board, so it is the idea.
+    r"\bwhat(?:'s|\s+is|\s+are)\s+(?:that\s+|this\s+)?(?P<rest>.+)",
+    r"\bwhat\s+does\s+(?P<rest>(?:\S+\s+){1,8}?)mean\b",  # bounded: an unbounded lazy group is quadratic
 )
 _MATH_TOPIC = re.compile(
     r"\b(?:fraction|equation|decimal|percent|ratio|proportion|exponent|power|square\s+root|root|radical|algebra|"

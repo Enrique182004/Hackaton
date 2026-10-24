@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
-import os
 import re
-import tempfile
 import threading
 import time
 from collections import deque
@@ -17,7 +14,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from biobench_sar.accessibility import AccessibilityStore, parse_changes
 from biobench_sar.config import Settings
+from biobench_sar.jsonfile import save_json
 from biobench_sar.rag.quiz_bank import QuizBank, QuizProblem, pick_progressive
 from biobench_sar.schemas import AvatarAction, error_action
 from biobench_sar.tutor import (
@@ -183,8 +182,10 @@ StartTask = Callable[..., Any]
 Task = dict[str, Any]
 
 
-def estimate_speech_seconds(text: str) -> float:
-    return len(text.split()) / WORDS_PER_SECOND + 1.0
+def estimate_speech_seconds(text: str, rate: float = 1.0) -> float:
+    """Seconds the voice needs for `text` at `rate` x its normal speed, plus one; a rate that isn't positive is 1."""
+    rate = rate if rate > 0 else 1.0
+    return len(text.split()) / (WORDS_PER_SECOND * rate) + 1.0
 
 
 @dataclass(frozen=True)
@@ -269,19 +270,8 @@ class DocumentSelection:
 
     def _save(self) -> None:
         payload = {"all": True} if self._sources is None else {"sources": sorted(self._sources)}
-        tmp = ""
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=self._path.parent, prefix=f".{self._path.name}.", suffix=".tmp")
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh)
-            os.replace(tmp, self._path)
-        except OSError as exc:
-            # The in-memory selection still applies; it just won't survive a restart.
-            log.warning("could not save document selection to %s: %s", self._path, exc)
-            if tmp:
-                with contextlib.suppress(OSError):
-                    os.unlink(tmp)
+        # A failed save is logged; the in-memory selection still applies, it just won't survive a restart.
+        save_json(self._path, payload, "document selection")
 
 
 class Assistant:
@@ -304,6 +294,11 @@ class Assistant:
         self._next_id = 1
         self.selection = DocumentSelection(settings.selection_file)
         self.quiz_bank = QuizBank(settings.quiz_bank_file)
+        # Captions, text size, voice speed, calm mode, high contrast: one set for the whole room, kept as JSON.
+        self.accessibility = AccessibilityStore(settings.accessibility_file)
+        # One change at a time from save to push: two devices changing it at once can't leave the voice or the
+        # pages on the older settings.
+        self._access_lock = threading.Lock()
         self.tutor = TutorSession()
         self._tutor_lock = threading.Lock()
         self._tutor_pushed = self.tutor.to_dict()
@@ -313,6 +308,31 @@ class Assistant:
         # The language of the last reply: what "auto" falls back on when a question leans neither way.
         self._reply_language = self._language if self._language in LANGUAGES else "en"
         self._typed = threading.local()
+
+    # ---- accessibility -----------------------------------------------------
+    def accessibility_body(self) -> dict[str, bool | str]:
+        """The room's five accessibility settings, every key."""
+        return self.accessibility.current.to_dict()
+
+    def set_accessibility(self, body: object) -> dict[str, bool | str]:
+        """Apply a partial change ({"speech_rate": "slower"}, ...); ValueError, with nothing saved or pushed, for
+        anything else. The voice takes the new speed and every open page gets every key."""
+        changes = parse_changes(body)
+        with self._access_lock:
+            saved = self.accessibility.update(changes).to_dict()
+            self.push_speech_rate()
+            self._emit("accessibility", saved)
+        return saved
+
+    def push_speech_rate(self) -> None:
+        """Hand the saved voice speed to the TTS service; one without set_rate (older fakes) keeps its own."""
+        tts = getattr(self.services, "tts", None)
+        set_rate = getattr(tts, "set_rate", None)
+        if callable(set_rate):
+            try:
+                set_rate(self.accessibility.current.rate_factor)
+            except Exception:
+                log.exception("could not set the voice speed")
 
     # ---- language ----------------------------------------------------------
     @property
@@ -500,7 +520,9 @@ class Assistant:
         audio_name = self.services.tts.speak(spoken, lang=language)
         url = f"/tts/{audio_name}" if audio_name else None
         self._emit("speak", {"url": url, "text": spoken, **said})
-        self._speaking_until = time.monotonic() + estimate_speech_seconds(spoken)
+        # A slower voice talks for longer: the wake-word loop stays deaf until it is done.
+        rate = self.accessibility.current.rate_factor
+        self._speaking_until = time.monotonic() + estimate_speech_seconds(spoken, rate)
 
     def handle_query(self, text: str) -> bool:
         """Start a query in the background. False if it's empty or another query is still running."""

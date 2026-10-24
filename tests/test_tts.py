@@ -508,8 +508,16 @@ def test_pick_pyttsx3_voice_keeps_a_default_that_speaks_the_language() -> None:
 
 
 class _Pyttsx3Engine:
-    def __init__(self, voices: list[types.SimpleNamespace], default: object, log: list[tuple[str, str]]) -> None:
+    def __init__(
+        self,
+        voices: list[types.SimpleNamespace],
+        default: object,
+        log: list[tuple[str, str]],
+        base_rate: int | None = 200,
+    ) -> None:
         self.props: dict[str, object] = {"voice": default, "voices": voices}
+        if base_rate is not None:  # pyttsx3's drivers start at 200 words per minute
+            self.props["rate"] = base_rate
         self.log = log
         self.done = threading.Event()
         self.expected = 0
@@ -519,7 +527,7 @@ class _Pyttsx3Engine:
 
     def setProperty(self, name: str, value: object) -> None:
         self.props[name] = value
-        self.log.append(("set", str(value)))
+        self.log.append(("set", str(value)) if name == "voice" else (f"set {name}", str(value)))
 
     def say(self, t: str) -> None:
         self.log.append(("say", t))
@@ -535,16 +543,20 @@ def _run_pyttsx3(
     voices: list[types.SimpleNamespace],
     default: object,
     lines: list[tuple[str, str]],
+    rates: list[float] | None = None,
+    base_rate: int | None = 200,
 ) -> list[tuple[str, str]]:
     FakeComm.fail = True
     log: list[tuple[str, str]] = []
-    engine = _Pyttsx3Engine(voices, default, log)
+    engine = _Pyttsx3Engine(voices, default, log, base_rate)
     engine.expected = len(lines)
     mod = types.ModuleType("pyttsx3")
     mod.init = lambda: engine  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "pyttsx3", mod)
     eng = TTSEngine("pyttsx3", out_dir=tmp_path)
-    for text, lang in lines:
+    for index, (text, lang) in enumerate(lines):
+        if rates is not None:
+            eng.set_rate(rates[index])
         eng.speak(text, lang)
     assert engine.done.wait(3)
     eng.stop()
@@ -574,3 +586,108 @@ def test_pyttsx3_espeak_switches_back_to_english(tmp_path: Path, monkeypatch: py
     # espeak reports no current voice until one is set.
     log = _run_pyttsx3(tmp_path, monkeypatch, ESPEAK, None, [("hola", "es"), ("hi", "en")])
     assert log == [("set", "spanish-latin-am"), ("say", "hola"), ("set", "english"), ("say", "hi")]
+
+
+# ---- voice speed (accessibility) -------------------------------------------------------------------------------------
+
+
+def test_edge_rate_is_a_signed_percentage() -> None:
+    assert tts_engine.edge_rate(1.0) == "+0%"
+    assert tts_engine.edge_rate(0.75) == "-25%"
+    assert tts_engine.edge_rate(1.25) == "+25%"
+    assert tts_engine.edge_rate(0.5) == "-50%"
+    assert tts_engine.edge_rate(2.0) == "+100%"
+    assert tts_engine.edge_rate(1.1) == "+10%"  # (1.1 - 1) * 100 is 10.000000000000009
+
+
+def test_edge_rate_scales_each_voices_own_pace(tmp_path: Path) -> None:
+    eng = TTSEngine("edge", out_dir=tmp_path)
+    eng.speak("hello", "en")
+    eng.speak("hola", "es")
+    eng.set_rate(0.75)
+    eng.speak("slower", "en")
+    eng.speak("más lento", "es")
+    eng.set_rate(1.25)
+    eng.speak("faster", "en")
+    eng.speak("más rápido", "es")
+    eng.set_rate(1.0)
+    eng.speak("normal again", "en")
+    eng.speak("otra vez normal", "es")
+    # The speed never touches the pitch: Dalia keeps whatever kid pitch EDGE_PROSODY gives her.
+    own_rate, pitch = tts_engine.EDGE_PROSODY["es-MX-DaliaNeural"]
+    assert own_rate == "+5%", "the rates below are worked out from Dalia's own +5%"
+    assert FakeComm.prosody == [
+        ("+0%", "+0Hz"),
+        ("+5%", pitch),  # at 1.0 every voice sounds exactly as it does without the setting
+        ("-25%", "+0Hz"),
+        ("-21%", pitch),  # Dalia's own +5% at 0.75: 1.05 * 0.75 = 0.7875
+        ("+25%", "+0Hz"),
+        ("+31%", pitch),  # 1.05 * 1.25 = 1.3125
+        ("+0%", "+0Hz"),
+        ("+5%", pitch),
+    ]
+
+
+def test_set_rate_is_clamped_and_non_finite_means_normal(tmp_path: Path) -> None:
+    assert (tts_engine.MIN_RATE, tts_engine.MAX_RATE) == (0.5, 2.0)
+    eng = TTSEngine("edge", out_dir=tmp_path)
+    for factor in (0.1, 9, float("nan"), 0.75, float("inf")):
+        eng.set_rate(factor)
+        eng.speak("x", "en")
+    assert [rate for rate, _ in FakeComm.prosody] == ["-50%", "+100%", "+0%", "-25%", "+0%"]
+
+
+def test_say_gets_a_words_per_minute_rate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tts_engine.subprocess, "run", _Run())
+    procs = _no_say(monkeypatch)
+    eng = TTSEngine("say", out_dir=tmp_path)
+    eng.speak("hi")
+    eng.set_rate(0.75)
+    eng.speak("hi")
+    eng.speak("hola", "es")
+    eng.set_rate(1.25)
+    eng.speak("hi")
+    eng.set_rate(1.0)
+    eng.speak("hi")
+    eng.speak("hola", "es")
+    assert tts_engine.SAY_BASE_WPM == 175
+    assert [p.args for p in procs] == [
+        ["say", "hi"],
+        ["say", "-r", "131", "hi"],  # round(175 * 0.75)
+        ["say", "-v", "Paulina", "-r", "131", "hola"],
+        ["say", "-r", "219", "hi"],  # round(175 * 1.25)
+        ["say", "hi"],
+        ["say", "-v", "Paulina", "hola"],
+    ]
+
+
+def test_edge_fallback_to_say_keeps_the_rate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    FakeComm.fail = True
+    procs = _no_say(monkeypatch)
+    eng = TTSEngine("edge", out_dir=tmp_path)
+    eng.set_rate(0.75)
+    eng.speak("hi there", "en")
+    assert FakeComm.prosody == [("-25%", "+0Hz")]
+    assert procs[0].args == ["say", "-r", "131", "hi there"]
+
+
+def test_pyttsx3_scales_the_engine_rate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    voices = [_voice("default-en", "Samantha", ["en_US"])]
+    lines = [("one", "en"), ("two", "en"), ("three", "en"), ("four", "en"), ("five", "en")]
+    log = _run_pyttsx3(tmp_path, monkeypatch, voices, "default-en", lines, rates=[1.0, 0.75, 0.75, 1.25, 1.0])
+    assert log == [
+        ("say", "one"),  # nothing is set at the normal speed
+        ("set rate", "150"),  # 200 * 0.75, set once for both slower lines
+        ("say", "two"),
+        ("say", "three"),
+        ("set rate", "250"),
+        ("say", "four"),
+        ("set rate", "200"),  # back to the engine's own rate
+        ("say", "five"),
+    ]
+
+
+def test_pyttsx3_without_a_rate_property_still_speaks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    voices = [_voice("default-en", "Samantha", ["en_US"])]
+    log = _run_pyttsx3(tmp_path, monkeypatch, voices, "default-en", [("slow", "en")], rates=[0.75], base_rate=None)
+    assert log == [("say", "slow")]

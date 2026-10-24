@@ -106,6 +106,15 @@ def test_is_repeat_request(text: str, expected: bool) -> None:
         ("explain how to find the area of a triangle", "finding the area of a triangle"),
         ("explain fractions to me", "fractions"),
         ("teach me about the order of operations", "the order of operations"),
+        # "what is X?" about a math idea asks to have it explained: a lesson with a worked example
+        ("What is a fraction?", "a fraction"),
+        ("what are fractions", "fractions"),
+        ("What's a common denominator?", "a common denominator"),
+        ("what is an equation", "an equation"),
+        ("What does numerator mean?", "numerator"),
+        # Whisper often hears "what is a ..." as "what is that ...": with an empty board it can only mean the idea
+        ("What is that common denominator?", "common denominator"),
+        ("what's this fraction", "fraction"),
     ],
 )
 def test_detect_learn_request(text: str, expected: str) -> None:
@@ -145,13 +154,30 @@ def test_detect_learn_request(text: str, expected: str) -> None:
         "teach me how to solve three x plus five equals twenty",
         "how do I do this one?",
         "why is this wrong",
+        # "what is ..." without a math idea, or about the board: step-by-step help as before
+        "what is three plus five",
+        "what is 2/3 + 1/4",
+        "what is the answer",
+        "what is x",
+        "what is the next step",
+        "what is the denominator of my fraction",
+        "what does this mean",
     ],
 )
 def test_detect_learn_request_ignores_board_questions(text: str) -> None:
     assert detect_learn_request(text) is None
 
 
-@pytest.mark.parametrize("text", ["How do I add fractions?", "explain fractions to me", "how to graph a line"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "How do I add fractions?",
+        "explain fractions to me",
+        "how to graph a line",
+        "what is a fraction",
+        "what is that common denominator",
+    ],
+)
 def test_how_to_forms_are_about_the_board_while_it_is_in_use(text: str) -> None:
     assert detect_learn_request(text) is not None
     assert detect_learn_request(text, board_in_use=True) is None
@@ -169,6 +195,14 @@ def test_long_topic_without_board_words_is_cut_to_eight_words() -> None:
         "teach me how to add and subtract fractions with unlike denominators and whole numbers"
     )
     assert topic == "adding and subtract fractions with unlike denominators and"
+
+
+def test_what_does_mean_stays_fast_on_long_input() -> None:
+    import time
+
+    started = time.perf_counter()
+    assert detect_learn_request("what does fraction " * 1600) is None
+    assert time.perf_counter() - started < 0.5
 
 
 def test_learn_topic_is_short() -> None:

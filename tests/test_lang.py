@@ -915,6 +915,16 @@ def test_is_quiz_stop_es(text: str, expected: bool) -> None:
         ("enséñame el antes y después de la contaminación", "el antes y después de la contaminación"),
         # capped at MAX_TOPIC_WORDS, without the dangling "de"
         ("enséñame el antes y después de la contaminación de la laguna", "el antes y después de la contaminación"),
+        # "¿qué es ...?" about a math idea asks to have it explained: a lesson with a worked example
+        ("¿Qué es una fracción?", "una fracción"),
+        ("que es una fraccion", "una fraccion"),
+        ("¿Qué son las fracciones equivalentes?", "las fracciones equivalentes"),
+        ("¿qué significa denominador?", "denominador"),
+        ("¿qué quiere decir ecuación?", "ecuación"),
+        # "¿cómo es una fracción?" asks what it is like; Whisper also hears "¿qué es...?" this way
+        ("¿Cómo es una fracciones?", "una fracciones"),
+        ("no sé qué es una fracción", "una fracción"),
+        ("¿cómo son las fracciones equivalentes?", "las fracciones equivalentes"),
     ],
 )
 def test_detect_learn_request_es(text: str, expected: str) -> None:
@@ -948,6 +958,20 @@ def test_detect_learn_request_es(text: str, expected: str) -> None:
         "quiero aprender lo de la clase",
         "quiero aprender lo que vimos en clase",
         "quiero aprender el tema de hoy",
+        # "¿qué es ...?" without a math idea, or about the board
+        "¿qué es esto?",
+        "¿qué es tres más cinco?",
+        "¿cuál es la respuesta?",
+        "¿qué es lo que sigue?",
+        "¿qué significa eso?",
+        "¿cómo es la respuesta?",
+        "¿cómo es posible?",
+        # "que" (that) is not "qué" (what): statements are not questions
+        "creo que es una fracción",
+        "ya sé que es una fracción",
+        "mi maestra dijo que es una ecuación",
+        "¿qué es mi fracción?",
+        "¿cómo es que se hace?",
     ],
 )
 def test_detect_learn_request_es_ignores(text: str) -> None:

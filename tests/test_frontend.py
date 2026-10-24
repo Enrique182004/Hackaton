@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from biobench_sar.accessibility import AccessibilitySettings
 from biobench_sar.config import Settings
 from biobench_sar.rag.quiz_bank import QuizBank, is_worksheet, parse_quiz_file, parse_worksheet_text
 
@@ -1242,7 +1243,16 @@ TEXT_ATTRS = ("placeholder", "alt", "title", "aria-label")
 LANGUAGE_FREE = re.compile(r"^[\W\d_]*$")  # numbers, dashes, arrows: the same in every language
 SLOT = re.compile(r"\{(\w+)\}")
 # The same text on purpose: language names written in their own language, and words Spanish keeps.
-SAME_IN_SPANISH = {"lang.en", "lang.es", "lang.auto", "mode.quiz", "files.meta", "board.latency"}
+SAME_IN_SPANISH = {
+    "lang.en",
+    "lang.es",
+    "lang.auto",
+    "mode.quiz",
+    "files.meta",
+    "board.latency",
+    "access.size.normal",
+    "access.rate.normal",
+}
 
 
 class _Untranslated(HTMLParser):
@@ -1943,6 +1953,32 @@ def test_documented_settings_exist_in_config() -> None:
     pending = {"SAR_QUIZ_LENGTH"} - known
     assert pending <= {"SAR_QUIZ_LENGTH"}
     assert documented - known - pending == set()
+
+
+@needs_node
+def test_docs_describe_the_accessibility_settings() -> None:
+    from biobench_sar.accessibility import SPEECH_RATES, TEXT_SIZES, AccessibilitySettings
+
+    en = strings()["en"]
+    keys = list(AccessibilitySettings().to_dict())
+    readme = DOCS["README.md"]
+    assert f"**{en['tab.more']} → {en['access.title']}**" in readme, "the README should say where the card is"
+    assert "| `SAR_ACCESSIBILITY_FILE` | `data/accessibility.json` |" in readme
+    assert "`GET /api/accessibility`" in readme and "`PUT /api/accessibility`" in readme
+    plan = DOCS["docs/BUILD_PLAN.md"]
+    contract = plan.split("### M — `accessibility.py`")[1].split("\n### ")[0]
+    assert [key for key in keys if key not in contract] == []
+    assert [size for size in TEXT_SIZES if f'"{size}"' not in contract] == []
+    assert [name for name, factor in SPEECH_RATES.items() if f'"{name}": {factor}' not in contract] == []
+    assert "| GET | `/api/accessibility` |" in plan and "| PUT | `/api/accessibility` |" in plan
+    assert f"`accessibility {{{', '.join(keys)}}}`" in plan, "the socket event should list every key"
+    assert "`status`, `tutor`, `language` and `accessibility` to the new client" in plan
+    assert "`accessibility_file: Path` — env `SAR_ACCESSIBILITY_FILE`" in plan
+    modules = DOCS["CONTRIBUTING.md"].split("## Modules")[1]
+    assert "`accessibility.py`" in modules and "`jsonfile.py`" in modules
+    mobile = (ROOT / "docs" / "MOBILE.md").read_text(encoding="utf-8")
+    works = mobile.split("## What works on a phone")[1].split("\n## ")[0]
+    assert f"**{en['access.title']}**" in works, "MOBILE.md should say phones can change the card"
 
 
 # ---- final integration contract: highlight, ui_rects, stop confirmation, phone mode, join page ----------------
@@ -2673,3 +2709,638 @@ def test_dashboard_steps_fit_one_laptop_screen() -> None:
     assert "overflow-y: auto" in rules[".board-side .checks"] and "flex: none" in rules[".board-side .calibrate"]
     assert "overflow-y: auto" in rules[".more-col"] and "overflow-y: auto" in rules[".more-col > .config"]
     assert "100vh -" not in shell
+
+
+# ---- accessibility: the projector follows the room's settings -------------------------------------------------------
+
+# The server's body for a room that changed nothing, as GET /api/accessibility and the "accessibility" event send it.
+ACCESS = json.dumps(AccessibilitySettings().to_dict())
+# A projector page whose <body> Flask rendered with every setting changed (index.html's first paint).
+PROJECTOR_ACCESS = PROJECTOR_TIMED.replace(
+    'projectorHeight: "1080" }',
+    'projectorHeight: "1080", textSize: "large", captions: "stay", calm: "on", contrast: "on" }',
+)
+assert PROJECTOR_ACCESS != PROJECTOR_TIMED
+LOOKS = """
+const looks = () => {
+  const { textSize, captions, calm, contrast } = doc.body.dataset;
+  return { textSize, captions, calm, contrast };
+};
+"""
+
+
+def style_rules(prefix: str) -> dict[str, str]:
+    """style.css rules whose selector list starts with `prefix`, comments left out: {selector: declarations}.
+
+    A selector written twice keeps its first rule; the later one is an override (the reduced-motion block's).
+    """
+    css = re.sub(r"/\*.*?\*/", "", (STATIC / "css" / "style.css").read_text(encoding="utf-8"), flags=re.S)
+    rules: dict[str, str] = {}
+    for selector, body in re.findall(rf"(?:(?<=\}})|^)\s*({re.escape(prefix)}[^{{}}]*)\{{([^{{}}]*)\}}", css):
+        rules.setdefault(selector.strip(), body)
+    return rules
+
+
+@needs_node
+def test_projector_body_follows_the_accessibility_settings(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR
+        + f"const ACCESS = {ACCESS};\n"
+        + LOOKS
+        + """
+installFetch({ "GET /api/accessibility": { status: 200, body: { ...ACCESS, captions_stay: true, text_size: "large", calm: true } } });
+sock.fire("connect");
+await settle();
+// A reconnect asks the server, so a change made while the page was away still shows.
+assert.deepEqual(looks(), { textSize: "large", captions: "stay", calm: "on", contrast: "off" });
+const sent = sock.emitted.length;
+sock.fire("accessibility", { ...ACCESS, text_size: "xlarge", high_contrast: true });
+assert.deepEqual(looks(), { textSize: "xlarge", captions: "timed", calm: "off", contrast: "on" });
+// Bigger text means bigger boxes: the server hears where the UI is at once.
+await settle();
+assert.ok(sock.emitted.slice(sent).some(([name]) => name === "ui_rects"));
+// A value this page doesn't know leaves that setting as it was; the known ones still apply.
+sock.fire("accessibility", { captions_stay: "yes", text_size: "XLARGE", calm: 1, high_contrast: null, speech_rate: "slower" });
+assert.deepEqual(looks(), { textSize: "xlarge", captions: "timed", calm: "off", contrast: "on" });
+sock.fire("accessibility", { text_size: "huge", calm: true });
+assert.deepEqual(looks(), { textSize: "xlarge", captions: "timed", calm: "on", contrast: "on" });
+""",
+    )
+
+
+@needs_node
+def test_projector_accessibility_ignores_a_stale_get(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR
+        + f"const ACCESS = {ACCESS};\n"
+        + LOOKS
+        + """
+let reply;
+installFetch({ "GET /api/accessibility": () => new Promise((resolve) => { reply = resolve; }) });
+sock.fire("connect");
+await settle();
+sock.fire("accessibility", { ...ACCESS, text_size: "xlarge", calm: true });
+reply({ status: 200, body: ACCESS });
+await settle();
+assert.deepEqual(looks(), { textSize: "xlarge", captions: "timed", calm: "on", contrast: "off" });
+""",
+    )
+
+
+@needs_node
+def test_projector_keeps_the_rendered_settings_until_the_server_says_otherwise(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR_ACCESS
+        + LOOKS
+        + """
+const hl = $("highlight");
+const box = () => ["left", "top", "width", "height"].map((k) => hl.style[k]);
+// Captions are held from the first answer, before any GET comes back.
+const mark = timers.length;
+sock.fire("avatar_update", { animation_state: "idle", spoken_text: "x is 5", display_text: "x = 5" });
+assert.deepEqual(timers.slice(mark).map((x) => x.ms), []);
+// An older server has no /api/accessibility: the page keeps what Flask rendered.
+installFetch({ "GET /api/accessibility": { status: 404, body: { error: "not found" } } });
+sock.fire("connect");
+await settle();
+assert.deepEqual(looks(), { textSize: "large", captions: "stay", calm: "on", contrast: "on" });
+// High contrast from the first paint: the outline is measured with its 6 px border.
+sock.fire("avatar_update", { animation_state: "pointing", highlight: [400, 300, 200, 100] });
+assert.deepEqual(box(), ["380px", "280px", "240px", "140px"]);
+""",
+    )
+
+
+@needs_node
+def test_projector_captions_stay_up_until_the_next_question(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR_TIMED
+        + f"const ACCESS = {ACCESS};\n"
+        + """
+const bubble = $("bubble");
+const transcript = $("transcript");
+const shown = (node) => !node.classList.contains("hidden");
+const armed = (mark) => timers.slice(mark).map((x) => x.ms);
+// Audio the test can finish: the fake DOM's Audio never ends.
+const clips = [];
+globalThis.Audio = class {
+  constructor(url) { this.src = url; this.paused = true; this.ended = false; this.listeners = {}; clips.push(this); }
+  play() { this.paused = false; return Promise.resolve(); }
+  pause() { this.paused = true; }
+  addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+};
+sock.fire("connect");
+await settle();
+sock.fire("accessibility", { ...ACCESS, captions_stay: true });
+const mark = timers.length;
+// The student's words stay up while the assistant thinks, instead of 5 s.
+sock.fire("transcript", { text: "what do I do next?" });
+sock.fire("status", { state: "thinking" });
+assert.ok(shown(transcript));
+// The answer takes their place, and nothing takes it down: not the answer, not its voice, not a voiceless server.
+const answer = { animation_state: "idle", spoken_text: "subtract five", display_text: "Subtract 5." };
+sock.fire("avatar_update", answer);
+assert.ok(!shown(transcript));
+assert.equal(transcript.textContent, "");
+sock.fire("status", { state: "speaking" });
+sock.fire("speak", { url: "/tts/a.mp3", text: answer.spoken_text, display_text: answer.display_text });
+const clip = clips.at(-1);
+clip.ended = true;
+for (const fn of clip.listeners.ended) fn();
+sock.fire("status", { state: "idle" });
+sock.fire("speak", { url: null, text: answer.spoken_text, display_text: answer.display_text });
+assert.deepEqual(armed(mark), [], "no timer may take a held caption down");
+assert.ok(shown(bubble));
+assert.equal(bubble.textContent, "Subtract 5.");
+// The next answer replaces it.
+sock.fire("avatar_update", { ...answer, display_text: "Now divide by 3." });
+assert.equal(bubble.textContent, "Now divide by 3.");
+// A new question takes it down before the camera reads the board, like the quiz card: the microphone opening...
+sock.fire("status", { state: "listening" });
+assert.ok(!shown(bubble));
+// ...the typing box opening (a typed question has no "listening")...
+sock.fire("avatar_update", answer);
+assert.ok(shown(bubble));
+for (const fn of doc.listeners.keydown) fn({ code: "KeyT", key: "t", repeat: false, preventDefault() {} });
+assert.ok(!shown(bubble));
+// ...the student's words (a question typed on the dashboard)...
+sock.fire("avatar_update", answer);
+sock.fire("transcript", { text: "and then?" });
+assert.ok(!shown(bubble));
+// ...or the board being read, whichever the projector hears first.
+sock.fire("avatar_update", answer);
+assert.ok(shown(bubble));
+sock.fire("status", { state: "thinking" });
+assert.ok(!shown(bubble));
+assert.deepEqual(armed(mark), []);
+""",
+    )
+
+
+@needs_node
+def test_projector_captions_switched_off_go_like_any_other(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR_TIMED
+        + f"const ACCESS = {ACCESS};\n"
+        + """
+const bubble = $("bubble");
+const transcript = $("transcript");
+const shown = (node) => !node.classList.contains("hidden");
+sock.fire("connect");
+await settle();
+sock.fire("avatar_update", { animation_state: "idle", spoken_text: "x is 5", display_text: "x = 5" });
+// Switched on while a timed caption is up: the hide timer it already had leaves it up too.
+sock.fire("accessibility", { ...ACCESS, captions_stay: true });
+runTimer(4000);
+assert.ok(shown(bubble));
+// Another setting changing while it is held arms nothing.
+let mark = timers.length;
+sock.fire("accessibility", { ...ACCESS, captions_stay: true, text_size: "large" });
+assert.deepEqual(timers.slice(mark).map((x) => x.ms), []);
+// Switched off while a caption is held: it goes 4 s later, like an answer without a voice.
+sock.fire("accessibility", { ...ACCESS, captions_stay: false });
+assert.deepEqual(timers.slice(mark).map((x) => x.ms), [4000]);
+assert.ok(shown(bubble));
+runTimer(4000);
+assert.ok(!shown(bubble));
+// The student's words held the same way go after their usual 5 s.
+sock.fire("accessibility", { ...ACCESS, captions_stay: true });
+sock.fire("transcript", { text: "is that right?" });
+mark = timers.length;
+sock.fire("accessibility", { ...ACCESS, captions_stay: false });
+assert.deepEqual(timers.slice(mark).map((x) => x.ms), [5000]);
+runTimer(5000);
+assert.ok(!shown(transcript));
+""",
+    )
+
+
+@needs_node
+def test_projector_high_contrast_outline_is_measured_with_its_thicker_border(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "index.html",
+        PROJECTOR
+        + f"const ACCESS = {ACCESS};\n"
+        + """
+const hl = $("highlight");
+const box = () => ["left", "top", "width", "height"].map((k) => hl.style[k]);
+const rects = () => sock.emitted.filter(([name]) => name === "ui_rects").at(-1)[1].rects;
+sock.fire("connect");
+await settle();
+// The outline test's answer: 14 px out from the ink plus the 3 px border...
+sock.fire("avatar_update", { animation_state: "pointing", highlight: [400, 300, 200, 100] });
+assert.deepEqual(box(), ["383px", "283px", "234px", "134px"]);
+// ...and in high contrast the 6 px border style.css draws, placed again at once: the gap to the ink stays 14 px.
+sock.fire("accessibility", { ...ACCESS, high_contrast: true });
+assert.deepEqual(box(), ["380px", "280px", "240px", "140px"]);
+// The server gets the outline as its four 6 px edges (plus the 10 px every UI box gets), after the avatar.
+await settle();
+assert.deepEqual(rects().slice(1, 5), [[370, 270, 260, 26], [370, 404, 260, 26], [370, 270, 26, 160], [604, 270, 26, 160]]);
+// Near a corner it still stays on the screen, and switching back gives the usual box.
+sock.fire("avatar_update", { animation_state: "pointing", highlight: [1900, 1070, 100, 50] });
+assert.deepEqual(box(), ["1880px", "1050px", "40px", "30px"]);
+sock.fire("accessibility", { ...ACCESS, high_contrast: false });
+assert.deepEqual(box(), ["1883px", "1053px", "37px", "27px"]);
+""",
+    )
+
+
+def test_projector_text_size_scales_what_the_room_reads() -> None:
+    scales = {sel: body.strip() for sel, body in style_rules("body").items() if "--text-scale:" in body}
+    assert scales == {
+        "body": "--text-scale: 1;",
+        'body[data-text-size="large"]': "--text-scale: 1.25;",
+        'body[data-text-size="xlarge"]': "--text-scale: 1.5;",
+    }
+    for selector in ("#bubble", "#problem-card-label", "#problem-card-text", "#transcript", "#status"):
+        rule = style_rules(selector)[selector]
+        assert re.search(r"font-size:\s*calc\(.*\*\s*var\(--text-scale\)\)", rule), selector
+    # A bigger text gets a wider bubble, but never more than half the board.
+    bubble = style_rules("#bubble")["#bubble"]
+    assert "max-width: min(50vw, calc(clamp(200px, 34vw, 680px) * var(--text-scale)))" in bubble
+
+
+def test_projector_calm_mode_stops_the_motion_and_softens_the_glow() -> None:
+    on = 'body[data-calm="on"]'
+    calm = style_rules(on)
+    # No bob, hop, shake or nudge, and no sprite slide: the avatar only glides to where it points.
+    assert "animation: none !important" in calm[f"{on} #avatar"]
+    assert "transition-property: left, top" in calm[f"{on} #avatar"]
+    for part in ("#avatar #bubble", "#highlight", f"#status .ring, {on} #status .dots i"):
+        assert "animation: none !important" in calm[f"{on} {part}"], part
+    # Every glow left is a soft one, and the calibration checkerboard is never touched.
+    for selector, body in calm.items():
+        assert all(int(blur) <= 4 for blur in re.findall(r"\b0 0 (\d+)px", body)), selector
+        assert "calibration" not in selector
+    # The computer's own reduced-motion setting keeps working without calm mode.
+    css = (STATIC / "css" / "style.css").read_text(encoding="utf-8")
+    assert "#avatar { animation: none !important" in css_block(css, "@media (prefers-reduced-motion: reduce)")
+
+
+def test_projector_high_contrast_tells_right_from_wrong_by_more_than_colour() -> None:
+    on = 'body[data-contrast="on"]'
+    contrast = style_rules(on)
+    bubble = contrast[f"{on} #avatar #bubble"]
+    assert "border-width: 6px" in bubble and "color: var(--white)" in bubble and "text-shadow: none" in bubble
+    assert "border-style: dashed" in contrast[f"{on} #avatar.state-error #bubble"]
+    assert "border-style: double" in contrast[f"{on} #avatar.state-celebrating #bubble"]
+    # The outline is as thick as main.js measures it, so the gap to the ink stays the same.
+    assert "border-width: 6px" in contrast[f"{on} #highlight"]
+    js = (STATIC / "js" / "main.js").read_text(encoding="utf-8")
+    widths = dict(re.findall(r"const (HIGHLIGHT_BORDER\w*) = (\d+);", js))
+    assert widths == {"HIGHLIGHT_BORDER": "3", "HIGHLIGHT_BORDER_CONTRAST": "6"}
+    assert "border: 3px" in style_rules("#highlight")["#highlight"]
+    # The quiz card's words go to full strength; its border stays thin and glow-free (the camera reads it as ink).
+    card = contrast[f"{on} #problem-card"]
+    assert "color: var(--white)" in card and "border" not in card and "shadow" not in card
+    assert "color: var(--cyan)" in contrast[f"{on} #problem-card-label"]
+    # The board stays black: high contrast adds no fill anywhere.
+    assert not any("background" in body for body in contrast.values())
+
+
+def test_projector_page_paints_the_rooms_settings_first() -> None:
+    size = {"projector_width": 1280, "projector_height": 800}
+    changed = AccessibilitySettings(captions_stay=True, text_size="xlarge", calm=True, high_contrast=True)
+    changed_looks = {"data-text-size": "xlarge", "data-captions": "stay", "data-calm": "on", "data-contrast": "on"}
+    defaults = {"data-text-size": "normal", "data-captions": "timed", "data-calm": "off", "data-contrast": "off"}
+    cases = [
+        ({"access": changed.to_dict()}, changed_looks),
+        ({"access": AccessibilitySettings().to_dict()}, defaults),
+        # A render without the settings (an older caller) paints the defaults.
+        ({}, defaults),
+    ]
+    for variables, looks in cases:
+        tag = re.search(r"<body\b[^>]*>", render_page("index.html", **size, **variables))
+        assert tag, "no <body> tag"
+        attrs = dict(re.findall(r'\s(data-[a-z-]+)="([^"]*)"', tag.group(0)))
+        assert attrs == {"data-projector-width": "1280", "data-projector-height": "800", **looks}, variables
+
+
+# ---- dashboard: accessibility card -----------------------------------------------------------------------------------
+
+ROOM_ACCESS = {
+    "captions_stay": False,
+    "text_size": "normal",
+    "speech_rate": "normal",
+    "calm": False,
+    "high_contrast": False,
+}
+# The card as a teacher reads it: which boxes are ticked, which size and speed are pressed.
+ACCESS_DASHBOARD = (
+    DASHBOARD
+    + f"const ACCESS = {json.dumps(ROOM_ACCESS)};\n"
+    + """
+const card = () => ({
+  captions_stay: $("access-captions").checked,
+  text_size: ["normal", "large", "xlarge"].filter((s) => $(`access-size-${s}`).getAttribute("aria-pressed") === "true"),
+  speech_rate: ["slower", "normal", "faster"].filter((r) => $(`access-rate-${r}`).getAttribute("aria-pressed") === "true"),
+  calm: $("access-calm").checked,
+  high_contrast: $("access-contrast").checked,
+});
+const shows = (body) => ({ ...body, text_size: [body.text_size], speech_rate: [body.speech_rate] });
+const puts = (http) => http.calls.filter((c) => c.method === "PUT" && c.path === "/api/accessibility").map((c) => JSON.parse(c.body));
+"""
+)
+
+
+@needs_node
+def test_accessibility_card_waits_for_the_server_and_shows_the_rooms_settings(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+const sock = installIo();
+const replies = [];
+installFetch({ "GET /api/accessibility": () => new Promise((resolve) => replies.push(resolve)) });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+// No guessed defaults: the card shows only what the server says the room has.
+assert.equal($("access-card").hidden, true);
+const room = { ...ACCESS, captions_stay: true, text_size: "xlarge", speech_rate: "slower", high_contrast: true };
+for (const reply of replies) reply({ status: 200, body: room });
+await settle();
+assert.equal($("access-card").hidden, false);
+assert.deepEqual(card(), shows(room));
+for (const s of ["normal", "large", "xlarge"]) assert.equal($(`access-size-${s}`).dataset.accessSize, s);
+for (const r of ["slower", "normal", "faster"]) assert.equal($(`access-rate-${r}`).dataset.accessRate, r);
+""",
+    )
+    run_node(
+        tmp_path / "older",
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+// A server from before accessibility settings: the card never shows, and nothing is sent.
+const sock = installIo();
+const http = installFetch({ "GET /api/accessibility": { status: 404, body: { error: "not found" } } });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+assert.equal($("access-card").hidden, true);
+assert.ok(http.calls.some((c) => c.path === "/api/accessibility"), "the page never asked");
+assert.deepEqual(puts(http), []);
+""",
+    )
+
+
+@needs_node
+def test_accessibility_card_sends_only_the_setting_that_changed(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+const sock = installIo();
+let room = { ...ACCESS };
+let hold = null;
+const http = installFetch({
+  "GET /api/accessibility": () => ({ status: 200, body: room }),
+  "PUT /api/accessibility": async (init) => {
+    if (hold) await hold;
+    room = { ...room, ...JSON.parse(init.body) };
+    return { status: 200, body: room };
+  },
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+const controls = ["access-captions", "access-calm", "access-contrast", "access-size-normal", "access-size-large",
+                  "access-size-xlarge", "access-rate-slower", "access-rate-normal", "access-rate-faster"];
+let release;
+hold = new Promise((resolve) => { release = resolve; });
+const click = $("access-size-large").fire("click");
+await settle();
+// The whole card waits for the server, so a second tap can't race the first.
+assert.deepEqual(controls.filter((id) => !$(id).disabled), []);
+release();
+await click;
+hold = null;
+assert.deepEqual(puts(http), [{ text_size: "large" }]);
+assert.deepEqual(card(), shows({ ...ACCESS, text_size: "large" }));
+assert.deepEqual(controls.filter((id) => $(id).disabled), []);
+// A box ticks itself before its change event fires; the PUT carries just that box.
+$("access-captions").checked = true;
+await $("access-captions").fire("change");
+assert.deepEqual(puts(http).at(-1), { captions_stay: true });
+await $("access-rate-faster").fire("click");
+assert.deepEqual(puts(http).at(-1), { speech_rate: "faster" });
+$("access-contrast").checked = true;
+await $("access-contrast").fire("change");
+assert.deepEqual(puts(http).at(-1), { high_contrast: true });
+assert.deepEqual(card(), shows({ ...ACCESS, captions_stay: true, text_size: "large", speech_rate: "faster",
+                                 high_contrast: true }));
+// Pressing the size that is already on sends nothing.
+await $("access-size-large").fire("click");
+assert.equal(puts(http).length, 4);
+assert.equal($("access-msg").textContent, "");
+""",
+    )
+
+
+@needs_node
+def test_accessibility_card_keeps_keyboard_focus(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+const sock = installIo();
+installFetch({
+  "GET /api/accessibility": { status: 200, body: ACCESS },
+  "PUT /api/accessibility": (init) => ({ status: 200, body: { ...ACCESS, ...JSON.parse(init.body) } }),
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+// A keyboard user presses Space on a size: the card is disabled while it saves, then focus comes back to it.
+const button = $("access-size-large");
+const focused = [];
+button.focus = () => focused.push("access-size-large");
+doc.activeElement = button;
+await button.fire("click");
+assert.deepEqual(focused, ["access-size-large"]);
+// A change made with the mouse (focus elsewhere) moves no focus.
+doc.activeElement = null;
+$("access-calm").focus = () => focused.push("access-calm");
+$("access-calm").checked = true;
+await $("access-calm").fire("change");
+assert.deepEqual(focused, ["access-size-large"]);
+""",
+    )
+
+
+@needs_node
+def test_accessibility_card_follows_a_change_made_elsewhere(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+const sock = installIo();
+const replies = [];
+installFetch({ "GET /api/accessibility": () => new Promise((resolve) => replies.push(resolve)) });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+// A phone turned on calm mode and a faster voice: every open dashboard follows at once.
+const pushed = { ...ACCESS, calm: true, speech_rate: "faster" };
+sock.fire("accessibility", pushed);
+assert.equal($("access-card").hidden, false);
+assert.deepEqual(card(), shows(pushed));
+assert.match(logText(), /accessibility captions stay: false · text size: normal · speech rate: faster · calm: true/);
+// A GET that left before the push can't bring the old settings back.
+for (const reply of replies) reply({ status: 200, body: ACCESS });
+await settle();
+assert.deepEqual(card(), shows(pushed));
+// Half a body (an older or newer server) changes nothing.
+sock.fire("accessibility", { text_size: "large" });
+assert.deepEqual(card(), shows(pushed));
+""",
+    )
+
+
+@needs_node
+def test_accessibility_card_failure_is_explained_and_changes_nothing(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+const sock = installIo();
+const http = installFetch({
+  "GET /api/accessibility": { status: 200, body: ACCESS },
+  "PUT /api/accessibility": { status: 400, body: { error: "text_size must be one of: normal, large, xlarge" } },
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+await $("access-size-large").fire("click");
+const note = $("access-msg");
+assert.equal(note.textContent,
+  "Couldn't change that setting. Check the assistant is still running (restart the assistant if it closed), then try again.");
+assert.equal(note.dataset.tone, "warn");
+assert.match(logText(), /accessibility text_size must be one of: normal, large, xlarge/);
+assert.deepEqual(card(), shows(ACCESS));
+// The box the teacher ticked goes back to what the room really has.
+$("access-calm").checked = true;
+await $("access-calm").fire("change");
+assert.deepEqual(puts(http), [{ text_size: "large" }, { calm: true }]);
+assert.equal($("access-calm").checked, false);
+assert.equal($("access-calm").disabled, false);
+assert.equal($("access-size-large").disabled, false);
+// The note switches language with the page.
+sock.fire("language", { setting: "es", current: "es" });
+assert.equal(note.textContent,
+  "No se pudo cambiar ese ajuste. Revisa que el asistente siga funcionando (si se cerró, vuelve a iniciar el asistente) " +
+  "y vuelve a intentarlo.");
+""",
+    )
+
+
+@needs_node
+def test_accessibility_card_in_spanish(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+const sock = installIo();
+installFetch({
+  "GET /api/language": { status: 200, body: { setting: "es", current: "es" } },
+  "GET /api/accessibility": { status: 200, body: ACCESS },
+});
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+const say = (key) => [...doc.body.descendants()].find((n) => n.dataset.i18n === key).textContent;
+assert.equal(doc.documentElement.lang, "es");
+assert.equal(say("access.title"), "Accesibilidad");
+assert.equal(say("access.hint"), "Cambian el proyector y la voz para todo el salón.");
+assert.equal(say("access.captions"), "Dejar los subtítulos hasta la siguiente pregunta");
+assert.equal(say("access.calm"), "Modo tranquilo (sin saltos ni destellos)");
+assert.equal(say("access.contrast"), "Alto contraste");
+assert.equal(say("access.size"), "Tamaño del texto en el pizarrón");
+assert.equal(say("access.rate"), "Velocidad de la voz");
+assert.equal($("access-size").getAttribute("aria-label"), "Tamaño del texto en el pizarrón");
+assert.equal($("access-rate").getAttribute("aria-label"), "Velocidad de la voz");
+assert.deepEqual(["normal", "large", "xlarge"].map((s) => $(`access-size-${s}`).textContent), ["Normal", "Grande", "Muy grande"]);
+assert.deepEqual(["slower", "normal", "faster"].map((r) => $(`access-rate-${r}`).textContent), ["Más lenta", "Normal", "Más rápida"]);
+""",
+    )
+
+
+@needs_node
+def test_accessibility_card_polls_only_without_a_live_socket(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + TIMERS
+        + """
+// No socket.io: the 2 s status poll is the only news of a change made on a phone.
+let room = { ...ACCESS };
+installFetch({ "GET /api/accessibility": () => ({ status: 200, body: room }) });
+await import("./dashboard/main.js");
+await settle();
+assert.deepEqual(card(), shows(ACCESS));
+room = { ...ACCESS, text_size: "large" };
+runTimer(2000);
+await settle();
+assert.deepEqual(card(), shows(room));
+""",
+    )
+    run_node(
+        tmp_path / "live",
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + TIMERS
+        + """
+// A live socket brings every change as an event, so the poll leaves the card alone.
+const sock = installIo();
+const http = installFetch({ "GET /api/accessibility": { status: 200, body: ACCESS } });
+await import("./dashboard/main.js");
+sock.fire("connect");
+await settle();
+const asked = () => http.calls.filter((c) => c.path === "/api/accessibility").length;
+const seen = asked();
+runTimer(2000);
+await settle();
+assert.equal(asked(), seen);
+""",
+    )
+
+
+@needs_node
+def test_camera_view_toggle_only_switches_its_own_buttons(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        ACCESS_DASHBOARD
+        + """
+installIo();
+installFetch({ "GET /api/accessibility": { status: 200, body: ACCESS } });
+// The template nests the camera's two buttons in #camera-view; the fake DOM lists every node flat, so nest them.
+const [linedUp, raw] = [...doc.body.descendants()].filter((n) => Object.hasOwn(n.dataset, "view"));
+$("camera-view").append(linedUp, raw);
+await import("./dashboard/main.js");
+await settle();
+await raw.fire("click");
+assert.deepEqual([linedUp, raw].map((b) => b.getAttribute("aria-pressed")), ["false", "true"]);
+// The accessibility groups are .seg too, and keep their own state and their one handler.
+assert.equal($("access-size-normal").getAttribute("aria-pressed"), "true");
+assert.equal($("access-size-large").listeners.click.length, 1);
+""",
+    )

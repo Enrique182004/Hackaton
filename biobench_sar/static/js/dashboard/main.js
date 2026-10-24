@@ -4,6 +4,7 @@ import { initCamera, setHighlight, setTarget } from "./camera.js";
 import { initFiles, refreshFiles, renderFiles } from "./files.js";
 import { t } from "../i18n.js";
 import { initLanguage, languageVersion, refreshLanguage, renderLanguage } from "./language.js";
+import { initAccessibility, refreshAccessibility, renderAccessibility } from "./accessibility.js";
 import { renderStatus, renderState, renderConnection } from "./status.js";
 import { initTabs } from "./tabs.js";
 import { logEvent, renderConfig } from "./log.js";
@@ -62,6 +63,7 @@ function initSocket() {
     refreshFiles().catch(() => {});
     refreshTutor().catch(() => {});
     refreshLanguage().catch(() => {});
+    refreshAccessibility().catch(() => {});
     // A restarted server has a new PIN.
     refreshPhone().catch(() => {});
   });
@@ -99,6 +101,11 @@ function initSocket() {
   socket.on("language", (d) => {
     renderLanguage(d);
     logEvent("language", d);
+  });
+  // Someone changed the room's accessibility settings: here, on another dashboard or on a phone.
+  socket.on("accessibility", (d) => {
+    renderAccessibility(d);
+    logEvent("accessibility", d);
   });
 }
 
@@ -138,6 +145,7 @@ function initCalibration() {
 }
 
 initLanguage();
+initAccessibility();
 initTabs();
 initSocket();
 loadHistory().catch(() => {});
@@ -161,6 +169,7 @@ every(STATUS_MS, async () => {
   // or the student switching mode by voice).
   if (!socketLive && status.state) applyState(status.state);
   if (!socketLive) refreshTutor().catch(() => {});
+  if (!socketLive) refreshAccessibility().catch(() => {});
 });
 loadConfig().catch(() => {});
 refreshLanguage().catch(() => {});

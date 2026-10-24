@@ -526,12 +526,13 @@ def test_socket_connect_receives_current_status(built: Any, fakes: Any) -> None:
     app, socketio = built
     sio = socketio.test_client(app)
     got = sio.get_received()
-    assert [m["name"] for m in got] == ["status", "tutor", "language"]
+    assert [m["name"] for m in got] == ["status", "tutor", "language", "accessibility"]
     assert got[0]["args"][0] == {"state": "idle"}
     assert got[1]["args"][0] == {"mode": "help", "learn_topic": None, "quiz": None, "problem": None}, (
         "a reloaded projector catches up"
     )
     assert got[2]["args"][0] == {"setting": "auto", "current": "en"}
+    assert got[3]["args"][0] == ACCESS_DEFAULTS, "a reloaded projector gets its text size, captions and contrast"
 
 
 def _poll(base: str, sid: str | None = None, body: bytes | None = None) -> str:
@@ -555,16 +556,17 @@ def test_socket_connect_packet_precedes_status_push(built: Any) -> None:
         packets: list[str] = []
         deadline = time.time() + 5
         while time.time() < deadline and not (
-            any(p.startswith("40") for p in packets) and any(p.startswith('42["language"') for p in packets)
+            any(p.startswith("40") for p in packets) and any(p.startswith('42["accessibility"') for p in packets)
         ):
             packets += _poll(base, sid).split("\x1e")
     finally:
         server.shutdown()
         server.server_close()
     messages = [p for p in packets if p[:2] in ("40", "42")]
-    assert [p[:2] for p in messages] == ["40", "42", "42", "42"], packets
+    assert [p[:2] for p in messages] == ["40", "42", "42", "42", "42"], packets
     assert json.loads(messages[1][2:]) == ["status", {"state": "idle"}]
     assert json.loads(messages[2][2:])[0] == "tutor"
+    assert json.loads(messages[4][2:])[0] == "accessibility"
 
 
 def test_socket_connect_mid_query_gets_current_state(built: Any, fakes: Any) -> None:
@@ -1173,6 +1175,121 @@ def test_answers_carry_display_and_spoken_text(built: Any, fakes: Any) -> None:
         assert by_name[name]["spoken_text"] == "x plus two equals five", name
     history = app.test_client().get("/api/history").get_json()["interactions"][0]
     assert (history["display_text"], history["language"]) == ("x + 2 = 5", "en")
+
+
+# ---- accessibility ----------------------------------------------------------------------------------------------
+
+ACCESS = "/api/accessibility"
+ACCESS_DEFAULTS = {
+    "captions_stay": False,
+    "text_size": "normal",
+    "speech_rate": "normal",
+    "calm": False,
+    "high_contrast": False,
+}
+
+
+def _access_pushes(sio: Any, wait: bool = True) -> list[dict[str, Any]]:
+    got = collect(sio, ["accessibility"], timeout=1.0) if wait else sio.get_received()
+    return [m["args"][0] for m in got if m["name"] == "accessibility"]
+
+
+def test_accessibility_starts_at_the_defaults_and_the_voice_gets_its_speed(built: Any, fakes: Any) -> None:
+    app, _ = built
+    assert app.test_client().get(ACCESS).get_json() == ACCESS_DEFAULTS
+    assert fakes.tts.rates == [1.0], "create_app hands the voice its speed when it attaches the services"
+
+
+def test_accessibility_partial_changes_round_trip_and_are_saved(built: Any, fakes: Any, settings: Settings) -> None:
+    app, _ = built
+    client = app.test_client()
+    r = client.put(ACCESS, json={"speech_rate": "slower"})
+    assert r.status_code == 200 and r.get_json() == {**ACCESS_DEFAULTS, "speech_rate": "slower"}
+    r = client.put(ACCESS, json={"text_size": "xlarge", "high_contrast": True})
+    expected = {**ACCESS_DEFAULTS, "speech_rate": "slower", "text_size": "xlarge", "high_contrast": True}
+    assert r.status_code == 200 and r.get_json() == expected, "a partial body keeps the other settings"
+    assert client.get(ACCESS).get_json() == expected
+    assert json.loads(settings.accessibility_file.read_text(encoding="utf-8")) == expected
+    assert fakes.tts.rates == [1.0, 0.75, 0.75], "the voice follows every change"
+
+
+def test_accessibility_survives_restart(settings: Settings, fakes: app_module.Services, templates_dir: Path) -> None:
+    first, _ = app_module.create_app(settings, fakes, template_folder=str(templates_dir))
+    first.test_client().put(ACCESS, json={"calm": True, "speech_rate": "faster"})
+    fakes.tts.rates.clear()
+    second, _ = app_module.create_app(settings, fakes, template_folder=str(templates_dir))
+    assert second.test_client().get(ACCESS).get_json() == {**ACCESS_DEFAULTS, "calm": True, "speech_rate": "faster"}
+    assert fakes.tts.rates == [1.25], "the restarted voice speaks at the saved speed from the first answer"
+
+
+@pytest.mark.parametrize(
+    ("payload", "error"),
+    [
+        ("{}", "JSON object"),
+        ('["calm"]', "JSON object"),
+        ("null", "JSON object"),
+        ("not json", "JSON object"),
+        ('{"font": "big"}', "unknown setting: font"),
+        ('{"captions_stay": 1}', "captions_stay must be true or false"),
+        ('{"speech_rate": "Slower"}', "speech_rate must be one of: slower, normal, faster"),
+        ('{"calm": true, "text_size": "huge"}', "text_size must be one of: normal, large, xlarge"),
+    ],
+)
+def test_bad_accessibility_body_is_400_and_changes_nothing(
+    built: Any, fakes: Any, settings: Settings, payload: str, error: str
+) -> None:
+    app, socketio = built
+    sio = socketio.test_client(app)
+    sio.get_received()
+    client = app.test_client()
+    r = client.put(ACCESS, data=payload, content_type="application/json")
+    assert r.status_code == 400 and error in r.get_json()["error"]
+    assert not settings.accessibility_file.exists(), "nothing saved"
+    assert _access_pushes(sio, wait=False) == [], "nothing pushed"
+    assert fakes.tts.rates == [1.0], "only the speed handed over at startup"
+    assert client.get(ACCESS).get_json() == ACCESS_DEFAULTS
+
+
+def test_cross_origin_accessibility_change_blocked(built: Any, settings: Settings) -> None:
+    r = built[0].test_client().put(ACCESS, json={"high_contrast": True}, headers=EVIL)
+    assert r.status_code == 403 and not settings.accessibility_file.exists()
+
+
+def test_every_open_page_hears_an_accessibility_change(built: Any) -> None:
+    app, socketio = built
+    projector, dashboard = socketio.test_client(app), socketio.test_client(app)
+    for sio in (projector, dashboard):
+        sio.get_received()
+    body = app.test_client().put(ACCESS, json={"captions_stay": True}).get_json()
+    assert body == {**ACCESS_DEFAULTS, "captions_stay": True}
+    for sio in (projector, dashboard):
+        assert _access_pushes(sio) == [body], "one push, with every key"
+
+
+def test_a_page_that_connects_later_gets_the_saved_accessibility(built: Any) -> None:
+    app, socketio = built
+    app.test_client().put(ACCESS, json={"text_size": "large"})
+    got = socketio.test_client(app).get_received()
+    assert got[-1]["name"] == "accessibility"
+    assert got[-1]["args"][0] == {**ACCESS_DEFAULTS, "text_size": "large"}
+
+
+def test_pages_render_with_the_accessibility_settings(built: Any) -> None:
+    from flask import template_rendered
+
+    app, _ = built
+    client = app.test_client()
+    client.put(ACCESS, json={"text_size": "xlarge", "calm": True})
+    seen: list[tuple[str | None, Any]] = []
+
+    def record(_sender: Any, template: Any, context: dict[str, Any], **_extra: Any) -> None:
+        seen.append((template.name, context.get("access")))
+
+    with template_rendered.connected_to(record, app):
+        assert client.get("/").status_code == 200
+        assert client.get("/dashboard").status_code == 200
+    expected = {**ACCESS_DEFAULTS, "text_size": "xlarge", "calm": True}
+    assert seen == [("index.html", expected), ("precharge.html", expected)], "the first paint is already right"
 
 
 # ---- glare ------------------------------------------------------------------------------------------------------
