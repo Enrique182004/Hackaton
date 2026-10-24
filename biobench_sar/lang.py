@@ -39,7 +39,7 @@ _ES_NAMES = frozenset({"es", "spa", "spanish", "espanol", "castellano"})
 
 
 def normalize_language(code: str | None) -> LanguageSetting:
-    """"en" / "es" from a setting or locale ("es-MX", "English", "Español"); anything else is "auto"."""
+    """The setting for a code or locale: "es-MX" / "Español" -> "es", "English" -> "en", anything else "auto"."""
     key = _plain((code or "").strip().lower()).replace("_", "-").split("-")[0]
     if key in _EN_NAMES:
         return "en"
@@ -49,9 +49,13 @@ def normalize_language(code: str | None) -> LanguageSetting:
 
 
 # ---- language detection ------------------------------------------------------
+def _word_set(words: str) -> frozenset[str]:
+    return frozenset(words.split())
+
+
 # Accent-free, and never in both sets: words shared by the two languages ("no", "me", "a", "quiz", "total")
 # or that are math in English ("sin", "tan", "dice") vote for neither.
-_ES_WORDS = frozenset(
+_ES_WORDS = _word_set(
     """
     el la los las un una unos unas lo le les se te mi mis tu tus su sus nos yo usted ustedes ella ellos nosotros
     este esta esto estos estas ese esa eso esos esas aquel de del al en y o que ni pero porque aunque como cuando
@@ -74,9 +78,9 @@ _ES_WORDS = frozenset(
     cero uno dos tres cuatro cinco seis siete ocho nueve diez doce trece catorce quince veinte treinta cuarenta
     cincuenta cien mil
     hola gracias oye mande porfa vale orale andale chido listo lista claro adios
-    """.split()
+    """
 )
-_EN_WORDS = frozenset(
+_EN_WORDS = _word_set(
     """
     the an and or but if so of to in on at by for from with about into over under up out off as is are was were
     be been being am i i'm im i've i'll i'd you you're your we they it it's its this that that's these those there
@@ -90,7 +94,7 @@ _EN_WORDS = frozenset(
     equals equal divided square root half third quarter another more one two three four five six seven eight nine
     eleven twelve twenty hundred thousand zero like same other else much many some any all every each first last
     write draw board back way side value whole
-    """.split()
+    """
 )
 _SPANISH_PUNCT = re.compile(r"[¿¡]")
 _SPANISH_LETTERS = re.compile(r"[áéíóúüñ]")
@@ -116,7 +120,7 @@ def _vote(word: str, previous: str | None, previous_vote: str | None) -> str | N
 
 
 def detect_language(text: str, default: str = "en") -> Language:
-    """"en" or "es" for what the student said or typed; `default` when nothing leans either way (math only, "ok")."""
+    """The language ("en" / "es") the student said or typed; `default` when nothing leans either way ("ok", math)."""
     fallback: Language = "es" if normalize_language(default) == "es" else "en"
     lowered = unicodedata.normalize("NFC", (text or "").lower()).replace("’", "'").replace("‘", "'")
     spanish = 2 * len(_SPANISH_PUNCT.findall(lowered))
@@ -263,7 +267,7 @@ def is_quiz_stop_es(text: str) -> bool:
 
 
 def detect_mode_es(text: str) -> str | None:
-    """"help" | "practice" | "quiz" a student's Spanish asks for, or None to stay in the current mode."""
+    """The mode ("help" | "practice" | "quiz") a student's Spanish asks for, or None to stay in the current one."""
     plain = _normalize(text)[0]
     if _is_quiz_stop(plain):
         return "help"
@@ -292,7 +296,10 @@ _LEARN_EXPLAIN_ES = re.compile(
     r"(?:\s+(?:sobre|acerca\s+de))?\s+(?P<rest>[^,]+)"
 )
 _HOWTO_ES: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("infinitive", re.compile(r"\bcomo\s+(?:se\s+)?(?:le\s+)?(?:hago|hace|hacemos|haces|hacen|hacer)\s+para\s+(?P<phrase>[^,]+)")),
+    (
+        "infinitive",
+        re.compile(r"\bcomo\s+(?:se\s+)?(?:le\s+)?(?:hago|hace|hacemos|haces|hacen|hacer)\s+para\s+(?P<phrase>[^,]+)"),
+    ),
     (
         "infinitive",
         re.compile(
