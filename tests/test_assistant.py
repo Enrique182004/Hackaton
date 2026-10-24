@@ -1542,6 +1542,24 @@ def test_drop_ui_ink() -> None:
     assert drop_ui_ink(ink, [(0.0, 0.0, 1280.0, 800.0)], outline) == [{"x": 1}], "a full-screen card is no highlight"
 
 
+def test_board_ink_is_the_ink_the_model_sees(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert h.assistant.board_ink() == ([], None), "no frame"
+    _with_ink(monkeypatch, LINE_1, LINE_2)
+    h.vision.frame = np.zeros((BOARD_H, BOARD_W, 3), np.uint8)
+    h.assistant.set_ui_rects([[380, 380, 300, 150]])  # the speech bubble over line 2
+    ink, frame = h.assistant.board_ink()
+    assert ink == [LINE_1] and frame is h.vision.frame
+
+
+def test_board_ink_drops_ink_in_a_glare_hotspot(h: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _with_ink(monkeypatch, REGION_A, REGION_B)
+    _glare(monkeypatch, [(50, 30, 40, 30)])  # around REGION_B's center (70, 45)
+    raw = np.full((100, 100, 3), 128, np.uint8)
+    h.assistant.services.vision = RawVision(raw)  # no calibration: the raw frame is the board
+    ink, frame = h.assistant.board_ink()
+    assert ink == [REGION_A] and frame.shape == raw.shape
+
+
 def test_place_target_unit() -> None:
     from biobench_sar.assistant import place_target
 

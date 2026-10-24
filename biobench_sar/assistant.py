@@ -661,6 +661,12 @@ class Assistant:
             return crop.jpeg, crop
         return (encode_jpeg(warped) if warped is not None else None), None
 
+    def board_ink(self) -> tuple[list[Any], Any]:
+        """(the ink regions the model is shown for the latest frames, the projector-space frame they were found on);
+        ([], None) without a frame. The dashboard's ink overlay boxes these, so it never boxes the projected UI."""
+        raw, calibration, warped = self._board()
+        return self._ink(raw, calibration, warped), warped
+
     def _ink(self, raw: Any, calibration: Any, warped: Any) -> list[Any]:
         from biobench_sar.core.vision_loop import find_ink_regions
 
