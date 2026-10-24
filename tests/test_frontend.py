@@ -17,7 +17,7 @@ FAKE_DOM = Path(__file__).with_name("js") / "fake_dom.mjs"
 NODE = shutil.which("node")
 needs_node = pytest.mark.skipif(NODE is None, reason="node is not installed")
 
-GENERIC_FAMILIES = {"serif", "sans-serif", "monospace", "system-ui", "ui-monospace", "ui-sans-serif"}
+GENERIC_FAMILIES = {"serif", "sans-serif", "monospace", "cursive", "system-ui", "ui-monospace", "ui-sans-serif"}
 BLAND_FIRST_CHOICES = {"inter", "roboto", "arial", "helvetica", "system-ui", "-apple-system"}
 
 
@@ -53,7 +53,7 @@ def test_projector_page_loads_no_remote_fonts() -> None:
 def test_dashboard_font_stacks_fall_back_to_local_fonts() -> None:
     css = (STATIC / "css" / "dashboard.css").read_text(encoding="utf-8")
     stacks = dict(re.findall(r"--(font-[a-z]+):\s*([^;]+);", css))
-    assert {"font-display", "font-body", "font-mono"} <= set(stacks)
+    assert {"font-head", "font-body", "font-hand"} <= set(stacks)
     for name, stack in stacks.items():
         families = [f.strip().strip('"').lower() for f in stack.split(",")]
         assert families[0] not in BLAND_FIRST_CHOICES | GENERIC_FAMILIES, f"--{name} leads with {families[0]}"
@@ -102,20 +102,18 @@ const http = installFetch();
 http.setStatus({ state: "listening" });
 await import("./dashboard/main.js");
 await settle();
-const chip = $("conn-chip");
-assert.match(chip.querySelector("span").textContent, /^offline/);
-assert.match(chip.title, /socket\\.io/);
-assert.equal(chip.dataset.tone, "warn");
+assert.equal($("conn-text").textContent, "Connected (no live updates)");
 for (const [id, type] of [["ask-form", "submit"], ["listen-btn", "click"], ["file-input", "change"],
                           ["search-form", "submit"], ["calibrate-btn", "click"]]) {
   assert.ok($(id).listeners[type]?.length, `${id} has no ${type} handler`);
 }
 const paths = http.calls.map((c) => c.path);
 for (const p of ["/api/status", "/api/documents", "/api/config"]) assert.ok(paths.includes(p), `${p} never fetched`);
-// With no socket, the status poll drives the state chip and the push-to-talk note.
-assert.equal($("state-chip").dataset.state, "listening");
+// With no socket, the status poll drives the status line and the push-to-talk note.
+assert.equal($("status-line").dataset.state, "listening");
+assert.equal($("status-text").textContent, "Listening… speak now.");
 await $("listen-btn").fire("click");
-assert.equal($("ask-msg").textContent, "Listening — speak now.");
+assert.equal($("ask-msg").textContent, "Listening… speak now.");
 """,
     )
 
@@ -134,13 +132,13 @@ sock.fire("connect");
 await settle();
 const msg = $("ask-msg");
 await $("listen-btn").fire("click");
-assert.equal(msg.textContent, "Starting microphone…");
+assert.equal(msg.textContent, "Getting the microphone ready…");
 sock.fire("status", { state: "idle" });  // e.g. the previous answer finishing first
-assert.equal(msg.textContent, "Starting microphone…");
+assert.equal(msg.textContent, "Getting the microphone ready…");
 sock.fire("status", { state: "listening" });
-assert.equal(msg.textContent, "Listening — speak now.");
+assert.equal(msg.textContent, "Listening… speak now.");
 sock.fire("status", { state: "transcribing" });
-assert.equal(msg.textContent, "Transcribing…");
+assert.equal(msg.textContent, "Writing down what you said…");
 sock.fire("status", { state: "idle" });
 assert.equal(msg.textContent, "");
 """,
@@ -165,7 +163,7 @@ await settle();
 sock.fire("status", { state: "listening" });
 reply({ status: 202, body: { accepted: true } });
 await click;
-assert.equal($("ask-msg").textContent, "Listening — speak now.");
+assert.equal($("ask-msg").textContent, "Listening… speak now.");
 """,
     )
 
@@ -185,7 +183,36 @@ $("ask-input").value = "Is my flowchart missing a step?";
 await $("ask-form").fire("submit");
 sock.fire("status", { state: "thinking" });
 sock.fire("status", { state: "idle" });
-assert.equal($("ask-msg").textContent, "Sent — watch the projector.");
+assert.equal($("ask-msg").textContent, "Sent! Watch the board for the answer.");
+""",
+    )
+
+
+@needs_node
+def test_file_list_explains_which_files_are_used(tmp_path: Path) -> None:
+    run_node(
+        tmp_path,
+        "precharge.html",
+        DASHBOARD
+        + """
+installIo();
+installFetch({
+  "GET /api/documents": {
+    status: 200,
+    body: {
+      documents: [
+        { source: "protocol.pdf", type: "pdf", chunks: 12, active: true },
+        { source: "old_notes.md", type: "md", chunks: 1, active: false },
+      ],
+      total_chunks: 13, active_count: 1, all_active: false,
+    },
+  },
+});
+await import("./dashboard/main.js");
+await settle();
+assert.equal($("files-summary").textContent, "The assistant uses 1 of 2 files when answering.");
+assert.equal($("use-all-btn").hidden, false);
+assert.equal($("files").children.length, 2);
 """,
     )
 
@@ -201,7 +228,7 @@ installIo();
 installFetch({ "POST /api/listen": { status: 503, body: { accepted: false, error: "no microphone available" } } });
 await import("./dashboard/main.js");
 await $("listen-btn").fire("click");
-assert.match($("ask-msg").textContent, /^No microphone on the server machine\\./);
+assert.match($("ask-msg").textContent, /^No microphone found\\./);
 assert.match($("ask-msg").textContent, /type your question/);
 assert.equal($("ask-msg").dataset.tone, "bad");
 """,
