@@ -421,12 +421,20 @@ class Assistant:
             self._tutor_pushed = state
         self._emit("tutor", state)
 
-    def _show_problem(self, action: AvatarAction) -> None:
-        """The projector card follows the turn: a problem the assistant dictated, else the student's off the board."""
-        dictated = getattr(action, "new_problem", None)
-        if dictated:
-            self.tutor.show_problem(dictated, "dictated")
-        else:
+    def _show_problem(self, action: AvatarAction, task: Task | None, *, has_ink: bool) -> None:
+        """The projector card follows the turn. A turn that dictates a problem (practice, a lesson's example) shows
+        it, or clears the card when the reply has none the card can show: an older problem must not stand in for
+        the one just read out. Help shows the student's problem, read off the board when there is ink on it."""
+        kind = task["kind"] if task is not None else "help"
+        if kind == "quiz":
+            return  # the quiz owns the card
+        if kind == "practice" or (kind == "learn" and task is not None and task.get("stage") == "example"):
+            dictated = getattr(action, "new_problem", None)
+            if dictated:
+                self.tutor.show_problem(dictated, "dictated")
+            else:
+                self.tutor.clear_problem()
+        elif kind == "help" and has_ink:
             self.tutor.show_problem(getattr(action, "board_problem", None), "board")
 
     def quiz_problems(self) -> list[QuizProblem]:
@@ -561,8 +569,8 @@ class Assistant:
                 action, display = self._advance_quiz(task, action, display, graded=bool(ink), language=language)
             if not failed:
                 self.tutor.add_turn(text, action.spoken_text)
-            if not failed and self.tutoring and (task is None or task["kind"] != "quiz"):
-                self._show_problem(action)
+            if not failed and self.tutoring:
+                self._show_problem(action, task, has_ink=bool(ink))
             self.push_tutor()
             said = {"display_text": display, "spoken_text": action.spoken_text, "language": language}
             self._emit("avatar_update", {**action.to_dict(), **said})

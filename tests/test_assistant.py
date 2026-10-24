@@ -1378,6 +1378,7 @@ def test_practice_shows_the_dictated_problem(h: Harness) -> None:
 
 def test_help_shows_the_students_problem(h: Harness) -> None:
     _reply(h, board_problem="2x + 3 = 11")
+    h.vision.frame = np.zeros((4, 4, 3), np.uint8)
     h.assistant.handle_query("help me")
     assert h.assistant.tutor.problem == {"text": "2x + 3 = 11", "source": "board"}
     assert _tutor_events(h)[-1]["problem"] == {"text": "2x + 3 = 11", "source": "board"}
@@ -1385,6 +1386,7 @@ def test_help_shows_the_students_problem(h: Harness) -> None:
 
 def test_empty_or_failed_reply_keeps_the_card(h: Harness) -> None:
     _reply(h, board_problem="2x + 3 = 11")
+    h.vision.frame = np.zeros((4, 4, 3), np.uint8)
     h.assistant.handle_query("help me")
     _reply(h, board_problem="")
     h.assistant.handle_query("and now?")
@@ -1402,3 +1404,29 @@ def test_quiz_turns_leave_the_card_to_the_quiz(h: Harness) -> None:
 def test_plain_actions_change_nothing(h: Harness) -> None:
     h.assistant.handle_query("hello")  # the stub's AvatarAction has no problem keys
     assert h.assistant.tutor.problem is None
+
+
+def test_practice_without_a_new_problem_clears_the_card(h: Harness) -> None:
+    # The voice dictated something the card can't show: the old board problem must not stand in for it.
+    _reply(h, board_problem="2x + 3 = 11")
+    h.vision.frame = np.zeros((4, 4, 3), np.uint8)
+    h.assistant.handle_query("help me")
+    _reply(h, board_problem="2x + 3 = 11", new_problem=None)
+    h.assistant.handle_query("give me a similar problem")
+    assert h.assistant.tutor.problem is None and _tutor_events(h)[-1]["problem"] is None
+
+
+def test_help_with_an_empty_board_keeps_the_card(h: Harness) -> None:
+    _reply(h, new_problem="4x + 7 = 19")
+    h.assistant.handle_query("give me a similar problem")
+    _reply(h, board_problem="2x + 3 = 11", new_problem="9x = 9")  # copied from an example; a stray new_problem
+    h.assistant.handle_query("I'm stuck")
+    assert h.assistant.tutor.problem == {"text": "4x + 7 = 19", "source": "dictated"}
+
+
+def test_lesson_starter_shows_its_problem_and_an_offer_shows_none(h: Harness) -> None:
+    _reply(h, new_problem="1/4 + 2/4")
+    h.assistant.handle_query("teach me fractions")
+    assert h.assistant.tutor.problem is None, "the offer stage dictates nothing"
+    h.assistant.handle_query("make one up")
+    assert h.assistant.tutor.problem == {"text": "1/4 + 2/4", "source": "dictated"}
