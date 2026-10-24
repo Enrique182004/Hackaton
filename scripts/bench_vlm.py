@@ -16,6 +16,13 @@ from biobench_sar.schemas import InkRegion, RetrievedChunk
 
 SIZE = (1920, 1080)
 QUERIES = ["Is my flowchart correct?", "Check my procedure, please.", "Does this look right to you?"]
+SCENARIOS = {
+    "A": ("missing sterile step", ["Lake water sample", "Filter 0.45um", "NNA + E. coli", "Incubate 30C", "Microscopy"], "error"),
+    "B": ("complete procedure",
+          ["Autoclave media + tools", "Flame-sterilize loop", "Lake water sample", "Filter 0.45um",
+           "NNA + E. coli", "Incubate 30C", "Microscopy"], "celebrating"),
+}
+SCENARIO_QUERY = "Check my flowchart. Is the procedure correct and complete?"
 STEPS = ["Lake water sample", "Filter 0.45um", "NNA + E. coli", "Incubate 30C", "Microscopy"]
 
 CONTEXT = [
@@ -29,7 +36,7 @@ CONTEXT = [
 def make_flowchart(steps: list[str]) -> tuple[bytes, list[InkRegion]]:
     img = np.full((SIZE[1], SIZE[0], 3), 255, np.uint8)
     n = len(steps)
-    bw, bh = 300, 120
+    bw, bh = min(300, (SIZE[0] - 120) // n - 40), 120
     gap = (SIZE[0] - 2 * 60 - n * bw) // max(n - 1, 1)
     y = SIZE[1] // 2 - bh // 2
     regions: list[InkRegion] = []
@@ -47,12 +54,27 @@ def make_flowchart(steps: list[str]) -> tuple[bytes, list[InkRegion]]:
     return buf.tobytes(), regions
 
 
+def run_scenarios(client: VLMClient, runs: int) -> None:
+    from collections import Counter
+
+    for key, (name, steps, expected) in SCENARIOS.items():
+        jpeg, regions = make_flowchart(steps)
+        counts: Counter[str] = Counter()
+        for i in range(runs):
+            a = client.evaluate(SCENARIO_QUERY, jpeg, CONTEXT, regions, SIZE)
+            counts[a.animation_state] += 1
+            print(f"  [{key}] run {i + 1}: {a.animation_state} ({a.target_x},{a.target_y}) {a.spoken_text!r}")
+        print(f"case {key} ({name}): expect {expected}: {dict(counts)} -> {counts[expected]}/{runs}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", type=int, default=3)
     ap.add_argument("--model", default="qwen2.5vl:3b")
     ap.add_argument("--url", default="http://localhost:11434")
     ap.add_argument("--cold", action="store_true", help="unload the model first (measures load + first answer)")
+    ap.add_argument("--scenarios", action="store_true", help="run case A (missing step) and B (complete)")
+    ap.add_argument("--runs", type=int, default=5, help="runs per scenario")
     args = ap.parse_args()
     if args.cold:
         import requests
@@ -66,6 +88,9 @@ def main() -> None:
         t0 = time.perf_counter()
         warm()
         print(f"warmup: {time.perf_counter() - t0:.1f}s")
+    if args.scenarios:
+        run_scenarios(client, args.runs)
+        return
     jpeg, regions = make_flowchart(STEPS)
     times: list[float] = []
     for i in range(args.n):

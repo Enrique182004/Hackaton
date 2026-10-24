@@ -182,3 +182,15 @@ def test_warmup_noop_for_other_backends() -> None:
         with patch.object(c.session, "post") as post:
             c.warmup()
         post.assert_not_called()
+
+
+def test_system_prompt_schema_rules_and_few_shot() -> None:
+    for key in ("spoken_text", "animation_state", "target_x", "target_y"):
+        assert key in SYSTEM_PROMPT
+    for state in ("idle", "walking", "pointing", "celebrating", "error"):
+        assert f'"{state}"' in SYSTEM_PROMPT or state in SYSTEM_PROMPT
+    assert "gap" in SYSTEM_PROMPT and "Flame-sterilize" in SYSTEM_PROMPT and "Autoclave" in SYSTEM_PROMPT
+    assert SYSTEM_PROMPT.count('"animation_state": "error"') >= 1
+    assert SYSTEM_PROMPT.count('"animation_state": "celebrating"') >= 1
+    assert SYSTEM_PROMPT.count('"animation_state": "idle"') >= 1
+    assert len(SYSTEM_PROMPT) < 3500
