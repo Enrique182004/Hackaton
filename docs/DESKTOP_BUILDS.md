@@ -5,16 +5,18 @@ Teachers should not need Python, a terminal or `pip`. CI turns the repo into:
 | Platform | File | What it is |
 | --- | --- | --- |
 | Windows 10/11 (x64) | `SAR-Whiteboard-Assistant-Setup-<version>.exe` (~450 MB) | Per-user installer (no administrator rights), Start-menu shortcut, optional desktop shortcut, uninstaller; ~1.2 GB installed |
-| macOS 12+ (Apple Silicon) | `SAR-Whiteboard-Assistant-<version>-macOS-arm64.zip` (~560 MB) | `SAR Whiteboard Assistant.app` (~1.3 GB unpacked) |
+| macOS 14 (Sonoma) or newer, Apple Silicon | `SAR-Whiteboard-Assistant-<version>-macOS-arm64.zip` (~560 MB) | `SAR Whiteboard Assistant.app` (~1.3 GB unpacked) |
 
 Both bundle Python, every package in `requirements.txt` (CPU-only PyTorch) and the
 `all-MiniLM-L6-v2` embedding model (~90 MB), so the knowledge base works offline from the first start.
 They do **not** bundle:
 
 - **Ollama and the vision model** (`qwen2.5vl:3b`, ~3 GB): installed once per computer, see below.
-- **Whisper `base`** (~140 MB): downloaded the first time someone uses the microphone, into
-  `~/.cache/whisper` (`%USERPROFILE%\.cache\whisper` on Windows). A manual CI run can bundle it instead
-  (`bundle_whisper`), for rooms with no internet.
+- **Whisper `base`** (~140 MB): downloaded in the background the first time the app starts on a
+  computer with a microphone (it warms the model up at start, so this needs internet once), into
+  `~/.cache/whisper` (`%USERPROFILE%\.cache\whisper` on Windows). Without internet that warm-up fails and
+  speech stays off until a start with internet; for rooms with no internet, use a build made with
+  `bundle_whisper` (manual CI run, below), which ships the model.
 - **Tesseract** (optional): only needed to read text from uploaded photos and scanned PDFs.
 
 Phones and tablets can't run the assistant (it needs PyTorch, Whisper and Ollama), but they can drive
@@ -24,26 +26,31 @@ it: see [Phones and tablets](#phones-and-tablets).
 
 `.github/workflows/build.yml` runs on Windows (`windows-latest`) and macOS (`macos-14`, arm64):
 
-- **Pull requests** that touch `packaging/**`, `biobench_sar/paths.py`, `scripts/build_*` or the workflow:
+- **Pull requests** that touch the build (`packaging/**`, `scripts/build_*`, the workflow), the
+  dependencies (`requirements.txt`) or what the launcher drives before the app runs
+  (`sar.env.example`, `biobench_sar/__init__.py`, `paths.py`, `app.py`, `config.py`, `envfile.py`):
   build + smoke test; the installer and zip are kept as run artifacts for 14 days
   (Actions → the run → *Artifacts*).
 - **Manual run**: Actions → *desktop builds* → *Run workflow* (tick *bundle_whisper* to ship Whisper too).
 - **Release**: bump `__version__` in `biobench_sar/__init__.py` (the only place the version lives), merge,
-  then tag and push: `git tag v0.1.0 && git push origin v0.1.0`. The workflow refuses a tag that doesn't
-  match `__version__`, builds both platforms and attaches them to a GitHub release (a tag with a `-`,
-  such as `v0.2.0-rc1`, makes a pre-release).
+  then tag and push: `git tag v0.1.0 && git push origin v0.1.0`. The workflow refuses a tag that isn't
+  exactly `v` + `__version__`, builds both platforms and attaches them to a GitHub release. Versions are
+  plain `X.Y.Z` numbers (a test enforces it, and the installer's Windows version resource takes nothing
+  else), so there are no pre-release tags such as `v0.2.0-rc1`; to try a build first, use a manual run.
 
 With warm caches a run takes about 12 minutes on Windows (PyInstaller ~4, the installer's compression
-~2.5, the install test ~1) and 7 on macOS. Every build is smoke-tested before it is uploaded: CI runs the built app with `--self-test` (see
+~2.5, the install and upgrade test ~2) and 7 on macOS. Every build is smoke-tested before it is uploaded: CI runs the built app with `--self-test` (see
 [Command line](#command-line)), which starts the real server with a mock model and checks the pages,
 Socket.IO, every lazily imported library, the bundled embedding model and Whisper's assets. Then it
 tests what teachers download, not just the build folder:
 
 - **Windows**: installs the `.exe` silently, checks it is a per-user install (uninstall entry under
-  `HKCU`, Start-menu shortcut, `sar.env.example` next to the app), runs `--self-test` on the installed
-  copy, then uninstalls it.
-- **macOS**: unpacks the `.zip`, checks the bundle id, the version and the camera / microphone usage
-  strings in `Info.plist`, verifies the code signature (`codesign --verify --deep --strict`) and runs
+  `HKCU`, Start-menu shortcut, `sar.env.example` next to the app), installs it again over itself as an
+  upgrade (old files in `_internal` must be gone, a `sar.env` next to the exe must stay), runs
+  `--self-test` on the installed copy, then uninstalls it (the `sar.env` must stay).
+- **macOS**: unpacks the `.zip`, runs `packaging/check_macos_app.py` (bundle id, version, the camera /
+  microphone usage strings in `Info.plist`, and no bundled library built for a newer macOS than
+  `LSMinimumSystemVersion`), verifies the code signature (`codesign --verify --deep --strict`) and runs
   `--self-test` on the unpacked app.
 
 ## First run (for teachers)
@@ -56,7 +63,9 @@ tests what teachers download, not just the build folder:
 3. Install Ollama from <https://ollama.com/download>, then open *Command Prompt* and run once:
    `ollama pull qwen2.5vl:3b` (~3 GB).
 4. Start **SAR Whiteboard Assistant** from the Start menu. A console window shows the addresses and any
-   error (keep it open; closing it stops the assistant), and the dashboard opens in the browser.
+   error (keep it open; closing it stops the assistant), and the dashboard opens in the browser. If it
+   can't start (a typo in `sar.env`, a busy port, a damaged install), the window stays open with the
+   reason in plain words and the path of a log file to send on; press Enter to close it.
 5. Open `http://127.0.0.1:5050/` full screen on the projector (drag the browser window to the projector
    display, press F11).
 6. If the camera or microphone stays dark: *Settings → Privacy & security → Camera* (and *Microphone*) →
@@ -66,15 +75,16 @@ tests what teachers download, not just the build folder:
 
 1. Download the zip, double-click it, and drag **SAR Whiteboard Assistant** into *Applications*
    (run it from there: a quarantined app in *Downloads* is run from a hidden read-only copy).
-2. The app is not notarized yet, so the first open is refused. macOS 15+: try to open it once, then
-   *System Settings → Privacy & Security* → **Open Anyway**. macOS 14 and older: right-click the app →
-   **Open** → **Open**. (Same effect from Terminal:
+2. The app is not notarized yet, so the first open is refused. macOS 15 and newer: try to open it once,
+   then *System Settings → Privacy & Security* → **Open Anyway**. macOS 14: right-click the app →
+   **Open** → **Open**. (Older macOS versions can't run it: macOS itself says the app needs a newer
+   version.) (Same effect from Terminal:
    `xattr -dr com.apple.quarantine "/Applications/SAR Whiteboard Assistant.app"`.)
 3. Install Ollama from <https://ollama.com/download> and run `ollama pull qwen2.5vl:3b` in Terminal (~3 GB).
 4. Open the app. Allow the **camera** and **microphone** when macOS asks. There is no window: the
-   dashboard opens in the browser and the app shows in the Dock. If something is missing (Ollama, a busy
-   port) a dialog says so; the full log is in
-   `~/Library/Application Support/SAR Whiteboard Assistant/logs/sar.log`.
+   dashboard opens in the browser and the app shows in the Dock. If something is missing (Ollama) or it
+   can't start (a typo in `sar.env`, a busy port, a damaged install), a dialog says so in plain words; the
+   full log is in `~/Library/Application Support/SAR Whiteboard Assistant/logs/sar.log`.
 5. To stop it: right-click its Dock icon → **Quit** (hold Option for **Force Quit** if it doesn't react).
    To watch the log live instead, start it from Terminal:
    `"/Applications/SAR Whiteboard Assistant.app/Contents/MacOS/SAR Whiteboard Assistant"` (Ctrl+C stops it).
@@ -114,7 +124,8 @@ selection, logs) goes to a per-user data folder, never next to the program:
 | Linux | `$XDG_DATA_HOME/sar-whiteboard-assistant` (default `~/.local/share/sar-whiteboard-assistant`) |
 
 Inside: `data/` (`calibration.json`, `chroma_db/`, `uploads/`, `tts/`, `selection.json`, `quiz_bank.json`),
-`logs/` (macOS Finder launches), `sar.env.example`, and your `sar.env` if you put one there.
+`logs/` (everything from a macOS Finder launch, and on any OS the reason a start failed),
+`sar.env.example`, and your `sar.env` if you put one there.
 `SAR_DATA_DIR` moves `data/` elsewhere (e.g. a shared drive). Deleting `data/chroma_db/` resets the
 knowledge base; the bundled seed documents come back on the next start.
 
@@ -137,7 +148,7 @@ The built app (`SAR Whiteboard Assistant.exe`, or `….app/Contents/MacOS/SAR Wh
 | --- | --- |
 | `--no-browser` | Don't open the dashboard in the default browser |
 | `--port N` | Serve on port N (default `SAR_PORT`, else 5050) |
-| `--self-test` | Start on a free port with `SAR_VLM_BACKEND=mock`, `SAR_TTS_BACKEND=none`, `SAR_LISTEN_MODE=push` and a throw-away data folder (no camera, microphone or Ollama needed); check `/api/status`, `/dashboard`, `/`, static files, the Socket.IO handshake, imports, embeddings and Whisper assets; print `SELF-TEST OK` and exit 0, or the failures and exit 1, within 120 s |
+| `--self-test` | Start on a free port with `SAR_VLM_BACKEND=mock`, `SAR_TTS_BACKEND=none`, `SAR_LISTEN_MODE=push` and a throw-away data folder (no camera, microphone or Ollama needed); check `/api/status`, `/dashboard`, `/`, static files, the Socket.IO handshake, UTF-8 mode (a build must have it on), imports, embeddings and Whisper assets; print `SELF-TEST OK` and exit 0, or the failures and exit 1, within 120 s |
 | `--version` | Print the version |
 
 `--self-test` is also the quickest way to check a teacher's install: run it from a terminal and send us
@@ -151,9 +162,18 @@ computer does the work, because the dashboard is a web page:
 
 1. In `sar.env` set `SAR_HOST=0.0.0.0` and restart the app. The console now also prints
    `On a phone or tablet (same Wi-Fi): http://<computer-ip>:5050/dashboard`.
-2. Allow the firewall prompt (Windows: *Private networks*). Put the phone on the same Wi-Fi and open
-   that address; *Add to Home Screen* gives it an app-like icon.
+2. Allow the firewall prompt (Windows: *Private networks*; macOS: **Allow**). Put the phone on the same
+   Wi-Fi and open that address; *Add to Home Screen* gives it an app-like icon.
 3. Camera, microphone and speakers stay the computer's.
+
+If the phone can't load the address:
+
+- **Windows firewall**: allowing an app through Windows Defender Firewall needs an administrator, so on
+  a standard (non-admin) school account the prompt asks for an admin password or the school's policy
+  blocks it silently. Ask IT to allow *SAR Whiteboard Assistant* on private networks (or TCP port 5050).
+- **The network**: guest and many school Wi-Fi networks isolate devices from each other ("client
+  isolation"), so the phone never reaches the computer even with the firewall open. Try a phone hotspot
+  that both join, or ask IT for a network that allows it.
 
 Only do this on a trusted classroom network: anyone who can reach that address can use the dashboard
 (the server rejects requests from other web pages, but has no login).
@@ -175,7 +195,7 @@ winget install JRSoftware.InnoSetup        # once, for the installer
 bash scripts/build_macos.sh                # --whisper, --skip-self-test, --out /tmp/sar-build
 ```
 
-Both install PyInstaller into `.venv`, run `packaging/fetch_models.py`, build `packaging/sar.spec`, run
+Both install PyInstaller (`>=6.10,<7`, as CI does) into `.venv`, run `packaging/fetch_models.py`, build `packaging/sar.spec`, run
 the self-test, then make the installer / zip in `dist/`. A local macOS arm64 build: the app is ~1.2 GB
 unpacked (PyTorch alone is ~400 MB), the PyInstaller work folder ~300 MB, and it took about 2 minutes on
 an M4 with packages already installed. Plan for ~3 GB of free disk and delete
@@ -191,10 +211,11 @@ the checkout.
 | --- | --- |
 | `biobench_sar/__init__.py` | `__version__`, the single source of the version (spec, installer, release tag) |
 | `biobench_sar/paths.py` | `is_frozen()`, `resource_dir()` (`sys._MEIPASS` in a build, the checkout otherwise), `executable_dir()`, `user_data_dir()` |
-| `packaging/launcher.py` | Entry point of the builds: loads `sar.env` files, sets `SAR_DATA_DIR`, points `SENTENCE_TRANSFORMERS_HOME` / `HF_HOME` at the bundled models with `HF_HUB_OFFLINE=1`, checks Ollama, opens the browser, then runs `biobench_sar.app.main()`; also `--self-test` |
+| `packaging/launcher.py` | Entry point of the builds: loads `sar.env` files, sets `SAR_DATA_DIR`, points `SENTENCE_TRANSFORMERS_HOME` / `HF_HOME` at the bundled models with `HF_HUB_OFFLINE=1`, checks the port and Ollama, opens the browser, then runs `biobench_sar.app.main()`; turns any startup error into a plain-language message, `logs/sar.log` and (Windows) a console that waits for Enter or (macOS) a dialog; also `--self-test` |
 | `packaging/fetch_models.py` | Downloads the embedding model (and with `--whisper` the Whisper checkpoint) into `packaging/models/` in the Hugging Face cache layout, with symlinks replaced by files; idempotent |
 | `packaging/sar.spec` | PyInstaller one-folder spec: package data, hidden imports, Info.plist for macOS |
-| `packaging/windows/installer.iss` | Inno Setup script for the Windows installer |
+| `packaging/windows/installer.iss` | Inno Setup script for the Windows installer (clears the old `_internal` on upgrade) |
+| `packaging/check_macos_app.py` | CI check of the unzipped macOS app: `Info.plist` and the newest macOS any bundled binary needs |
 | `scripts/build_windows.ps1`, `scripts/build_macos.sh` | Local builds |
 
 When you add a dependency that the app imports inside a function (as it does for parsers, TTS and

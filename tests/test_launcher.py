@@ -5,6 +5,7 @@ import http.client
 import importlib.util
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -19,6 +20,7 @@ from biobench_sar import app as app_module
 from biobench_sar import config
 
 LAUNCHER_PATH = Path(__file__).resolve().parent.parent / "packaging" / "launcher.py"
+CHECKER_PATH = LAUNCHER_PATH.parent / "check_macos_app.py"
 ENV_KEYS = (
     "SAR_DATA_DIR",
     "SAR_ENV_FILE",
@@ -37,9 +39,9 @@ ENV_KEYS = (
 )
 
 
-def _load_launcher() -> ModuleType:
+def _load(path: Path, name: str) -> ModuleType:
     # By path: a `packaging` import would find the PyPI package of that name, not this folder.
-    spec = importlib.util.spec_from_file_location("sar_launcher", LAUNCHER_PATH)
+    spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module  # dataclasses look their module up here
@@ -47,7 +49,8 @@ def _load_launcher() -> ModuleType:
     return module
 
 
-launcher = _load_launcher()
+launcher = _load(LAUNCHER_PATH, "sar_launcher")
+checker = _load(CHECKER_PATH, "sar_check_macos_app")
 REAL_PORT_FREE = launcher.port_free
 
 
@@ -426,6 +429,18 @@ def test_spec_turns_on_utf8_mode_with_the_option_the_bootloader_knows() -> None:
     assert '("X utf8", None, "OPTION")' in spec and '("X utf8_mode' not in spec
 
 
+def test_macos_minimum_matches_the_build_runner_and_the_docs() -> None:
+    # pip picks wheels built for the runner's macOS, so the app needs at least that version.
+    root = LAUNCHER_PATH.parent.parent
+    spec = (LAUNCHER_PATH.parent / "sar.spec").read_text(encoding="utf-8")
+    workflow = (root / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
+    docs = (root / "docs" / "DESKTOP_BUILDS.md").read_text(encoding="utf-8")
+    runner = re.search(r"os: macos-(\d+)", workflow)
+    minimum = re.search(r'"LSMinimumSystemVersion": "(\d+)\.0"', spec)
+    assert runner and minimum and minimum.group(1) == runner.group(1)
+    assert f"| macOS {minimum.group(1)} (" in docs and "macOS 12" not in docs
+
+
 def test_torch_on_cpu_hides_mps_only_inside_the_block() -> None:
     torch = pytest.importorskip("torch")
     before = torch.backends.mps.is_available()
@@ -774,3 +789,105 @@ def test_piped_output_is_switched_to_utf8_but_consoles_are_left_alone(monkeypatc
     launcher._utf8_output()
     assert pipe.reconfigured == {"encoding": "utf-8", "errors": "replace"}
     assert console.reconfigured == {}
+
+
+# ---- macOS app check (packaging/check_macos_app.py) ------------------------------------------------------
+
+OTOOL_SAMPLE = """\
+/App/Contents/Frameworks/torch/lib/libtorch_cpu.dylib:
+Load command 0
+      cmd LC_SEGMENT_64
+  cmdsize 72
+Load command 9
+      cmd LC_BUILD_VERSION
+  cmdsize 32
+ platform 1
+    minos 14.0
+      sdk 14.5
+Load command 10
+      cmd LC_SOURCE_VERSION
+  cmdsize 16
+  version 99.0
+/App/Contents/Frameworks/old.so (architecture x86_64):
+Load command 4
+      cmd LC_VERSION_MIN_MACOSX
+  cmdsize 16
+  version 10.9
+      sdk 10.14
+/App/Contents/Frameworks/old.so (architecture arm64):
+Load command 4
+      cmd LC_BUILD_VERSION
+  cmdsize 32
+    minos 11.0
+"""
+
+
+def test_otool_parsing_takes_each_binarys_newest_slice_and_ignores_other_versions() -> None:
+    assert checker.parse_minimum_os(OTOOL_SAMPLE) == {
+        "/App/Contents/Frameworks/torch/lib/libtorch_cpu.dylib": (14, 0),
+        "/App/Contents/Frameworks/old.so": (11, 0),
+    }
+
+
+def _fake_app(tmp_path: Path, **plist: Any) -> Path:
+    import plistlib
+
+    app = tmp_path / "SAR Whiteboard Assistant.app"
+    (app / "Contents" / "Frameworks").mkdir(parents=True)
+    info = {
+        "CFBundleIdentifier": checker.BUNDLE_ID,
+        "CFBundleShortVersionString": "0.1.0",
+        "LSMinimumSystemVersion": "14.0",
+        "NSCameraUsageDescription": "Watches the whiteboard.",
+        "NSMicrophoneUsageDescription": "Listens for questions.",
+    }
+    info.update(plist)
+    (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps({k: v for k, v in info.items() if v is not None}))
+    (app / "Contents" / "Frameworks" / "torch.so").write_bytes(bytes.fromhex("cffaedfe") + b"\0" * 28)
+    (app / "Contents" / "Frameworks" / "notes.txt").write_text("not a binary")
+    return app
+
+
+def _otool_needing(version: str) -> Any:
+    def otool(paths: Any) -> str:
+        assert [p.name for p in paths] == ["torch.so"], "only Mach-O files go to otool"
+        return f"{paths[0]}:\n      cmd LC_BUILD_VERSION\n    minos {version}\n"
+
+    return otool
+
+
+def test_macos_check_passes_a_good_app(tmp_path: Path) -> None:
+    errors, report = checker.check_app(_fake_app(tmp_path), "0.1.0", otool=_otool_needing("14.0"))
+    assert errors == []
+    assert "NSCameraUsageDescription: Watches the whiteboard." in report
+    assert report[-1] == "LSMinimumSystemVersion 14.0; 1 binaries need at most macOS 14.0"
+
+
+@pytest.mark.parametrize("key", ["NSCameraUsageDescription", "NSMicrophoneUsageDescription"])
+def test_macos_check_fails_without_a_usage_string(key: str, tmp_path: Path) -> None:
+    errors, _ = checker.check_app(_fake_app(tmp_path, **{key: None}), "0.1.0", otool=_otool_needing("14.0"))
+    assert errors == [f"{key} is missing or empty in Info.plist: macOS would refuse access without asking"]
+
+
+def test_macos_check_fails_when_a_binary_needs_a_newer_macos(tmp_path: Path) -> None:
+    # The original bug: Info.plist said 12.0 while the bundled wheels were built for macOS 14.
+    errors, _ = checker.check_app(
+        _fake_app(tmp_path, LSMinimumSystemVersion="12.0"), "0.1.0", otool=_otool_needing("14.0")
+    )
+    assert len(errors) == 1 and "need a newer macOS: torch.so (14.0)" in errors[0]
+
+
+def test_macos_check_fails_on_a_wrong_version_or_bundle_id(tmp_path: Path) -> None:
+    app = _fake_app(tmp_path, CFBundleIdentifier="org.example")
+    errors, _ = checker.check_app(app, "0.2.0", otool=_otool_needing("14.0"))
+    assert any("bundle id" in e for e in errors) and any("expected '0.2.0'" in e for e in errors)
+
+
+def test_macos_check_main_prints_github_errors_and_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(checker, "run_otool", _otool_needing("14.0"))
+    app = _fake_app(tmp_path, NSMicrophoneUsageDescription="  ")
+    assert checker.main([str(app), "--version", "0.1.0"]) == 1
+    assert "::error::NSMicrophoneUsageDescription is missing or empty" in capsys.readouterr().out
+    assert checker.main([str(_fake_app(tmp_path / "good")), "--version", "0.1.0"]) == 0

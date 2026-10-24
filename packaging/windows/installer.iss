@@ -53,6 +53,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Dirs]
 Name: "{localappdata}\{#AppName}"
 
+[InstallDelete]
+; An upgrade copies the new build over the old one: clear the old bundle first, or files the new version no
+; longer ships stay behind (a second *.dist-info of an upgraded package confuses importlib.metadata). The
+; data folder and a sar.env next to the exe are outside _internal and stay.
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
 Source: "{#DistDir}\{#AppName}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Template for room settings: copy it to sar.env (next to the exe, or in the data folder) and edit.

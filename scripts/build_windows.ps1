@@ -16,7 +16,7 @@ function Invoke-Step([string]$Name, [scriptblock]$Command) {
 $python = ".\.venv\Scripts\python.exe"
 if (-not (Test-Path $python)) { throw "No .venv here. Run .\scripts\setup_windows.ps1 first." }
 
-Invoke-Step "Install PyInstaller" { & $python -m pip install --upgrade "pyinstaller>=6.10" }
+Invoke-Step "Install PyInstaller" { & $python -m pip install --upgrade "pyinstaller>=6.10,<7" }
 $version = (& $python -c "import biobench_sar; print(biobench_sar.__version__)").Trim()
 Write-Host "Version $version"
 
