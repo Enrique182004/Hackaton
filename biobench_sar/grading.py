@@ -599,8 +599,9 @@ _LABEL = re.compile(
 )
 # A letter set to something: the letter is not a term of an expression ("3x = 15", "x + 4 = 10" are no answers).
 _ASSIGNED = re.compile(r"(?<![\w.])([a-z])\s*=\s*")
-# The letter alone on the right of the only "=": "3 = x" (from "7 - 2x = 1": "6 = 2x", then "3 = x").
-_ASSIGNED_RIGHT = re.compile(r"=\s*([a-z])\s*$")
+# The letter alone on the right of the only "=": "3 = x" (from "7 - 2x = 1": "6 = 2x", then "3 = x"), also with a
+# mark after it ("3 = x ✓", "3 = x <-", "3 = x answer"); not "3 = x + 1", "3 = xy", "3 = x 2".
+_ASSIGNED_RIGHT = re.compile(r"=\s*([a-z])(?![a-z])(?=\s*$|\s+(?![\d.(+\-*/÷^√±]|[a-z](?![a-z]))[^\d=]*$)")
 _TERM_END = re.compile(r"[\d)^*/÷+\-]\s*$")
 # A single letter right after a value makes it an expression ("x = 2y + 1", "x = 5x"); "y luego" is a word.
 _VARIABLE_NEXT = re.compile(r"\s*[a-z]\s*(?:[=+\-*/^(]|\d|$)")
@@ -617,8 +618,11 @@ _EXPLANATION = re.compile(
 )
 # Brackets that open on a word hold a check or a note: "x = 5 (check: 3(5) + 5 = 20)", "x = 6 (subtract nine)".
 _ASIDE = re.compile(r"[(\[]\s*(?!sqrt\b)(?=[a-z]{2,})")
-# "x = 5 x = -3", "x = 7 y = 3": answers next to each other with only a space between them.
-_GAP = re.compile(r"(=[^=;,\n]*?[\d)])\s+(?=[a-z]\s*=)")
+# "x = 5 x = -3", "x = 7 y = 3": answers next to each other with only a space between them; "3 = x 7 - 2(3) = 1": an
+# answer and its check.
+_GAP = re.compile(r"(=[^=;,\n]*?[\d)])\s+(?=[a-z]\s*=)|(=\s*[a-z])\s+(?=[\d√][^=;,\n]*=)")
+# Subscripts of a root: "x₁ = 3, x₂ = 4" (and "x_1") are two values of x.
+_SUBSCRIPT = re.compile(r"(?<=[A-Za-z])(?:[₀-₉]+|_\d+)")
 
 
 def _value_run(text: str) -> tuple[str, str]:
@@ -627,6 +631,13 @@ def _value_run(text: str) -> tuple[str, str]:
     if not found:
         return "", text
     return found.group(), text[found.end() :]
+
+
+def _letter_next(run: str, after: str) -> bool:
+    """Whether a letter after a value run makes it a term: "2y + 1", "5x", and a letter touching it whatever follows
+    ("6 = 2x ✓", "x = 2y ok"). "5 y luego" (a word after a space) and "5cm" (a unit) are no term."""
+    touching = after[:1].isalpha() and not after[1:2].isalpha() and not run[-1:].isspace()
+    return touching or bool(_VARIABLE_NEXT.match(after))
 
 
 def _result_run(side: str) -> tuple[str, str]:
@@ -654,8 +665,9 @@ def _without_asides(text: str) -> str:
 def _answer_text(text: Any) -> str:
     """`text` as plain math with what is no answer cut off: checks and reasons ("x = 5 (check: ...)", "because ...",
     ": subtract 9 ..."), and a clause break between answers on their own lines or side by side ("x = 5 x = -3")."""
+    text = _SUBSCRIPT.sub("", text) if isinstance(text, str) else text
     math_text = _EXPLANATION.sub(" ; ", _without_asides(to_math(text)))
-    return _GAP.sub(r"\1 ; ", math_text)
+    return _GAP.sub(lambda found: f"{found.group(1) or found.group(2)} ; ", math_text)
 
 
 def _assignment(clause: str) -> tuple[str, list[Value]] | None:
@@ -667,7 +679,7 @@ def _assignment(clause: str) -> tuple[str, list[Value]] | None:
         run, after = _value_run(clause[found.end() :].strip())
         while after.startswith("="):  # "x = 15/3 = 5": the last value of the chain, never one after words
             run, after = _value_run(after[1:].strip())
-        if not run.strip() or _VARIABLE_NEXT.match(after):
+        if not run.strip() or _letter_next(run, after):
             return None  # "x = 2y", "x = 5x": not a value
         values = _values(run)
         return (found.group(1), values) if values else None
@@ -679,7 +691,7 @@ def _right_assignment(clause: str) -> tuple[str, list[Value]] | None:
     found = _ASSIGNED_RIGHT.search(clause)
     if found is None or clause.count("=") != 1:
         return None
-    run, after = _value_run(_LEADING_WORDS.sub("", clause[: found.start()]).strip())
+    run, after = _result_run(_LEADING_WORDS.sub("", clause[: found.start()]))
     values = _values(run) if run.strip() and not after.strip() else None
     return (found.group(1), values) if values else None
 
@@ -720,7 +732,7 @@ def _worked_value(clause: str) -> list[Value] | None:
     if not steps or any(_expression(s.strip()) is None for s in steps):
         return None
     run, after = _result_run(last)
-    if _VARIABLE_NEXT.match(after):
+    if _letter_next(run, after):
         return None  # the letter on the right: "6 = 2x" is a step, "3 = x" an answer (_right_assignment)
     if not run.strip() or _unworked(run):
         return []
@@ -771,7 +783,7 @@ def _is_check(clause: str, problem: _Kind, expected: Answers | None = None) -> b
         return False
     *steps, last = _LEADING_WORDS.sub("", clause).split("=")
     run, after = _result_run(last)  # what the line comes to, the same value _worked_value reads: "20" of "20 ✓"
-    if not steps or not run.strip() or _VARIABLE_NEXT.match(after):
+    if not steps or not run.strip() or _letter_next(run, after):
         return False  # "3 = x", "6 = 2x": the letter on the right
     sides = [_expression(side.strip()) for side in (*steps, run)]
     if any(side is None for side in sides):
@@ -831,7 +843,7 @@ def parse_answers(text: Any, problem: Any = None, expected: Answers | None = Non
             worked = value or worked
             continue
         run, after = _value_run(_LEADING_WORDS.sub("", clause))
-        if run.strip() and not _VARIABLE_NEXT.match(after) and not _unworked(run):
+        if run.strip() and not _letter_next(run, after) and not _unworked(run):
             values = _values(run)
             if values:
                 answers |= {(letter, v) for v in values}
@@ -860,7 +872,7 @@ def unfinished(text: Any) -> bool:
                 return True
             continue
         run, after = _value_run(_LEADING_WORDS.sub("", clause))
-        if run.strip() and not _VARIABLE_NEXT.match(after) and _unworked(run):
+        if run.strip() and not _letter_next(run, after) and _unworked(run):
             return True
     return False
 
@@ -1144,7 +1156,7 @@ def _stated(sentence: str, solutions: Answers, language: str | None) -> bool:
 
     def says(found: re.Match[str], wanted: list[Value]) -> bool:
         run, after = _value_run(text[found.end() :])
-        if not run.strip() or _VARIABLE_NEXT.match(after):
+        if not run.strip() or _letter_next(run, after):
             return False
         values = _values(run)
         return bool(values) and any(_close(v, w) for v in values for w in wanted)

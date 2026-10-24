@@ -542,6 +542,26 @@ def test_a_finished_answer_with_the_letter_on_the_right_grades_like_x_equals(
     assert not grading.unfinished(text), "a finished answer is never 'not worked out yet'"
 
 
+@pytest.mark.parametrize("tail", [" ✓", " ✔", " ok", " :)", " □", " ∎", " <-", " answer", " final", " ✅", " sí"])
+def test_the_letter_on_the_right_with_a_mark_after_it_grades_like_x_equals(tail: str) -> None:
+    for text, value in (("3 = x", 3), ("-3 = x", -3), ("6 = 2x\n3 = x", 3), ("15/3 = x", 5)):
+        assert _plain(parse_answers(text + tail)) == {("x", value)}, text + tail
+    for step in ("3 = x + 1", "3 = xy", "3 = x 2", "3 = x^2", "3 = x(2)", "3 = x - 1", "3 = 2x", "x = 2y"):
+        assert parse_answers(step + tail) == frozenset(), step + tail
+    assert _plain(parse_answers("x = 5cm" + tail)) == {("x", 5)}, "a unit touching the value is no letter"
+
+
+def test_an_answer_with_the_letter_on_the_right_and_its_check_side_by_side() -> None:
+    assert _plain(parse_answers("3 = x 7 - 2(3) = 1", "7 - 2x = 1")) == {("x", 3)}
+    assert _plain(parse_answers("3 = x ; 7 - 2(3) = 1", "7 - 2x = 1")) == {("x", 3)}
+
+
+def test_subscripted_roots_are_values_of_their_letter() -> None:
+    assert grade("x₁ = 3, x₂ = 4", "x = 3 or x = 4") is True
+    assert grade("x_1 = 3 ; x_2 = 4", "x = 3 or x = 4") is True
+    assert grade("x₁ = 3, x₂ = 5", "x = 3 or x = 4") is False
+
+
 def test_a_step_with_the_letter_on_the_right_is_still_no_answer() -> None:
     for step in ("6 = 2x", "2 = 2x", "x + 3 = x", "20 = 3x + 5"):
         assert parse_answers(step) == frozenset(), step

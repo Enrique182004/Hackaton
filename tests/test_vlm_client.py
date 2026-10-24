@@ -999,6 +999,17 @@ def test_quiz_check_of_an_answer_with_the_letter_on_the_right_is_graded(problem:
         assert action.spoken_text != vc.TEXTS[language]["unfinished"]
 
 
+@pytest.mark.parametrize("tail", [" ✓", " ✔", " ok", " :)", " □", " ∎", " <-", " answer", " final"])
+def test_quiz_check_of_the_letter_on_the_right_with_a_mark_after_it_is_graded(tail: str) -> None:
+    task = {**QUIZ_CHECK, "problem": "7 - 2x = 1", "answer": "x = 3"}
+    for language in ("en", "es"):
+        for read, verdict in (("3 = x", "correct"), ("4 = x", "wrong"), ("3 = x 7 - 2(3) = 1", "correct")):
+            action = vc.check_quiz_answer(PRAISE, task, read + tail, language=language)
+            assert action.verdict == verdict, (read + tail, language)  # type: ignore[attr-defined]
+    roots = {**QUIZ_CHECK, "problem": "x^2 - 7x + 12 = 0", "answer": "x = 3 or x = 4"}
+    assert vc.check_quiz_answer(PRAISE, roots, "x₁ = 3, x₂ = 4").verdict == "correct"  # type: ignore[attr-defined]
+
+
 def test_quiz_check_of_a_step_with_the_letter_on_the_right_is_no_answer_yet() -> None:
     task = {**QUIZ_CHECK, "problem": "7 - 2x = 1", "answer": "x = 3"}
     for language in ("en", "es"):
