@@ -9,3 +9,7 @@ coverage/
 .DS_Store
 *.log
 .claude/settings.local.json
+.venv/
+__pycache__/
+*.pyc
+chroma_db/

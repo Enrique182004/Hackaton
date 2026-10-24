@@ -1,22 +1,44 @@
-# CLAUDE.md — hackathon project (copy into each repo, fill the Stack)
+# CLAUDE.md — SAR Whiteboard Assistant (hackathon)
+
+## Project focus (read first)
+This repo builds ONE thing: the **SAR Whiteboard Assistant** — webcam + projector + whiteboard,
+with an animated 2D AI avatar that sees marker drawings and reacts (Sense → Think → Act),
+grounded by a local RAG knowledge base.
+
+**The full spec is [docs/sar_whiteboard_assistant_prompt.md](docs/sar_whiteboard_assistant_prompt.md).
+Read it before any work — it is the source of truth** for directory layout (`/biobench_sar`),
+stack, homography calibration, RAG ingestion, the VLM JSON schema, the frontend and the
+Environmental Biology (*Acanthamoeba* / Laguna de Bustillos) scenario. Where this file and the
+spec conflict on the project itself, the spec wins.
+
+Non-negotiables from the spec:
+- **No monoliths** — build one module at a time (e.g. `core/vision_loop.py`); wait for the user to name it.
+- **Concurrency first** — camera loop stays at 30+ FPS no matter what the LLM is doing.
+- **Setup commands first** — give Windows PowerShell install commands (pip + system binaries like Tesseract) before Python code.
+- **Defensive JSON parsing** — `try/except` around VLM output; strip markdown fences before `json.loads`.
+- VLM output schema: `{spoken_text, animation_state: idle|walking|pointing|celebrating|error, target_x, target_y}`.
 
 ## Stack
-- Frontend: <React/Next.js? fill in>
-- Backend: <Node/Express/Next API? fill in>
-- DB: <Postgres/Prisma/Supabase? fill in>
-- Tests: <Vitest? fill in>
+- Backend: Python 3.10+, Flask, Flask-SocketIO
+- Vision: opencv-python, numpy (`cv2.findHomography` / `cv2.warpPerspective`)
+- Audio/TTS: SpeechRecognition, pyaudio, openai-whisper (local), edge-tts / pyttsx3
+- RAG: chromadb (persistent, local), sentence-transformers `all-MiniLM-L6-v2`
+- Parsers: PyMuPDF, pandas, python-docx, python-pptx, pytesseract
+- Frontend: vanilla HTML/CSS/JS, pure `#000000` background
+- Tests: pytest
 
 ## Commands
 ```bash
-npm run dev
-npm run build
-npm run test
-npm run lint
+python -m venv .venv
+pip install -r requirements.txt
+python app.py
+pytest
 ```
 
 ## Code rules
 - Be terse. No preamble, no summaries unless asked. Output code only.
-- TypeScript always, never `any`. Named exports. Components < 150 lines.
+- Python: type hints on public functions, small modules matching the spec's layout.
+- No blocking calls on the camera/WebSocket threads.
 - Show only changed sections + minimal context when editing.
 
 ## Token economy (hackathon — maximize the budget)
