@@ -188,7 +188,7 @@ jobs:
           [[ "$bundle_id" == org.codecore.sarwhiteboard ]] || { echo "::error::bundle id is $bundle_id"; exit 1; }
           [[ "$version" == "$VERSION" ]] || { echo "::error::app version is $version, expected $VERSION"; exit 1; }
           # A broken seal makes macOS call the downloaded app "damaged" instead of offering Open.
-          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --verify --deep --strict --verbose=1 "$app"
           "$app/Contents/MacOS/SAR Whiteboard Assistant" --self-test --no-browser
           rm -rf "$check"
 
