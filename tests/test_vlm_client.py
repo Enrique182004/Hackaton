@@ -2315,6 +2315,29 @@ def test_help_reply_stating_the_solution_another_way_is_asked_again(leak: str, l
     assert action.spoken_text == step, "what still states it is cut"
 
 
+@pytest.mark.parametrize(
+    ("board", "leak", "language"),
+    [
+        ("1/2 + 1/3 = 2/5", "Five sixths is the answer.", "en"),
+        ("1/2 + 1/3", "It is actually five-sixths.", "en"),
+        ("2x + 3 = 11", "So it is four.", "en"),
+        ("2x + 3 = 11 → x = 5", "So it is four.", "en"),
+        ("12 ÷ 4", "It's three.", "en"),
+        ("1/2 + 1/3", "Te debe dar cinco sextos.", "es"),
+        ("1/2 + 1/3 = 2/5", "Tres sextos más dos sextos son cinco sextos.", "es"),
+        ("2x + 3 = 11 → x = 5", "Eso es cuatro.", "es"),
+    ],
+)
+def test_help_reply_saying_what_it_comes_to_is_asked_again_and_cut(board: str, leak: str, language: str) -> None:
+    c = _math_client()
+    step = "Look at each step again." if language == "en" else "Revisa cada paso otra vez."
+    reply = {**MATH_GOOD, "board_problem": board, "spoken_text": f"{step} {leak}"}
+    with _posts(c, reply, reply) as post:
+        action = c.evaluate("Is this right?", JPEG, [], REGIONS, SIZE, language=language)
+    assert post.call_count == 2, "asked again"
+    assert action.spoken_text == step, "what still states it is cut"
+
+
 def test_quiz_hint_stating_the_solution_is_asked_again() -> None:
     c = _math_client()
     assert not vc.reveals_value("Divide and you get x = 5.")

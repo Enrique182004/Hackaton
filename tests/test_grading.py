@@ -347,6 +347,58 @@ def test_states_solution_said_another_way_in_spanish(text: str, states: bool) ->
     assert states_solution(text, SOLVED, "es") is states
 
 
+@pytest.mark.parametrize(
+    ("text", "problem", "language"),
+    [
+        ("Five sixths is the answer.", "1/2 + 1/3", "en"),
+        ("It is actually five-sixths.", "1/2 + 1/3", "en"),
+        ("So it is four.", "2x + 3 = 11", "en"),
+        ("It's three.", "12 ÷ 4", "en"),
+        ("The answer is twenty-five.", "x - 5 = 20", "en"),
+        ("Four is the answer.", "2x + 3 = 11", "en"),
+        ("Te debe dar cinco sextos.", "1/2 + 1/3", "es"),
+        ("Debería dar 5/6.", "1/2 + 1/3", "es"),
+        ("Tres sextos más dos sextos son cinco sextos.", "1/2 + 1/3", "es"),
+        ("Son cinco sextos.", "1/2 + 1/3", "es"),
+        ("Eso es cuatro.", "2x + 3 = 11", "es"),
+        ("Es cuatro.", "2x + 3 = 11", "es"),
+    ],
+)
+def test_states_solution_said_as_what_it_comes_to(text: str, problem: str, language: str) -> None:
+    # These leaked on tutor-core and in round one: the value before "is the answer", a pronoun's value, "debe dar".
+    assert states_solution(text, solve_text(problem), language), text
+
+
+@pytest.mark.parametrize(
+    ("text", "language"),
+    [
+        ("It is a good idea to subtract 3 first.", "en"),
+        ("It is 11 on the right side.", "en"),
+        ("So it is 2x = 8 now.", "en"),
+        ("It's 4 times x.", "en"),
+        ("Is it four? Check it.", "en"),
+        ("4x is the answer we want to undo.", "en"),
+        ("What do you get when you divide eight by two?", "en"),
+        ("Son dos pasos.", "es"),
+        ("Debe quedar la x sola.", "es"),
+        ("Te debe dar la x sola.", "es"),
+    ],
+)
+def test_a_hint_that_only_ends_near_the_solution_is_not_flagged(text: str, language: str) -> None:
+    for problem in ("2x + 3 = 11", "x + 2 = 4"):
+        assert not states_solution(text, solve_text(problem), language), (text, problem)
+
+
+def test_hyphenated_number_words_are_one_number() -> None:
+    assert to_math("twenty-five") == "25" and to_math("five-sixths") == "5/6" and to_math("one-half") == "1/2"
+    assert to_math("x-y") == "x-y" and to_math("well-known") == "well-known"
+
+
+def test_board_solution_of_a_board_with_an_arrow() -> None:
+    for board in ("2x + 3 = 11 → x = 5", "2x + 3 = 11 -> x = 5", "2x + 3 = 11 => x = 4", "2x + 3 = 11 ⇒ 2x = 8"):
+        assert grading.board_solution(board) == solve_text("2x + 3 = 11"), board
+
+
 def test_states_the_roots_said_together() -> None:
     roots = solve_text("x^2 - 2x - 15 = 0")
     assert states_solution("The roots are 5 and -3.", roots)

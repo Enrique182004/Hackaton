@@ -294,6 +294,8 @@ class _Words:
 
 def _words_to_math(text: str, language: str) -> str:
     words_of = _Words(language)
+    if language == "en":  # "twenty-five", "five-sixths": one number, not 20 - 5
+        text = _HYPHENATED.sub(lambda m: f"{m[1]} {m[2]}" if _number_word(m[1], m[2], words_of) else m[0], text)
     for pattern, replacement in _PHRASES[language]:
         text = re.sub(pattern, replacement, text)
     tokens = _WORD_TOKEN.findall(text)
@@ -334,6 +336,15 @@ def _words_to_math(text: str, language: str) -> str:
         out.append(piece if i > start else word)
         out.append(_space_after(tokens, at, i - 1))
     return "".join(out)
+
+
+_HYPHENATED = re.compile(r"\b([a-z]+)-([a-z]+)\b")
+
+
+def _number_word(first: str, second: str, words_of: _Words) -> bool:
+    """Whether "first-second" is one number written with a hyphen: "twenty-five", "five-sixths", "one-half"."""
+    starts = first in words_of.small or first in words_of.tens or first == "a"
+    return starts and (second in words_of.small or second in words_of.fractions)
 
 
 def _space_after(tokens: list[str], at: list[int], i: int) -> str:
@@ -998,7 +1009,7 @@ _INSTRUCTION = re.compile(
     r"^\s*(?:solve|simplify|evaluate|compute|calculate|work\s+out|find|what\s+is|resuelve|calcula|simplifica|"
     r"encuentra|halla|cuanto\s+es)\b(?:\s+(?:for|para)\s+[a-z]\b)?\s*[:,]?\s*"
 )
-_EQUATIONS = re.compile(r"\s*(?:,(?!\d)|;|\n|&|\band\b|(?<=[\w)])\s+y\s+(?=[\w(√-]))\s*")
+_EQUATIONS = re.compile(r"\s*(?:,(?!\d)|;|\n|&|→|\band\b|(?<=[\w)])\s+y\s+(?=[\w(√-]))\s*")
 # Around the math of a worded problem: its sentences ("2x - 7 = 9. Find x."), what comes before the math
 # ("despeja x:", "halla x en", "la ecuacion") and words after it ("3x + 5 = 20 para x").
 _SENTENCE_BREAK = re.compile(r"[.?!](?:\s+|$)|:")
@@ -1144,10 +1155,21 @@ _RESULT_WORDS = {
     ),
     "es": re.compile(
         r"\b(?:obtienes|obtenemos|obtiene|obtendras|sale|salen|da|dan|queda|quedan|resulta(?:\s+ser)?|"
-        r"tiene\s+que\s+ser|tendria\s+que\s+ser)\b"
+        r"tiene\s+que\s+ser|tendria\s+que\s+ser|"
+        r"(?:debe(?:ria)?s?|tiene\s+que|tendria\s+que|va\s+a)\s+(?:dar|salir|quedar)(?:te|nos)?)\b"
     ),
 }
 # "That makes x five", "eso hace que x sea cinco": the letter's value.
+# "Five sixths is the answer": the value before it.
+_IS_THE_ANSWER = re.compile(
+    r"=\s*(?:(?:the|your|my|our|final|correct|right|real|la|el|tu|mi)\s+)*"
+    r"(?:answers?|solutions?|results?|respuestas?|solucion(?:es)?|resultados?)\b"
+)
+# What a sentence ends on: "so it is four", "it's actually five-sixths", "eso es cuatro", and "es cuatro" alone.
+_ENDS_ON = re.compile(
+    r"(?:\b(?:it|that|this|eso|esto)\s*(?:=|'s\b)|^\s*(?:(?:so|then|and|entonces|pues|asi\s+que)\s+)?(?:=|son\b))\s*"
+    r"(?:(?:actually|really|just|exactly|still|then|now|realmente|entonces|ahora|solo)\s+)?"
+)
 _MAKES_LETTER = re.compile(r"\b(?:makes?|hace\s+que)\s+([a-z])\s+(?:sea\s+|valga\s+)?(?=[-\d(√.])")
 _LEFT_MATH = re.compile(r"[\d\s.+\-*/÷^()√]*$")
 
@@ -1169,8 +1191,9 @@ def _worked_left(before: str) -> bool:
 
 def _stated(sentence: str, solutions: Answers, language: str | None) -> bool:
     math_text = to_math(sentence, language)
-    if language != "en":  # "cinco y menos tres" is two values, not 5y - 3
+    if language != "en":  # "cinco y menos tres" is two values, not 5y - 3; "tres sextos mas dos sextos son ..." is "="
         math_text = re.sub(r"(?<=\d)\s+y\s+(?=[-\d])", " ; ", math_text)
+        math_text = re.sub(r"(?<=[\d)])\s+son\b", " =", math_text)
     marked = _results(math_text, language)
     text = marked.replace("⇒", "=")  # same length: a match in one is at the same place in the other
     by_letter: dict[str, list[Value]] = {}
@@ -1180,12 +1203,23 @@ def _stated(sentence: str, solutions: Answers, language: str | None) -> bool:
     # An answer written without its letter ("8", "(7, 3)") is any letter's value: "x = 8" gives it away too.
     named = any(letter and not letter.startswith("#") for letter in by_letter)
 
-    def says(found: re.Match[str], wanted: list[Value]) -> bool:
+    def says(found: re.Match[str], wanted: list[Value], *, last: bool = False) -> bool:
         run, after = _value_run(text[found.end() :])
-        if not run.strip() or _letter_next(run, after):
-            return False
+        if not run.strip() or _letter_next(run, after) or (re.search(r"[-+*/÷^(]\s*$", run) and after[:1].isalpha()):
+            return False  # "2 times x": a term
+        if last and after.strip(" .,;:!?"):
+            return False  # "it is 11 on the right": not what it comes to
         values = _values(run)
         return bool(values) and any(_close(v, w) for v in values for w in wanted)
+
+    for found in _IS_THE_ANSWER.finditer(text):
+        before = text[: found.start()]
+        run = _LEFT_MATH.search(before).group()  # type: ignore[union-attr]  # "*$" always matches
+        values = _values(run) if run.strip() and not re.search(r"(?<![a-z])[a-z]\s*$", before[: -len(run)]) else None
+        if values and any(_close(v, w) for v in values for w in every):
+            return True
+    if any(says(found, every, last=True) for found in _ENDS_ON.finditer(text)):
+        return True
 
     for found in _ASSIGNED.finditer(text):
         letter = found.group(1)
