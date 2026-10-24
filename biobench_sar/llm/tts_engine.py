@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import queue
 import re
 import subprocess
@@ -22,6 +23,11 @@ MAX_FILES = 50
 EDGE_TIMEOUT_S = 8.0
 EDGE_RETRY_AFTER_S = 60.0
 SAY_LIST_TIMEOUT_S = 5.0
+# Voice speed (accessibility): 1.0 is each voice's own pace; set_rate clamps to this range.
+MIN_RATE = 0.5
+MAX_RATE = 2.0
+# macOS `say` speaks about 175 words per minute unless told otherwise; its `-r` takes an absolute rate.
+SAY_BASE_WPM = 175
 ORDER = ["edge", "say", "pyttsx3", "none"]
 LANGUAGES = ("en", "es")
 EDGE_VOICES = {"en": "en-US-AriaNeural", "es": "es-MX-DaliaNeural"}
@@ -63,6 +69,11 @@ _NOVELTY = {
 }
 # Edge failures that mean "no network" rather than "bad voice": every voice cools down.
 _ALL_VOICES = "*"
+
+
+def edge_rate(factor: float) -> str:
+    """edge-tts `rate` for a speed factor: a signed percentage, e.g. 0.75 -> "-25%", 1.25 -> "+25%"."""
+    return f"{round((factor - 1) * 100):+d}%"
 
 
 def parse_say_voices(output: str) -> list[tuple[str, str]]:
@@ -190,18 +201,25 @@ class TTSEngine:
         self.out_dir = Path(out_dir) if out_dir is not None else Settings().tts_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self._proc: subprocess.Popen | None = None
-        self._q: queue.Queue[tuple[str, str] | None] | None = None
+        self._q: queue.Queue[tuple[str, str, float] | None] | None = None
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._edge_failed_at: dict[str, float] = {}
         self._say_voices: list[tuple[str, str]] | None = None
         self._say_picks: dict[str, str | None] = {}
         self._say_voices_lock = threading.Lock()
+        # Voice speed factor (set_rate); at 1.0 no backend gets anything extra.
+        self._rate = 1.0
 
     @property
     def default_language(self) -> str:
         """The language of a speak() call that names none: the legacy voice's, else English."""
         return self._voice_lang if self._voice_lang in LANGUAGES else "en"
+
+    def set_rate(self, factor: float) -> None:
+        """Voice speed for every later speak(): 0.75 slower, 1.25 faster, clamped to MIN_RATE..MAX_RATE."""
+        rate = float(factor)
+        self._rate = min(MAX_RATE, max(MIN_RATE, rate)) if math.isfinite(rate) else 1.0
 
     def speak(self, text: str, lang: str | None = None) -> str | None:
         """Say `text` in `lang` ("en"/"es"/a locale); "auto" or an unknown code guesses it from the text.
@@ -276,9 +294,15 @@ class TTSEngine:
 
         name = f"{uuid.uuid4().hex}.mp3"
         path = self.out_dir / name
+        rate = self._rate
         # Offline venues: fail fast so the say/pyttsx3 fallback speaks instead of hanging the pipeline.
         try:
-            asyncio.run(asyncio.wait_for(edge_tts.Communicate(text, voice).save(str(path)), EDGE_TIMEOUT_S))
+            # Inside the try: Communicate validates the voice and the rate as it is built.
+            if rate == 1.0:
+                comm = edge_tts.Communicate(text, voice)
+            else:
+                comm = edge_tts.Communicate(text, voice, rate=edge_rate(rate))
+            asyncio.run(asyncio.wait_for(comm.save(str(path)), EDGE_TIMEOUT_S))
         except BaseException as exc:
             # A bad voice override must not silence edge for the other language.
             self._edge_failed_at[_ALL_VOICES if _is_network_error(exc) else voice] = time.monotonic()
@@ -297,7 +321,11 @@ class TTSEngine:
 
     def _say(self, text: str, lang: str = "en") -> bool:
         voice = self.say_voice(lang)
-        args = ["say", "-v", voice, text] if voice else ["say", text]
+        rate = self._rate
+        args = ["say", "-v", voice] if voice else ["say"]
+        if rate != 1.0:
+            args += ["-r", str(round(SAY_BASE_WPM * rate))]
+        args.append(text)
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 self._proc.terminate()
@@ -316,7 +344,7 @@ class TTSEngine:
                 )
                 self._thread.start()
             q = self._q
-        q.put((text, lang))
+        q.put((text, lang, self._rate))
         return True
 
     @staticmethod
@@ -330,13 +358,16 @@ class TTSEngine:
             return
         # espeak reports no voice until one is set, so English needs a picked voice there too.
         default = _property(engine, "voice")
+        # The engine's own words per minute, read once: a voice speed scales it and 1.0 puts it back.
+        base_rate = _property(engine, "rate")
         chosen: dict[str, Any] = {}
         current = default
+        current_rate = 1.0
         while True:
             item = q.get()
             if item is None:
                 return
-            text, lang = item
+            text, lang, rate = item
             try:
                 if lang not in chosen:
                     voices = _property(engine, "voices") or []
@@ -347,6 +378,13 @@ class TTSEngine:
                     current = voice
             except Exception:
                 log.exception("pyttsx3 voice switch failed")
+            if rate != current_rate and isinstance(base_rate, (int, float)):
+                try:
+                    # Whole words per minute: the espeak driver hands the rate to C as an int.
+                    engine.setProperty("rate", base_rate if rate == 1.0 else round(base_rate * rate))
+                    current_rate = rate
+                except Exception:
+                    log.exception("pyttsx3 rate change failed")
             try:
                 engine.say(text)
                 engine.runAndWait()
