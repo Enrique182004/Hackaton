@@ -33,6 +33,9 @@ class FakeStore:
     def __init__(self) -> None:
         self.chunks: list[Any] = []
         self.fail_query = False
+        self.query_results: list[Any] = []
+        self.query_calls: list[tuple[str, int]] = []
+        self.sources: list[dict[str, Any]] = []
 
     def add_chunks(self, chunks: list[Any]) -> int:
         self.chunks.extend(chunks)
@@ -41,7 +44,16 @@ class FakeStore:
     def query(self, text: str, k: int = 4) -> list[Any]:
         if self.fail_query:
             raise RuntimeError("store down")
-        return []
+        self.query_calls.append((text, k))
+        return list(self.query_results)
+
+    def list_sources(self) -> list[dict[str, Any]]:
+        return list(self.sources)
+
+    def delete_source(self, source: str) -> int:
+        matched = [d for d in self.sources if d["source"] == source]
+        self.sources = [d for d in self.sources if d["source"] != source]
+        return sum(d["chunks"] for d in matched)
 
     def count(self) -> int:
         return len(self.chunks)

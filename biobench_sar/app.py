@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass, replace
@@ -230,16 +231,34 @@ def create_app(
         text = str(body.get("text") or "").strip()
         if not text:
             return jsonify({"accepted": False, "error": "empty text"}), 400
+        if assistant.busy:
+            return jsonify({"accepted": False, "error": "busy"}), 409
         svc.audio.submit_text(text)
         return jsonify({"accepted": True}), 202
 
     @app.post("/api/listen")
     def api_listen() -> Any:
-        svc.audio.trigger()
+        if not getattr(svc.audio, "available", False):
+            return jsonify({"accepted": False, "error": "no microphone available"}), 503
+        # trigger() returns False when a recording is already running (older versions return None).
+        if svc.audio.trigger() is False:
+            return jsonify({"accepted": False, "error": "already recording"}), 409
         return jsonify({"accepted": True}), 202
+
+    calibrating = threading.Lock()
 
     @app.post("/api/calibrate")
     def api_calibrate() -> Any:
+        if svc.vision.latest_frame() is None:
+            return jsonify({"ok": False, "error": "no camera frame available"}), 503
+        if not calibrating.acquire(blocking=False):
+            return jsonify({"ok": False, "error": "calibration already running"}), 409
+        try:
+            return _calibrate()
+        finally:
+            calibrating.release()
+
+    def _calibrate() -> Any:
         from biobench_sar.core.homography import calibrate_from_frame
 
         socketio.emit("show_calibration", {"url": "/calibration.png"})
@@ -299,6 +318,11 @@ def create_app(
         return send_from_directory(settings.tts_dir, name)
 
     # ---- sockets -----------------------------------------------------------
+    @socketio.on("connect")
+    def on_connect(_auth: Any = None) -> None:
+        # A client that (re)connects mid-query must not show a stale state.
+        socketio.emit("status", {"state": assistant.state}, to=request.sid)
+
     @socketio.on("text_query")
     def on_text_query(data: Any) -> None:
         text = str((data or {}).get("text") or "") if isinstance(data, dict) else ""
@@ -328,6 +352,22 @@ def _load_initial_calibration(settings: Settings) -> bool:
         return False
 
 
+def _warm_up(svc: Services) -> None:
+    """Load the VLM and Whisper in the background so the first question isn't the slow one."""
+    import numpy as np
+
+    started = time.monotonic()
+    warmup = getattr(svc.vlm, "warmup", None)
+    if callable(warmup):
+        warmup()
+    if getattr(svc.audio, "available", False):
+        try:
+            svc.audio.transcribe(np.zeros(16000, dtype=np.float32))
+        except Exception:
+            log.exception("whisper warm-up failed")
+    log.info("models warmed up in %.1fs", time.monotonic() - started)
+
+
 def _request_camera_access(camera_index: int) -> None:
     # macOS only shows the camera permission prompt when the first capture opens on the main thread;
     # VisionLoop opens it from a worker thread, where AVFoundation refuses to ask.
@@ -352,6 +392,7 @@ def main() -> None:
     svc: Services = app.config["SAR_SERVICES"]
     _request_camera_access(settings.camera_index)
     svc.vision.start()
+    threading.Thread(target=_warm_up, args=(svc,), daemon=True, name="warm-up").start()
     try:
         svc.audio.start()
     except Exception:

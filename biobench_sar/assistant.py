@@ -97,18 +97,20 @@ class Assistant:
         # The browser keeps playing the answer after the pipeline finishes, so busy alone isn't enough.
         return not self.busy and time.monotonic() >= self._speaking_until
 
-    def handle_query(self, text: str) -> None:
+    def handle_query(self, text: str) -> bool:
+        """Start a query in the background. False if it's empty or another query is still running."""
         text = (text or "").strip()
         if not text:
-            return
+            return False
         if not self._busy.acquire(blocking=False):
             self.emit_status(self._state, "busy")
-            return
+            return False
         try:
             self._start_task(self._run, text)
         except Exception:
             self._busy.release()
             raise
+        return True
 
     def _run(self, text: str) -> None:
         from biobench_sar.core.vision_loop import encode_jpeg, find_ink_regions
